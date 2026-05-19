@@ -28,6 +28,9 @@ import re
 import sys
 from dataclasses import dataclass, field
 from pathlib import Path
+from typing import Any
+
+import yaml
 
 # Source-of-truth constants from XllAddIn.h:72-87
 CATEGORY_VALUES: dict[str, int] = {
@@ -377,6 +380,44 @@ def _params_from_xll(entry: XllEntry) -> list[IdlParam]:
     return out
 
 
+def apply_optional_overrides(
+    catalogue: dict[str, dict[str, Any]], overrides_path: Path
+) -> int:
+    """Flip selected parameters from required=True to required=False, and
+    record a 'default' value for documentation. Returns the number of
+    overrides applied. Silently skips entries whose function or
+    parameter aren't in the catalogue (so the file can be edited
+    without breaking the build).
+    """
+    if not overrides_path.is_file():
+        return 0
+    raw = yaml.safe_load(overrides_path.read_text(encoding="utf-8"))
+    if not raw:
+        return 0
+    applied = 0
+    for func_base_name, override_list in raw.items():
+        full_name = (
+            func_base_name if func_base_name.startswith("Vose")
+            else f"Vose{func_base_name}"
+        )
+        entry = catalogue.get(full_name)
+        if entry is None:
+            continue
+        for override in override_list or []:
+            target_name = override.get("param")
+            default = override.get("default")
+            if not target_name:
+                continue
+            for param in entry["parameters"]:
+                if param["name"] == target_name:
+                    param["required"] = False
+                    if default is not None:
+                        param["default"] = default
+                    applied += 1
+                    break
+    return applied
+
+
 def build_catalogue(idl_path: Path, xll_path: Path) -> dict[str, dict]:
     idl = parse_idl(idl_path)
     xll = parse_xll_header(xll_path)
@@ -514,6 +555,21 @@ def main() -> int:
         return 2
 
     catalogue = build_catalogue(idl_path, xll_path)
+
+    overrides_path = (
+        Path(__file__).resolve().parent.parent
+        / "src"
+        / "modelrisk_mcp"
+        / "data"
+        / "optional_overrides.yaml"
+    )
+    overrides_applied = apply_optional_overrides(catalogue, overrides_path)
+    if overrides_applied:
+        print(
+            f"Applied {overrides_applied} optional-parameter override(s) from "
+            f"{overrides_path.name}.",
+            file=sys.stderr,
+        )
 
     out_path: Path = args.output
     out_path.parent.mkdir(parents=True, exist_ok=True)

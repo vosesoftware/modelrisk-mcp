@@ -67,9 +67,19 @@ def test_spec_required_and_all_param_names(cat: FunctionCatalogue) -> None:
     assert "min" in spec.required_param_names
     assert "mode" in spec.required_param_names
     assert "max" in spec.required_param_names
-    # Optional ones present in all_param_names but not required.
+    # gamma is optional per the optional_overrides.yaml.
+    assert "gamma" in spec.all_param_names
+    assert "gamma" not in spec.required_param_names
+    # u is also optional (from the IDL [optional] flag).
     assert "u" in spec.all_param_names
     assert "u" not in spec.required_param_names
+
+
+def test_param_spec_default_propagated(cat: FunctionCatalogue) -> None:
+    spec = cat.require("VoseModPERT")
+    gamma = next(p for p in spec.parameters if p.name == "gamma")
+    assert gamma.required is False
+    assert gamma.default == 4
 
 
 def test_load_catalogue_rejects_malformed_entry(tmp_path, monkeypatch):

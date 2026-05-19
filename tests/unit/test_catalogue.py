@@ -34,12 +34,15 @@ def test_catalogue_loads(catalogue: dict[str, dict]) -> None:
 
 def test_every_entry_has_required_keys(catalogue: dict[str, dict]) -> None:
     required = {"category", "parameters", "returns", "description"}
+    allowed_param_keys = {"name", "type", "required", "default"}
+    required_param_keys = {"name", "type", "required"}
     for name, entry in catalogue.items():
         missing = required - entry.keys()
         assert not missing, f"{name} missing keys: {missing}"
         assert isinstance(entry["parameters"], list), name
         for p in entry["parameters"]:
-            assert set(p.keys()) == {"name", "type", "required"}, (name, p)
+            assert required_param_keys.issubset(p.keys()), (name, p)
+            assert set(p.keys()).issubset(allowed_param_keys), (name, p)
             assert p["type"] in {"number", "array", "boolean", "string", "object"}, (
                 name,
                 p,
@@ -95,12 +98,15 @@ def test_canonical_entries_present_and_categorised(
 
 def test_vose_mod_pert_signature(catalogue: dict[str, dict]) -> None:
     entry = catalogue["VoseModPERT"]
-    names = [p["name"] for p in entry["parameters"]]
-    assert names[:4] == ["min", "mode", "max", "gamma"]
-    required = [p["required"] for p in entry["parameters"]]
-    # min, mode, max, gamma all required; u and extended* optional
-    assert required[:4] == [True, True, True, True]
-    assert any(not r for r in required[4:]), "expected at least one optional param"
+    by_name = {p["name"]: p for p in entry["parameters"]}
+    # min/mode/max are required (from the IDL).
+    assert by_name["min"]["required"] is True
+    assert by_name["mode"]["required"] is True
+    assert by_name["max"]["required"] is True
+    # gamma was flipped to optional by optional_overrides.yaml.
+    assert by_name["gamma"]["required"] is False
+    # u is optional from the IDL itself.
+    assert by_name["u"]["required"] is False
 
 
 def test_aggregate_mc_optional_limits(catalogue: dict[str, dict]) -> None:
@@ -113,6 +119,16 @@ def test_aggregate_mc_optional_limits(catalogue: dict[str, dict]) -> None:
     assert by_name["MinLimit"]["required"] is False
     assert by_name["MaxLimit"]["required"] is False
     assert by_name["DistributionShift"]["required"] is False
+
+
+def test_optional_override_applied(catalogue: dict[str, dict]) -> None:
+    """VoseModPERT.gamma must be optional with default 4 per
+    optional_overrides.yaml."""
+    params = catalogue["VoseModPERT"]["parameters"]
+    by_name = {p["name"]: p for p in params}
+    gamma = by_name["gamma"]
+    assert gamma["required"] is False
+    assert gamma.get("default") == 4
 
 
 def test_no_out_retval_leakage(catalogue: dict[str, dict]) -> None:

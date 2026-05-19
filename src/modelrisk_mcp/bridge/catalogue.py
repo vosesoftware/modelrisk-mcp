@@ -38,6 +38,7 @@ class ParamSpec:
     name: str
     type: ParamType
     required: bool
+    default: Any | None = None
 
 
 @dataclass(frozen=True)
@@ -102,7 +103,12 @@ class FunctionCatalogue:
 def _spec_from_entry(name: str, raw: dict[str, Any]) -> FunctionSpec:
     try:
         params = tuple(
-            ParamSpec(name=p["name"], type=p["type"], required=p["required"])
+            ParamSpec(
+                name=p["name"],
+                type=p["type"],
+                required=p["required"],
+                default=p.get("default"),
+            )
             for p in raw["parameters"]
         )
         return FunctionSpec(

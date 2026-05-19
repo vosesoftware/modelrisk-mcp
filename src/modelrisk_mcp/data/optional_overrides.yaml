@@ -1,0 +1,21 @@
+# Parameters that are semantically optional (they have well-known defaults
+# documented in the ModelRisk help) but whose IDL declaration doesn't
+# carry the [optional] attribute. The catalogue extractor's first pass
+# treats these as required because that's what the IDL says; this file
+# is applied as a second pass to flip them to optional and record the
+# default value for documentation purposes.
+#
+# Format:
+#   FunctionName:
+#     - param: <name>
+#       default: <literal>   # optional — informational only
+#
+# Re-run `scripts/extract_catalogue.py` after editing this file.
+
+VoseModPERT:
+  - param: gamma
+    default: 4
+
+VosePERT:
+  - param: gamma
+    default: 4

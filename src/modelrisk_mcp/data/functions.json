@@ -18820,8 +18820,9 @@
         "type": "number"
       },
       {
+        "default": 4,
         "name": "gamma",
-        "required": true,
+        "required": false,
         "type": "number"
       },
       {

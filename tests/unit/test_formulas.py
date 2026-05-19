@@ -108,15 +108,23 @@ class TestBuildDistributionFormula:
         assert formula == "=VoseNormal(0,1)"
 
     def test_vose_modpert_with_cell_refs(self, cat) -> None:
-        # VoseModPERT's signature in the IDL marks all of min/mode/max/gamma
-        # as required parameters (no [optional] flag), so the formula
-        # builder demands all four.
+        # gamma is optional thanks to the optional_overrides.yaml entry
+        # (the IDL doesn't flag it, but the ModelRisk help documents
+        # a default of 4).
         formula = build_distribution_formula(
             "VoseModPERT",
-            {"min": "B1", "mode": "B2", "max": "B3", "gamma": 4},
+            {"min": "B1", "mode": "B2", "max": "B3"},
             cat,
         )
-        assert formula == "=VoseModPERT(B1,B2,B3,4)"
+        assert formula == "=VoseModPERT(B1,B2,B3)"
+
+    def test_vose_modpert_with_explicit_gamma(self, cat) -> None:
+        formula = build_distribution_formula(
+            "VoseModPERT",
+            {"min": "B1", "mode": "B2", "max": "B3", "gamma": 6},
+            cat,
+        )
+        assert formula == "=VoseModPERT(B1,B2,B3,6)"
 
     def test_optional_omitted(self, cat) -> None:
         # u, extended1, extended2 are optional and should be dropped.

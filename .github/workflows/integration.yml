@@ -1,0 +1,39 @@
+name: Integration
+
+# Integration tests require Excel + ModelRisk on the runner. They're
+# manual on PRs (workflow_dispatch) and automatic on release tags so
+# nothing ships without passing them. See spec §12.2.
+
+on:
+  workflow_dispatch:
+  push:
+    tags:
+      - "v*"
+
+jobs:
+  integration:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v3
+        with:
+          enable-cache: true
+
+      - name: Set up Python 3.13
+        run: uv python install 3.13
+
+      - name: Install dependencies
+        run: uv sync --extra dev
+
+      - name: Note about Excel availability
+        run: |
+          echo "Integration tests require Excel and ModelRisk to be installed and"
+          echo "running on this runner. GitHub-hosted runners do NOT have Excel."
+          echo "This job is expected to skip every test on a default runner. For"
+          echo "real integration coverage, route this workflow to a self-hosted"
+          echo "Windows runner with Office + ModelRisk pre-installed."
+
+      - name: Run integration tests
+        run: uv run pytest tests/integration -v
