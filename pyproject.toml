@@ -69,7 +69,13 @@ warn_unused_ignores = true
 warn_redundant_casts = true
 
 [[tool.mypy.overrides]]
-module = ["xlwings.*", "win32com.*", "pywintypes.*"]
+module = [
+    "xlwings.*",
+    "win32com.*",
+    "win32api.*",
+    "win32event.*",
+    "pywintypes.*",
+]
 ignore_missing_imports = true
 
 [tool.pytest.ini_options]
