@@ -1,10 +1,9 @@
 """Phase 0 spike: enumerate the ModelRisk COM surface.
 
-Discovers which methods and properties are actually exposed on the
-ModelRisk add-in's Application object and its Results sub-object, then
-writes the findings to docs/com-surface.md. This becomes the canonical
-record of what's available vs what is still ticketed for the ModelRisk
-core team.
+ModelRisk registers four COM coclasses (see spec §8.0), each instantiable
+by ProgID via win32com.client.Dispatch. This script probes each one,
+reports which methods/properties exist, and writes the findings to
+docs/com-surface.md.
 
 Run from a Windows machine that has Excel + ModelRisk installed:
 
@@ -14,38 +13,148 @@ Run from a Windows machine that has Excel + ModelRisk installed:
 from __future__ import annotations
 
 import sys
+from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from pathlib import Path
 
 OUT_PATH = Path(__file__).resolve().parent.parent / "docs" / "com-surface.md"
 
-EXPECTED_APPLICATION_METHODS = (
-    "Simulate",
-    "StopSimulation",
+
+@dataclass(frozen=True)
+class CoclassProbe:
+    label: str
+    progid: str
+    expected_methods: tuple[str, ...] = ()
+    expected_properties: tuple[str, ...] = ()
+
+
+PROBES: tuple[CoclassProbe, ...] = (
+    CoclassProbe(
+        label="ModelRisk (distribution functions)",
+        progid="ModelRisk",
+        expected_methods=("Normal", "ModPERT", "Bernoulli", "AggregateMC"),
+    ),
+    CoclassProbe(
+        label="ModelRisk.ModelRiskSimulation",
+        progid="ModelRisk.ModelRiskSimulation",
+        expected_methods=("StartSimulation",),
+    ),
+    CoclassProbe(
+        label="ModelRisk.ModelRiskSimulationSettings",
+        progid="ModelRisk.ModelRiskSimulationSettings",
+        expected_properties=(
+            "Samples",
+            "Simulations",
+            "UseFixedSeed",
+            "Seed",
+            "MultipleSeedType",
+            "RefreshExcel",
+            "RefreshRate",
+            "StopOnOutputError",
+            "ShowResultsAtEnd",
+            "HideProgressWindow",
+        ),
+    ),
+    CoclassProbe(
+        label="ModelRisk.ModelRiskSimulationResults",
+        progid="ModelRisk.ModelRiskSimulationResults",
+        expected_methods=(
+            "SimVariables",
+            "SimInputs",
+            "SimOutputs",
+            "GetVariablesCount",
+            "GetVarSamples",
+            "GetVarName",
+            "AddChart",
+            "ReportAllVariables",
+            "SaveResultsToFile",
+            "LoadResultsFromFile",
+        ),
+    ),
 )
-EXPECTED_APPLICATION_PROPERTIES = (
-    "SimulationStatus",
-    "Settings",
-)
-EXPECTED_SETTINGS_PROPERTIES = (
-    "Iterations",
-    "Seed",
-    "SamplingMethod",
-)
-EXPECTED_RESULTS_METHODS = (
+
+ISIMVARIABLE_EXPECTED_METHODS = (
+    "GetName",
+    "GetRangeName",
     "GetMean",
+    "GetVariance",
+    "GetStDev",
+    "GetSkewness",
+    "GetKurtosis",
+    "GetCofV",
     "GetPercentile",
+    "GetProbability",
+    "GetSamples",
+    # Pending dev confirmation per spec §8.4:
     "GetCorrelation",
     "GetTornado",
-    "GetIterations",
 )
 
 
-def _probe(obj: object, names: tuple[str, ...]) -> dict[str, bool]:
-    return {n: hasattr(obj, n) for n in names}
+@dataclass
+class ProbeResult:
+    label: str
+    progid: str
+    dispatched: bool
+    error: str | None = None
+    method_results: dict[str, bool] = field(default_factory=dict)
+    property_results: dict[str, bool] = field(default_factory=dict)
 
 
-def _format_table(title: str, results: dict[str, bool]) -> str:
+def _probe_endpoint(obj: object, name: str) -> bool:
+    return hasattr(obj, name)
+
+
+def _probe_coclass(com_module: object, probe: CoclassProbe) -> ProbeResult:
+    dispatch = com_module.Dispatch  # type: ignore[attr-defined]
+    try:
+        obj = dispatch(probe.progid)
+    except Exception as exc:
+        return ProbeResult(probe.label, probe.progid, dispatched=False, error=str(exc))
+
+    result = ProbeResult(probe.label, probe.progid, dispatched=True)
+    for m in probe.expected_methods:
+        result.method_results[m] = _probe_endpoint(obj, m)
+    for p in probe.expected_properties:
+        result.property_results[p] = _probe_endpoint(obj, p)
+    return result
+
+
+def _probe_sim_variable(com_module: object) -> dict[str, bool] | str:
+    """Try to obtain one ISimVariable and probe its accessor surface.
+
+    Best-effort: requires that a simulation has already been run (or that
+    SimOutputs/SimInputs contains at least one variable). If the collection
+    is empty, returns a diagnostic string instead.
+    """
+    dispatch = com_module.Dispatch  # type: ignore[attr-defined]
+    try:
+        results = dispatch("ModelRisk.ModelRiskSimulationResults")
+    except Exception as exc:
+        return f"could not Dispatch ModelRiskSimulationResults: {exc}"
+
+    for collection_name in ("SimOutputs", "SimInputs"):
+        try:
+            collection = getattr(results, collection_name)()
+            count = int(collection.Count)
+        except Exception:
+            continue
+        if count >= 1:
+            try:
+                var = collection.Item(1)
+            except Exception as exc:
+                return f"{collection_name}.Item(1) failed: {exc}"
+            return {name: _probe_endpoint(var, name) for name in ISIMVARIABLE_EXPECTED_METHODS}
+
+    return (
+        "no ISimVariable could be obtained (SimOutputs and SimInputs are both empty). "
+        "Run a simulation in Excel first, then re-run this spike script."
+    )
+
+
+def _format_endpoint_table(title: str, results: dict[str, bool]) -> str:
+    if not results:
+        return ""
     lines = [f"### {title}", "", "| Endpoint | Available |", "| --- | --- |"]
     for name, ok in results.items():
         lines.append(f"| `{name}` | {'YES' if ok else 'NO'} |")
@@ -53,84 +162,73 @@ def _format_table(title: str, results: dict[str, bool]) -> str:
     return "\n".join(lines)
 
 
+def _format_probe(result: ProbeResult) -> str:
+    sections = [f"## {result.label}", "", f"ProgID: `{result.progid}`", ""]
+    if not result.dispatched:
+        sections.append(f"**Could not Dispatch:** {result.error}")
+        return "\n".join(sections)
+    sections.append("Dispatch: **OK**")
+    sections.append("")
+    if result.method_results:
+        sections.append(_format_endpoint_table("Methods", result.method_results))
+    if result.property_results:
+        sections.append(_format_endpoint_table("Properties", result.property_results))
+    return "\n".join(sections)
+
+
 def main() -> int:
     try:
-        import win32com.client  # type: ignore[import-not-found]
+        import win32com.client as com  # type: ignore[import-not-found]
     except ImportError:
         print("pywin32 is not installed; run `uv sync` first.", file=sys.stderr)
         return 2
 
-    try:
-        excel = win32com.client.GetActiveObject("Excel.Application")
-    except Exception:
-        try:
-            excel = win32com.client.Dispatch("Excel.Application")
-        except Exception as exc:
-            print(f"Could not connect to Excel: {exc}", file=sys.stderr)
-            return 2
+    out: list[str] = [
+        "# ModelRisk COM surface",
+        "",
+        f"Probed at {datetime.now(UTC).isoformat()}.",
+        "",
+        "This file is the canonical record of which ModelRisk COM endpoints "
+        "are exposed by the installed ModelRisk build. It is overwritten by "
+        "`scripts/spike_com_surface.py`.",
+        "",
+    ]
 
-    sections: list[str] = []
-    sections.append(f"# ModelRisk COM surface\n\nProbed at {datetime.now(UTC).isoformat()}.\n")
+    overall_ok = True
+    for probe in PROBES:
+        result = _probe_coclass(com, probe)
+        if not result.dispatched:
+            overall_ok = False
+        out.append(_format_probe(result))
+        out.append("")
 
-    modelrisk_app: object | None = None
-    for candidate in ("ModelRisk.Application", "ModelRisk"):
-        try:
-            modelrisk_app = win32com.client.Dispatch(candidate)
-            sections.append(f"ModelRisk COM root resolved via `{candidate}`.\n")
-            break
-        except Exception:
-            continue
-
-    if modelrisk_app is None:
-        sections.append(
-            "**Could not resolve ModelRisk COM root.** Excel started, but no "
-            "ModelRisk COM object was found. Confirm ModelRisk is installed "
-            "and loaded, then re-run.\n"
-        )
-        OUT_PATH.parent.mkdir(parents=True, exist_ok=True)
-        OUT_PATH.write_text("\n".join(sections), encoding="utf-8")
-        return 1
-
-    sections.append(_format_table(
-        "Application methods",
-        _probe(modelrisk_app, EXPECTED_APPLICATION_METHODS),
-    ))
-    sections.append(_format_table(
-        "Application properties",
-        _probe(modelrisk_app, EXPECTED_APPLICATION_PROPERTIES),
-    ))
-
-    settings = getattr(modelrisk_app, "Settings", None)
-    if settings is not None:
-        sections.append(_format_table(
-            "Application.Settings properties",
-            _probe(settings, EXPECTED_SETTINGS_PROPERTIES),
-        ))
+    out.append("## ISimVariable accessor surface")
+    out.append("")
+    out.append(
+        "Probed by Dispatching `ModelRisk.ModelRiskSimulationResults`, "
+        "calling `SimOutputs()` (or `SimInputs()`) and inspecting `.Item(1)`."
+    )
+    out.append("")
+    sv = _probe_sim_variable(com)
+    if isinstance(sv, str):
+        out.append(f"**Skipped:** {sv}")
     else:
-        sections.append("### Application.Settings properties\n\nNot reachable.\n")
+        out.append(_format_endpoint_table("ISimVariable methods", sv))
 
-    results = getattr(modelrisk_app, "Results", None)
-    if results is not None:
-        sections.append(_format_table(
-            "Application.Results methods",
-            _probe(results, EXPECTED_RESULTS_METHODS),
-        ))
-    else:
-        sections.append("### Application.Results methods\n\nNot reachable.\n")
-
-    sections.append(
-        "## Disposition\n\n"
+    out.append("## Disposition")
+    out.append("")
+    out.append(
         "- Endpoints marked `YES` are wired into the MCP tool surface.\n"
-        "- Endpoints marked `NO` ship as `SimulationNotAvailableError` stubs in v0.1 "
-        "and are tracked for the ModelRisk core team.\n"
+        "- Endpoints marked `NO` are either ticketed for ModelRisk core, "
+        "or — for `GetCorrelation` / `GetTornado` — pending developer "
+        "confirmation per spec §8.4. The Python-via-numpy fallback uses "
+        "`GetSamples()` for those.\n"
     )
 
     OUT_PATH.parent.mkdir(parents=True, exist_ok=True)
-    OUT_PATH.write_text("\n".join(sections), encoding="utf-8")
+    OUT_PATH.write_text("\n".join(out), encoding="utf-8")
     print(f"Wrote {OUT_PATH}")
-
-    _ = excel  # keep ref alive
-    return 0
+    return 0 if overall_ok else 1
 
 
 if __name__ == "__main__":

@@ -1,26 +1,58 @@
 # ModelRisk COM surface
 
-This file is the canonical record of which ModelRisk COM endpoints are
-available in the installed version vs which are ticketed for the
-ModelRisk core team.
+Canonical record of which ModelRisk COM endpoints are exposed by the
+installed ModelRisk build. This file is overwritten by
+`scripts/spike_com_surface.py` — run that on a Windows machine with
+Excel + ModelRisk loaded to get live results.
 
-Populated by running `uv run python scripts/spike_com_surface.py` on a
-Windows machine with Excel + ModelRisk loaded.
+## ProgIDs
 
-Expected starting state (confirmed by Vose on 2026-05-19):
+Source: `.rgs` files under `ModelRisk_Project/VBAProject/ModelRiskAtl/`
+in the ModelRisk source tree. Verified 2026-05-19.
 
-| Endpoint | Available today | Notes |
+| Purpose | ProgID | CLSID |
 | --- | --- | --- |
-| `Application.Simulate(iterations, seed)` | YES | |
-| `Application.Settings.Iterations` | YES | |
-| `Application.Settings.Seed` | YES | |
-| `Application.Settings.SamplingMethod` | YES | |
-| `Application.Results.GetMean` | YES | |
-| `Application.Results.GetPercentile` | YES | |
-| `Application.Results.GetCorrelation` | YES | |
-| `Application.Results.GetTornado` | YES | |
-| `Application.Results.GetIterations` | YES | |
-| `Application.StopSimulation()` | NO | Ticketed for ModelRisk core. v0.1 ships `NotImplementedError`. |
-| `Application.SimulationStatus` (property) | NO | Same. Polling fallback in v0.1. |
+| Distribution functions (`VoseNormal`, etc.) | `ModelRisk` | `{570013C9-8251-44CF-AF83-EDD333725537}` |
+| Run a simulation | `ModelRisk.ModelRiskSimulation` | `{59530ADE-E690-4802-A6E4-890B72596310}` |
+| Read results | `ModelRisk.ModelRiskSimulationResults` | `{B1EEBA78-BE81-4d37-8FEA-FC3AE14BE755}` |
+| Read/write settings | `ModelRisk.ModelRiskSimulationSettings` | `{389CD5FB-F265-467e-A255-90C206CE7220}` |
 
-The spike script overwrites this file with the live probe results.
+All four share TypeLib `{ECC429DA-26E6-4D86-9B2D-1E14E0461749}`.
+
+## Expected surface (pre-probe baseline)
+
+These are what the IDL declares. The spike script confirms them on the
+local install.
+
+`ModelRisk.ModelRiskSimulation`:
+- `StartSimulation()` — no parameters
+
+`ModelRisk.ModelRiskSimulationSettings`:
+- `Samples`, `Simulations`, `UseFixedSeed`, `Seed[idx]`, `MultipleSeedType`,
+  `RefreshExcel`, `RefreshRate`, `StopOnOutputError`, `ShowResultsAtEnd`,
+  `HideProgressWindow`
+
+`ModelRisk.ModelRiskSimulationResults`:
+- Collection navigation: `SimVariables()`, `SimInputs()`, `SimOutputs()`
+- Direct: `GetVariablesCount`, `GetVarName`, `GetVarSamples`,
+  `GetVarType`, `GetVarLocation`, `GetVarRange`
+- Charts: `AddChart`, `SetChartType`, `GetChartsCount`, `GetChartType`,
+  `GetChartName`, `GetChartVariables`, `AddChartForEmbeddedReport`
+- Reporting: `ReportAllVariables`, `ReportSelectedCharts`
+- Persistence: `SaveResultsToFile`, `LoadResultsFromFile`
+
+`ISimVariable` (obtained from `SimOutputs().Item(i)` etc.):
+- Confirmed: `GetName`, `GetRangeName`, `GetMean`, `GetVariance`,
+  `GetStDev`, `GetSkewness`, `GetKurtosis`, `GetCofV`, `GetPercentile(p)`,
+  `GetProbability(x)`, `GetSamples()`
+- **Pending developer confirmation:** `GetCorrelation`, `GetTornado`.
+  Until confirmed, `ResultsReader` computes both in Python from
+  `GetSamples()` via numpy.
+
+## Known gaps (ticketed)
+
+- Native simulation cancellation
+- Native `SimulationStatus` property
+
+v0.1 ships `NotImplementedError` stubs for these, plus a polling
+fallback for status.
