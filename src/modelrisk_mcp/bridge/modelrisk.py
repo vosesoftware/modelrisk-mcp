@@ -23,6 +23,10 @@ from modelrisk_mcp.bridge.catalogue import FunctionCatalogue, load_catalogue
 from modelrisk_mcp.bridge.excel import ExcelBridge
 from modelrisk_mcp.bridge.mrservice import MrServiceBridge
 from modelrisk_mcp.bridge.results import ResultsReader
+from modelrisk_mcp.bridge.simulation import (
+    SimulationController,
+    SimulationRunResult,
+)
 from modelrisk_mcp.config import Settings
 from modelrisk_mcp.errors import CellReferenceError
 from modelrisk_mcp.safety import (
@@ -73,6 +77,7 @@ class ModelRiskBridge:
         mrservice: MrServiceBridge | None = None,
         settings: Settings | None = None,
         writer_mutex: WriterMutex | None = None,
+        simulation: SimulationController | None = None,
     ) -> None:
         self._excel = excel
         self._catalogue = catalogue or load_catalogue()
@@ -80,6 +85,7 @@ class ModelRiskBridge:
         self._results = results or ResultsReader(self._mrservice)
         self._settings = settings or Settings()
         self._writer_mutex = writer_mutex or WriterMutex()
+        self._simulation = simulation or SimulationController(excel)
 
     @property
     def catalogue(self) -> FunctionCatalogue:
@@ -96,6 +102,34 @@ class ModelRiskBridge:
     @property
     def mrservice(self) -> MrServiceBridge:
         return self._mrservice
+
+    @property
+    def simulation(self) -> SimulationController:
+        return self._simulation
+
+    # ------------------------------------------------------------------
+    # Run sim — wraps SimulationController + auto-pins the resulting
+    # .vmrs as the active source so subsequent get_simulation_results
+    # finds it without further setup.
+    # ------------------------------------------------------------------
+
+    def run_simulation(
+        self,
+        workbook: str | None = None,
+        *,
+        samples: int = 1000,
+        seed: int = 1,
+        save_to: str | None = None,
+    ) -> SimulationRunResult:
+        result = self._simulation.run_simulation(
+            workbook_name=workbook,
+            samples=samples,
+            seed=seed,
+            save_to=save_to,
+        )
+        # Pin the produced file so the existing reader tools find it.
+        self._results.set_active_vmrs(result.vmrs_path)
+        return result
 
     # ------------------------------------------------------------------
     # Environment checks

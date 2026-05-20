@@ -4,6 +4,27 @@ All notable changes to ModelRisk MCP. Follows [Keep a Changelog](https://keepach
 
 ## [Unreleased]
 
+## [0.3.0-alpha.2] — 2026-05-20
+
+Adds programmatic simulation triggering via the XLL command surface (no ATL COM dispatch needed), graceful OneDrive path handling, and the missing `read_vmrs` / `set_active_vmrs` tools.
+
+### Added
+
+- `bridge/simulation.py` — `SimulationController` drives runs via plain `Application.Run("VoseStartSimulCustom12", options)` + `Application.Run("VoseGetDataSZ12", session, path)`, replicating exactly what the ATL does internally (`ModelRiskAtl/ModelRisk_Simulate.cpp:102`, `ModelRiskAtl/ModelRiskSimulationResults.cpp:1196`). No ATL Dispatch required, so cross-bitness automation works.
+- `SimulationOptions` dataclass reproduces `CSimulationOptions::PackToStringList` (`SimulationObj.cpp:94`) — `[Key]:Value` lines in exact field order.
+- New MCP tool `run_simulation(workbook_name?, samples=1000, seed=1, save_to?)` — blocks until the sim finishes, saves the `.vmrs` next to the workbook by default, and auto-pins it as the active results source.
+- New MCP tools `set_active_vmrs(path)` and `read_vmrs(path, output_names?)` — formerly referenced in error messages but not registered.
+
+### Changed
+
+- `ExcelBridge.get_active_workbook()` / `list_workbooks()` degrade gracefully when xlwings can't resolve OneDrive paths (`ONEDRIVE_COMMERCIAL_WIN` not set). Returns name-only `WorkbookInfo` with empty path; downstream name-based COM operations still work.
+- `SimulationController` falls back to saving in the user's Desktop folder when the workbook's folder can't be resolved (the OneDrive case).
+- `ModelRiskBridge.run_simulation()` calls `ResultsReader.set_active_vmrs()` automatically after a successful run, so the next `get_simulation_results` call doesn't need a sibling-discovery step.
+
+### Tests
+
+201 unit tests pass (was 182). New coverage: OneDrive path fallback (5), SimulationController options packing + Application.Run shape + session-name format + failure modes (14).
+
 ## [0.2.0-alpha.2] — 2026-05-20
 
 Auto-activates the ModelRisk add-in inside Excel before reporting the COM surface unreachable. Closes the "modelrisk_loaded: false even though ModelRisk is installed" footgun.
