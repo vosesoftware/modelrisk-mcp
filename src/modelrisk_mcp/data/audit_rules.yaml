@@ -1,0 +1,94 @@
+# ModelRisk audit rule set.
+#
+# Each rule has a Python detector in `modelrisk_mcp.audit.rules`. The
+# YAML controls which rules run, their severity, and the message the
+# audit report shows. Set `enabled: false` to disable a rule without
+# touching code.
+#
+# Severities:
+#   error   — almost certainly wrong; should be fixed before running
+#   warning — methodology concern; the model will run but the result
+#             may be misleading
+#   info    — observation worth flagging
+
+rules:
+  - id: VOSE-001
+    name: unknown_vose_function
+    severity: error
+    enabled: true
+    description: >
+      A cell uses a function name that starts with `Vose` but isn't in
+      the ModelRisk catalogue. This is almost always a typo introduced
+      by an LLM or hand-edit.
+    suggested_fix_template: >
+      Verify the function name. The MCP catalogue has {catalogue_size}
+      Vose functions; this cell uses {function_name!r} which isn't one
+      of them.
+
+  - id: VOSE-002
+    name: distribution_without_input_wrapper
+    severity: warning
+    enabled: true
+    description: >
+      A cell contains a Vose distribution function but isn't wrapped
+      with VoseInput. The Results Viewer won't track this cell's
+      samples; it won't appear in the inputs list or in
+      correlation/tornado outputs.
+    suggested_fix_template: >
+      Wrap the cell with VoseInput("name") via the wrap_with_input
+      tool, OR confirm this distribution is genuinely just an
+      intermediate (e.g. a copula u-array) and the warning can be
+      ignored.
+
+  - id: VOSE-003
+    name: fit_without_uncertainty
+    severity: warning
+    enabled: true
+    description: >
+      A Vose*Fit(...) call doesn't pass uncertainty=TRUE. Fitting a
+      distribution without parameter uncertainty understates the real
+      uncertainty in the system — the simulation samples only from
+      the best-fit parameters as if they were certain.
+    suggested_fix_template: >
+      Add uncertainty=TRUE to the fit call. If the LLM built this with
+      the fit_distribution_to_data tool, re-run with uncertainty=True.
+
+  - id: VOSE-004
+    name: output_cell_no_distribution_reference
+    severity: info
+    enabled: true
+    description: >
+      A VoseOutput cell's formula doesn't reference any VoseInput cells
+      directly or transitively. The output will be deterministic across
+      iterations — likely not what the user intended.
+    suggested_fix_template: >
+      Check that the output cell does in fact depend on a random input.
+      If it doesn't, either delete the VoseOutput wrapper or wire the
+      cell to a distribution.
+
+  - id: VOSE-005
+    name: arithmetic_before_input_wrapper
+    severity: warning
+    enabled: true
+    description: >
+      A cell's formula has arithmetic (e.g. `=2*VoseNormal(0,1)`)
+      without a VoseInput wrapper. The cell still varies but is hidden
+      from the Results Viewer. Wrap it as an input if it represents a
+      real model input.
+    suggested_fix_template: >
+      Either wrap with VoseInput, or refactor: move the distribution
+      into one cell (with the wrapper) and the arithmetic into a
+      downstream cell.
+
+  - id: VOSE-006
+    name: hard_coded_inputs_present
+    severity: info
+    enabled: true
+    description: >
+      Plain numeric cells that look like model inputs (round numbers
+      referenced by formula cells). These are candidates for replacement
+      with a distribution + VoseInput wrapper.
+    suggested_fix_template: >
+      Use propose_distributions_for_inputs to get distribution
+      suggestions, then replace_constant_with_distribution to commit
+      one at a time.

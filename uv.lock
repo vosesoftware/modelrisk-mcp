@@ -484,7 +484,7 @@ wheels = [
 
 [[package]]
 name = "modelrisk-mcp"
-version = "0.1.0a3"
+version = "0.1.0b1"
 source = { editable = "." }
 dependencies = [
     { name = "mcp", extra = ["cli"] },

@@ -29,8 +29,9 @@ mcp = FastMCP(
 )
 
 
-# Importing the tools package side-effects every @mcp.tool registration.
-# This MUST come after `mcp` is constructed.
-from modelrisk_mcp import tools  # noqa: E402, F401
+# Importing the tools + resources + prompts packages side-effects every
+# @mcp.tool / @mcp.resource / @mcp.prompt registration. MUST come after
+# `mcp` is constructed.
+from modelrisk_mcp import prompts, resources, tools  # noqa: E402, F401
 
 __all__ = ["__version__", "mcp", "settings"]

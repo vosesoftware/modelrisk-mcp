@@ -1,0 +1,108 @@
+# Distribution selection guide.
+#
+# Used by `propose_distributions_for_inputs` to suggest distribution
+# families based on a description of the uncertain quantity. Each
+# scenario maps to a small ranked list of recommended functions with
+# rationale strings.
+#
+# The selector is a simple keyword match against the user-supplied
+# description. The first scenario whose keywords match wins; if nothing
+# matches, the catch-all (`unknown`) recommendation is returned.
+
+scenarios:
+  three_point_estimate:
+    keywords: [pert, three-point, 3-point, "best case", "worst case", "most likely", estimate]
+    recommendations:
+      - function: VoseModPERT
+        rationale: >
+          Preferred for subjective 3-point estimates (min / most likely
+          / max). The gamma parameter (default 4) sharpens the peak
+          relative to the classic PERT.
+      - function: VosePERT
+        rationale: >
+          Classic PERT distribution. Use if you want the textbook
+          beta-PERT shape without the gamma sharpening.
+      - function: VoseTriangle
+        rationale: >
+          Simplest 3-point distribution. Use only when you genuinely
+          have no prior beyond min/mode/max; the linear shape
+          overweights extremes compared with PERT.
+
+  count:
+    keywords: [count, occurrences, "number of", events, "per year", "per day", rate]
+    recommendations:
+      - function: VosePoisson
+        rationale: >
+          Memoryless count of events occurring at a known mean rate.
+          Suitable when events are independent and the rate is constant.
+      - function: VoseNegBin
+        rationale: >
+          Use when counts are over-dispersed relative to Poisson
+          (variance > mean). Models the number of failures before a
+          given number of successes.
+      - function: VoseBinomial
+        rationale: >
+          Use for counts capped by a known maximum n of trials with
+          fixed success probability p.
+
+  binary:
+    keywords: ["yes", "no", "happens or not", binary, success, failure, occurs, "risk event"]
+    recommendations:
+      - function: VoseBernoulli
+        rationale: >
+          A single yes/no trial with probability p. Wrap as part of
+          VoseRiskEvent if you want the conditional impact pattern.
+      - function: VoseRiskEvent
+        rationale: >
+          Special-case wrapper: returns 0 with probability (1-p), and
+          a sampled impact value with probability p. Use when modelling
+          discrete risk events with monetary or schedule impact.
+
+  duration:
+    keywords: [duration, time, "how long", lead time, "wait time"]
+    recommendations:
+      - function: VoseLognormal
+        rationale: >
+          Right-skewed continuous distribution bounded below at zero.
+          Standard for durations, project costs, and other naturally
+          positive quantities with long upper tails.
+      - function: VoseGamma
+        rationale: >
+          Flexible right-skewed alternative to lognormal. Use when you
+          have shape priors that aren't naturally log-scale.
+      - function: VoseWeibull
+        rationale: >
+          Time-to-failure / lifetime distribution. Use when modelling
+          reliability or any duration with a known hazard pattern.
+
+  growth:
+    keywords: [growth, return, "stock price", "share price", market]
+    recommendations:
+      - function: VoseTimeGBM
+        rationale: >
+          Geometric Brownian Motion time series. Standard for stock
+          prices, exchange rates, and other multiplicative random
+          walks.
+
+  fit_to_data:
+    keywords: [data, historical, sample, observation, observations]
+    recommendations:
+      - function: VoseLognormalFit
+        rationale: >
+          Fit a Lognormal to data with uncertainty=TRUE so parameter
+          uncertainty is carried into the simulation. Try several
+          families and compare via Vose*FitStatistics if data is
+          ambiguous.
+      - function: VoseNormalFit
+        rationale: >
+          Fit a Normal to data. Appropriate only when the underlying
+          mechanism justifies a symmetric, unbounded distribution.
+
+  unknown:
+    keywords: []
+    recommendations:
+      - function: VoseModPERT
+        rationale: >
+          No specific guidance from the description — VoseModPERT is
+          the safest 3-point fallback for subjective estimates. Ask the
+          user for min / most likely / max bounds.
