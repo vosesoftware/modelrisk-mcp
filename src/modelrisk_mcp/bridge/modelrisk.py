@@ -163,6 +163,46 @@ class ModelRiskBridge:
         )
         return False, None, summary
 
+    def diagnose_all_progids(self) -> dict[str, dict[str, Any]]:
+        """Run a plain Dispatch against EACH of the four ModelRisk
+        ProgIDs and report each outcome. The ATL coclasses are
+        registered independently; one might expose IDispatch even if
+        the others don't. Useful for narrowing 'E_NOINTERFACE on the
+        main coclass — but the Simulation one works' patterns."""
+        from modelrisk_mcp.bridge.progids import (
+            PROGID_SIMULATION,
+            PROGID_SIMULATION_RESULTS,
+            PROGID_SIMULATION_SETTINGS,
+        )
+        progids = {
+            "ModelRisk": PROGID_DISTRIBUTIONS,
+            "ModelRiskSimulation": PROGID_SIMULATION,
+            "ModelRiskSimulationResults": PROGID_SIMULATION_RESULTS,
+            "ModelRiskSimulationSettings": PROGID_SIMULATION_SETTINGS,
+        }
+        out: dict[str, dict[str, Any]] = {}
+        try:
+            import win32com.client as com
+        except ImportError as exc:
+            for label in progids:
+                out[label] = {"ok": False, "error": f"pywin32 missing: {exc}"}
+            return out
+        for label, progid in progids.items():
+            try:
+                obj = com.Dispatch(progid)
+                out[label] = {
+                    "ok": obj is not None,
+                    "progid": progid,
+                    "error": None,
+                }
+            except Exception as exc:
+                out[label] = {
+                    "ok": False,
+                    "progid": progid,
+                    "error": f"{type(exc).__name__}: {exc}",
+                }
+        return out
+
     def diagnose_dispatch_strategies(self) -> dict[str, dict[str, Any]]:
         """Run every dispatch strategy and report each outcome.
 
@@ -365,6 +405,7 @@ class ModelRiskBridge:
         if not dispatchable:
             diag["bitness"] = self._bitness_report()
             diag["dispatch_strategies"] = self.diagnose_dispatch_strategies()
+            diag["all_progids"] = self.diagnose_all_progids()
             diag["root_cause_hypothesis"] = self._classify_root_cause(diag)
         return diag
 

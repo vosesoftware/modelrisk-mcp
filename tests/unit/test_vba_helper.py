@@ -70,10 +70,40 @@ class _FakeCodeModule:
         self.code = ""
 
 
+class _FakeReferences:
+    def __init__(self, *, allow_add: bool = True) -> None:
+        self._refs: list[dict[str, str]] = []
+        self._allow_add = allow_add
+
+    def __iter__(self):
+        for r in self._refs:
+            yield type("_Ref", (), r)()
+
+    def AddFromFile(self, path: str) -> None:  # noqa: N802
+        if not self._allow_add:
+            raise RuntimeError("AddFromFile blocked")
+        self._refs.append({"Description": "ModelRisk", "FullPath": path})
+
+    def AddFromGuid(self, guid: str, major: int, minor: int) -> None:  # noqa: N802
+        if not self._allow_add:
+            raise RuntimeError("AddFromGuid blocked")
+        self._refs.append(
+            {"Description": f"ModelRisk ({guid})", "FullPath": ""}
+        )
+
+
 class _FakeWorkbook:
-    def __init__(self, name: str) -> None:
+    def __init__(self, name: str, *, allow_reference_add: bool = True) -> None:
         self.Name = name
-        self.VBProject = type("_VBProj", (), {"VBComponents": _FakeVBComponents()})()
+        # VBProject is a tiny shim with both VBComponents and References.
+        self.VBProject = type(
+            "_VBProj",
+            (),
+            {
+                "VBComponents": _FakeVBComponents(),
+                "References": _FakeReferences(allow_add=allow_reference_add),
+            },
+        )()
 
 
 class _FakeWorkbooks:
@@ -168,6 +198,55 @@ class TestInjection:
             "ModelRiskMcp_RunSim"
             in pre.VBProject.VBComponents("ModelRiskMcpHelper").CodeModule.code
         )
+
+    def test_uses_early_binding_when_reference_added(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """When VBProject.References.AddFromFile succeeds, the early-
+        bound macro code is injected (uses `As ModelRisk.<Class>`
+        types). This is the path that should actually work against a
+        custom-interface-only coclass."""
+        # Make the registry lookup return a path we can pretend is the DLL.
+        monkeypatch.setattr(
+            "modelrisk_mcp.bridge.modelrisk._lookup_modelrisk_inproc_server",
+            lambda: ("{570013C9-...}", "C:/fake/ModelRiskAtl.dll"),
+        )
+        excel = _FakeExcelBridge()
+        helper = VbaHelperBridge(excel)
+        result = helper.inject_if_needed()
+        assert result.ok is True
+        assert result.used_early_binding is True
+        books = list(excel._app.api.Workbooks._books)
+        comp = books[0].VBProject.VBComponents("ModelRiskMcpHelper")
+        # Early-bound code uses `Dim sim As ModelRisk.ModelRiskSimulation`
+        # — that string isn't in the late-bound fallback.
+        assert "As ModelRisk.ModelRiskSimulation" in comp.CodeModule.code
+
+    def test_falls_back_to_late_binding_when_reference_add_fails(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """If AddFromFile and AddFromGuid both fail, the helper still
+        injects the late-bound fallback so subsequent calls don't
+        crash. The fallback is documented to likely fail with
+        E_NOINTERFACE — that's a downstream concern."""
+        monkeypatch.setattr(
+            "modelrisk_mcp.bridge.modelrisk._lookup_modelrisk_inproc_server",
+            lambda: (None, None),
+        )
+        # And block AddFromGuid too.
+        excel = _FakeExcelBridge()
+        book = _FakeWorkbook(
+            "ModelRiskMcpHelper.xlsm", allow_reference_add=False
+        )
+        excel._app.api.Workbooks._books.append(book)
+        helper = VbaHelperBridge(excel)
+        result = helper.inject_if_needed()
+        assert result.ok is True
+        assert result.used_early_binding is False
+        comp = book.VBProject.VBComponents("ModelRiskMcpHelper")
+        # Late-bound code uses CreateObject; early-bound does not.
+        assert "CreateObject" in comp.CodeModule.code
+        assert "As ModelRisk.ModelRiskSimulation" not in comp.CodeModule.code
 
     def test_vbom_trust_failure_surfaces_clear_error(self) -> None:
         """Excel raises a COM error when 'Trust access to the VBA

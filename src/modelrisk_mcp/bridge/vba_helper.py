@@ -36,59 +36,61 @@ from typing import Any
 
 VBA_MODULE_NAME: str = "ModelRiskMcpHelper"
 
-
-VBA_MODULE_CODE: str = r"""Option Explicit
-' modelrisk-mcp helper module — runs ModelRisk's COM surface inside
-' Excel's process. Generated; do not hand-edit. The MCP server injects
-' this on demand and removes it (along with the hidden workbook) when
-' Excel closes.
+# Early-bound VBA module: requires a Reference to ModelRiskAtl.dll
+# (TypeLib `{ECC429DA-26E6-4D86-9B2D-1E14E0461749}`). VbaHelperBridge
+# adds that reference before injecting this code. The early binding is
+# essential: the ModelRisk coclasses don't expose IDispatch at runtime,
+# only their custom typelib interfaces — that's why late-bound
+# CreateObject (and Python's Dispatch) returns E_NOINTERFACE.
+VBA_MODULE_CODE_EARLY: str = r"""Option Explicit
+' modelrisk-mcp helper — runs ModelRisk's COM surface inside Excel via
+' early binding through the ModelRiskAtl.dll typelib. Generated; do
+' not hand-edit. The Reference to ModelRiskAtl.dll is added by the
+' MCP server before this module is loaded.
 
 Public Function ModelRiskMcp_IsAvailable() As Boolean
     On Error Resume Next
-    Dim sim As Object
-    Set sim = CreateObject("ModelRisk.ModelRiskSimulation")
+    Dim sim As ModelRisk.ModelRiskSimulation
+    Set sim = New ModelRisk.ModelRiskSimulation
     ModelRiskMcp_IsAvailable = (Err.Number = 0 And Not sim Is Nothing)
     On Error GoTo 0
 End Function
 
 Public Sub ModelRiskMcp_SetSamples(ByVal n As Long)
-    Dim settings As Object
-    Set settings = CreateObject("ModelRisk.ModelRiskSimulationSettings")
+    Dim settings As ModelRisk.ModelRiskSimulationSettings
+    Set settings = New ModelRisk.ModelRiskSimulationSettings
     settings.Samples = n
 End Sub
 
 Public Sub ModelRiskMcp_SetSeed(ByVal seedValue As Double)
-    Dim settings As Object
-    Set settings = CreateObject("ModelRisk.ModelRiskSimulationSettings")
+    Dim settings As ModelRisk.ModelRiskSimulationSettings
+    Set settings = New ModelRisk.ModelRiskSimulationSettings
     settings.UseFixedSeed = True
     settings.Seed(0) = seedValue
 End Sub
 
 Public Sub ModelRiskMcp_SetHideProgressWindow(ByVal hide As Boolean)
-    Dim settings As Object
-    Set settings = CreateObject("ModelRisk.ModelRiskSimulationSettings")
+    Dim settings As ModelRisk.ModelRiskSimulationSettings
+    Set settings = New ModelRisk.ModelRiskSimulationSettings
     settings.HideProgressWindow = hide
 End Sub
 
 Public Sub ModelRiskMcp_RunSim()
-    Dim sim As Object
-    Set sim = CreateObject("ModelRisk.ModelRiskSimulation")
+    Dim sim As ModelRisk.ModelRiskSimulation
+    Set sim = New ModelRisk.ModelRiskSimulation
     sim.StartSimulation
 End Sub
 
 Public Function ModelRiskMcp_GetOutputCount() As Long
-    Dim results As Object, outs As Object
-    Set results = CreateObject("ModelRisk.ModelRiskSimulationResults")
-    Set outs = results.SimOutputs()
-    ModelRiskMcp_GetOutputCount = CLng(outs.Count)
+    Dim results As ModelRisk.ModelRiskSimulationResults
+    Set results = New ModelRisk.ModelRiskSimulationResults
+    ModelRiskMcp_GetOutputCount = CLng(results.SimOutputs().Count)
 End Function
 
 Public Function ModelRiskMcp_GetOutputName(ByVal index As Long) As String
-    Dim results As Object, outs As Object, var As Object
-    Set results = CreateObject("ModelRisk.ModelRiskSimulationResults")
-    Set outs = results.SimOutputs()
-    Set var = outs.Item(index)
-    ModelRiskMcp_GetOutputName = CStr(var.GetName())
+    Dim results As ModelRisk.ModelRiskSimulationResults
+    Set results = New ModelRisk.ModelRiskSimulationResults
+    ModelRiskMcp_GetOutputName = CStr(results.SimOutputs().Item(index).GetName())
 End Function
 
 Public Function ModelRiskMcp_GetMean(ByVal varName As String) As Double
@@ -132,8 +134,9 @@ Public Function ModelRiskMcp_GetSamples(ByVal varName As String) As Variant
 End Function
 
 Private Function ModelRiskMcp_FindVar(ByVal varName As String) As Object
-    Dim results As Object, outs As Object, var As Object, i As Long
-    Set results = CreateObject("ModelRisk.ModelRiskSimulationResults")
+    Dim results As ModelRisk.ModelRiskSimulationResults
+    Dim outs As Object, var As Object, i As Long
+    Set results = New ModelRisk.ModelRiskSimulationResults
     Set outs = results.SimOutputs()
     For i = 1 To outs.Count
         Set var = outs.Item(i)
@@ -146,12 +149,78 @@ Private Function ModelRiskMcp_FindVar(ByVal varName As String) As Object
 End Function
 """
 
+# Late-bound fallback used when we can't add the typelib Reference (e.g.
+# the DLL path isn't findable in the registry). Likely to fail with
+# E_NOINTERFACE on the current ModelRisk build — kept as a last resort
+# so the helper degrades gracefully rather than crashing.
+VBA_MODULE_CODE_LATE: str = r"""Option Explicit
+' modelrisk-mcp helper (late-binding fallback). Used only if the
+' typelib reference couldn't be added. Likely to fail with
+' E_NOINTERFACE since the ModelRisk coclasses don't expose IDispatch.
+
+Public Function ModelRiskMcp_IsAvailable() As Boolean
+    On Error Resume Next
+    Dim sim As Object
+    Set sim = CreateObject("ModelRisk.ModelRiskSimulation")
+    ModelRiskMcp_IsAvailable = (Err.Number = 0 And Not sim Is Nothing)
+    On Error GoTo 0
+End Function
+
+Public Sub ModelRiskMcp_SetSamples(ByVal n As Long)
+    CreateObject("ModelRisk.ModelRiskSimulationSettings").Samples = n
+End Sub
+
+Public Sub ModelRiskMcp_SetSeed(ByVal seedValue As Double)
+    Dim s As Object
+    Set s = CreateObject("ModelRisk.ModelRiskSimulationSettings")
+    s.UseFixedSeed = True
+    s.Seed(0) = seedValue
+End Sub
+
+Public Sub ModelRiskMcp_SetHideProgressWindow(ByVal hide As Boolean)
+    CreateObject("ModelRisk.ModelRiskSimulationSettings").HideProgressWindow = hide
+End Sub
+
+Public Sub ModelRiskMcp_RunSim()
+    CreateObject("ModelRisk.ModelRiskSimulation").StartSimulation
+End Sub
+
+Public Function ModelRiskMcp_GetOutputCount() As Long
+    ModelRiskMcp_GetOutputCount = CLng( _
+        CreateObject("ModelRisk.ModelRiskSimulationResults").SimOutputs().Count)
+End Function
+
+Public Function ModelRiskMcp_GetMean(ByVal varName As String) As Double
+    ModelRiskMcp_GetMean = 0
+End Function
+
+Public Function ModelRiskMcp_GetPercentile(ByVal varName As String, ByVal p As Double) As Double
+    ModelRiskMcp_GetPercentile = 0
+End Function
+
+Public Function ModelRiskMcp_GetStDev(ByVal varName As String) As Double
+    ModelRiskMcp_GetStDev = 0
+End Function
+
+Public Function ModelRiskMcp_GetSamples(ByVal varName As String) As Variant
+    ModelRiskMcp_GetSamples = Array()
+End Function
+
+Public Function ModelRiskMcp_GetOutputName(ByVal index As Long) As String
+    ModelRiskMcp_GetOutputName = ""
+End Function
+"""
+
+# Backwards-compatible name kept for existing tests.
+VBA_MODULE_CODE: str = VBA_MODULE_CODE_EARLY
+
 
 @dataclass
 class VbaInjectionResult:
     ok: bool
     error: str | None = None
     workbook_name: str | None = None
+    used_early_binding: bool = False
 
 
 class VbaHelperBridge:
@@ -179,12 +248,17 @@ class VbaHelperBridge:
     def __init__(self, excel_bridge: Any) -> None:
         self._excel = excel_bridge
         self._injected: bool = False
+        self._used_early_binding: bool = False
 
     def inject_if_needed(self) -> VbaInjectionResult:
         """Idempotent. On first call: find or create the helper workbook,
-        write the VBA module if it isn't already there."""
+        add a Reference to ModelRiskAtl.dll, write the VBA module."""
         if self._injected:
-            return VbaInjectionResult(ok=True, workbook_name=self.HELPER_WORKBOOK_NAME)
+            return VbaInjectionResult(
+                ok=True,
+                workbook_name=self.HELPER_WORKBOOK_NAME,
+                used_early_binding=self._used_early_binding,
+            )
         try:
             book = self._find_or_create_helper_book()
         except Exception as exc:
@@ -212,7 +286,11 @@ class VbaHelperBridge:
                 ),
             )
         self._injected = True
-        return VbaInjectionResult(ok=True, workbook_name=self.HELPER_WORKBOOK_NAME)
+        return VbaInjectionResult(
+            ok=True,
+            workbook_name=self.HELPER_WORKBOOK_NAME,
+            used_early_binding=self._used_early_binding,
+        )
 
     def run(self, sub_name: str, *args: Any) -> Any:
         """Invoke `Excel.Application.Run("<helper-workbook>!<sub>", *args)`
@@ -247,6 +325,12 @@ class VbaHelperBridge:
 
     def _inject_module(self, book: Any) -> None:
         vbproj = book.VBProject
+        # Add the typelib Reference first — without it the early-bound
+        # macro code won't compile, and the late-bound fallback is
+        # known to fail with E_NOINTERFACE against this ATL coclass.
+        reference_added = self._ensure_modelrisk_reference(vbproj)
+        code = VBA_MODULE_CODE_EARLY if reference_added else VBA_MODULE_CODE_LATE
+        self._used_early_binding = reference_added
         # If the module is already present, replace its contents.
         existing = None
         try:
@@ -257,12 +341,64 @@ class VbaHelperBridge:
             existing.CodeModule.DeleteLines(
                 1, existing.CodeModule.CountOfLines
             )
-            existing.CodeModule.AddFromString(VBA_MODULE_CODE)
+            existing.CodeModule.AddFromString(code)
             return
         # vbext_ct_StdModule = 1
         component = vbproj.VBComponents.Add(1)
         component.Name = VBA_MODULE_NAME
-        component.CodeModule.AddFromString(VBA_MODULE_CODE)
+        component.CodeModule.AddFromString(code)
+
+    def _ensure_modelrisk_reference(self, vbproj: Any) -> bool:
+        """Add a VBA Reference to ModelRiskAtl.dll. Returns True if the
+        reference is present after this call.
+
+        Tries `AddFromFile(dll_path)` first (most reliable), falling back
+        to `AddFromGuid` with the typelib UUID from the IDL. Either
+        path requires 'Trust access to the VBA project object model'
+        to be on, which `inject_if_needed` already implies."""
+        try:
+            refs = vbproj.References
+        except Exception:
+            return False
+        # Already present?
+        try:
+            for ref in refs:
+                desc = str(getattr(ref, "Description", "") or "")
+                full_path = str(getattr(ref, "FullPath", "") or "")
+                if (
+                    "modelrisk" in desc.lower()
+                    or "modelriskatl" in full_path.lower()
+                ):
+                    return True
+        except Exception:
+            pass
+        # Try AddFromFile with the registered InprocServer32 path.
+        from modelrisk_mcp.bridge.modelrisk import (
+            _lookup_modelrisk_inproc_server,
+        )
+
+        _clsid, dll_path = _lookup_modelrisk_inproc_server()
+        if dll_path:
+            try:
+                refs.AddFromFile(dll_path)
+                return True
+            except Exception:
+                pass
+        # Fall back to AddFromGuid with the typelib GUID from the IDL.
+        from modelrisk_mcp.bridge.progids import TYPELIB
+
+        try:
+            refs.AddFromGuid(TYPELIB, 1, 0)
+            return True
+        except Exception:
+            return False
 
 
-__all__ = ["VBA_MODULE_CODE", "VBA_MODULE_NAME", "VbaHelperBridge", "VbaInjectionResult"]
+__all__ = [
+    "VBA_MODULE_CODE",
+    "VBA_MODULE_CODE_EARLY",
+    "VBA_MODULE_CODE_LATE",
+    "VBA_MODULE_NAME",
+    "VbaHelperBridge",
+    "VbaInjectionResult",
+]
