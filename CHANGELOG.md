@@ -4,6 +4,26 @@ All notable changes to ModelRisk MCP. Follows [Keep a Changelog](https://keepach
 
 ## [Unreleased]
 
+## [0.2.0-alpha.2] — 2026-05-20
+
+Auto-activates the ModelRisk add-in inside Excel before reporting the COM surface unreachable. Closes the "modelrisk_loaded: false even though ModelRisk is installed" footgun.
+
+### Added
+
+- `ExcelBridge.list_com_addins() / list_excel_addins()` — enumerate Excel's COMAddIns and AddIns collections as plain dicts.
+- `ExcelBridge.enable_com_addin(predicate) / enable_excel_addin(predicate)` — flip `.Connect=True` / `.Installed=True` on matching entries, return the names of those actually flipped. Idempotent; no-op on already-on entries.
+- `ModelRiskBridge.ensure_modelrisk_active()` — scans both collections, enables any entry whose description / progid / name mentions ModelRisk or Vose, retries Dispatch, returns a diagnostic dict (`com_addins_enabled`, `excel_addins_enabled`, `com_addins_seen`, `excel_addins_seen`, `modelrisk_dispatchable`).
+- New MCP tool `ensure_modelrisk_active` — explicit invocation for debugging "COM unreachable" reports.
+- Simulation tools (`set_simulation_settings`, `run_simulation`) now call `ensure_modelrisk_active` transparently before touching COM. The LLM no longer needs to ask the user to manually load the add-in.
+
+### Changed
+
+- `ModelRiskBridge.is_modelrisk_loaded()` now attempts auto-activation if the first Dispatch fails. Returns True iff Dispatch works after activation.
+
+### Notes
+
+If auto-activation can't find a ModelRisk add-in to flip on, the diagnostic surfaces every COM and Excel add-in it *did* see — useful for ruling out bitness mismatches and broken installs.
+
 ## [0.2.0-alpha.1] — 2026-05-20
 
 HTTP transport — unblocks Claude for Excel and other remote MCP clients that can't spawn local subprocesses.

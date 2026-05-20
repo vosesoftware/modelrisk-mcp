@@ -101,9 +101,24 @@ class ModelRiskBridge:
     # ------------------------------------------------------------------
 
     def is_modelrisk_loaded(self) -> bool:
-        """Best-effort: returns True if the ModelRisk COM object can be
-        Dispatched on this machine. Doesn't guarantee the Excel add-in is
-        currently loaded — but if it's installed at all, Dispatch works."""
+        """Returns True if the ModelRisk COM surface is reachable.
+
+        First attempts a direct Dispatch. If that fails, asks Excel to
+        enable any ModelRisk-named add-in (Vose's COM-add-in or XLL),
+        then retries. Most callers should use this instead of probing
+        Dispatch themselves — it handles the common 'ModelRisk
+        installed but not loaded into the active Excel session' case
+        transparently."""
+        if self._try_dispatch():
+            return True
+        # Dispatch failed. Try to enable ModelRisk inside Excel.
+        try:
+            self.ensure_modelrisk_active()
+        except Exception:
+            pass
+        return self._try_dispatch()
+
+    def _try_dispatch(self) -> bool:
         try:
             import win32com.client as com
         except ImportError:
@@ -113,6 +128,44 @@ class ModelRiskBridge:
         except Exception:
             return False
         return obj is not None
+
+    def ensure_modelrisk_active(self) -> dict[str, Any]:
+        """Make sure the ModelRisk add-in is loaded inside the running
+        Excel session.
+
+        Scans both `Excel.COMAddIns` (the ModelRisk extended UI is a
+        COM add-in) and `Excel.AddIns` (the worksheet-function XLL
+        registers here), flips `.Connect = True` / `.Installed = True`
+        on any entry whose name mentions ModelRisk or Vose, and reports
+        which entries it touched. Idempotent: skips entries already on.
+
+        Returns a diagnostic dict the LLM can surface to the user:
+            {
+              "com_addins_enabled": [...],
+              "excel_addins_enabled": [...],
+              "com_addins_seen": [...],   # for diagnostics
+              "excel_addins_seen": [...],
+              "modelrisk_dispatchable": bool,   # final Dispatch outcome
+            }
+        """
+        def _is_modelrisk(info: dict[str, Any]) -> bool:
+            blob = " ".join(str(v) for v in info.values()).lower()
+            return "modelrisk" in blob or "vose" in blob
+
+        com_seen = self._excel.list_com_addins()
+        xll_seen = self._excel.list_excel_addins()
+        com_enabled = self._excel.enable_com_addin(_is_modelrisk)
+        xll_enabled = self._excel.enable_excel_addin(_is_modelrisk)
+        dispatchable = self._try_dispatch()
+        return {
+            "com_addins_enabled": com_enabled,
+            "excel_addins_enabled": xll_enabled,
+            "com_addins_seen": [
+                a["description"] or a["progid"] for a in com_seen
+            ],
+            "excel_addins_seen": [a["name"] for a in xll_seen],
+            "modelrisk_dispatchable": dispatchable,
+        }
 
     # ------------------------------------------------------------------
     # Reading tools (§7.1)

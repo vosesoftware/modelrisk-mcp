@@ -13,6 +13,9 @@ ModelRisk's COM surface (tracked in §14 item 1). The tools are still
 
 from __future__ import annotations
 
+from typing import Any
+
+from modelrisk_mcp.errors import ModelRiskNotLoadedError
 from modelrisk_mcp.schemas.results import (
     SimulationRunResponse,
     SimulationSettingsRequest,
@@ -21,6 +24,27 @@ from modelrisk_mcp.schemas.results import (
 )
 from modelrisk_mcp.server import mcp
 from modelrisk_mcp.tools.reading import get_bridge
+
+
+def _ensure_modelrisk_or_raise() -> None:
+    """Auto-activate ModelRisk before any simulation-control call.
+
+    Tries to enable the add-in transparently. If it still isn't
+    reachable, raises a typed error with a diagnostic the LLM can
+    surface to the user."""
+    bridge = get_bridge()
+    diag = bridge.ensure_modelrisk_active()
+    if diag["modelrisk_dispatchable"]:
+        return
+    com_seen = diag.get("com_addins_seen") or []
+    xll_seen = diag.get("excel_addins_seen") or []
+    raise ModelRiskNotLoadedError(
+        "ModelRisk's COM surface is unreachable. Auto-activation didn't "
+        "find a ModelRisk-named add-in to enable. COM add-ins seen: "
+        f"{com_seen!r}. Excel add-ins seen: {xll_seen!r}. Confirm "
+        "ModelRisk is installed and that Excel's bitness (32/64) matches "
+        "the installed ModelRiskAtl.dll."
+    )
 
 
 @mcp.tool(
@@ -46,6 +70,7 @@ def set_simulation_settings(
     refresh_rate: int | None = None,
     stop_on_output_error: bool | None = None,
 ) -> SimulationSettingsResponse:
+    _ensure_modelrisk_or_raise()
     request = SimulationSettingsRequest(
         samples=samples,
         simulations=simulations,
@@ -73,7 +98,23 @@ def run_simulation(
     iterations: int | None = None,
     seed: float | None = None,
 ) -> SimulationRunResponse:
+    _ensure_modelrisk_or_raise()
     return get_bridge().simulation.run(iterations=iterations, seed=seed)
+
+
+@mcp.tool(
+    description=(
+        "ModelRisk: Make sure the ModelRisk add-in is loaded inside the "
+        "running Excel session. Scans Excel's COM and classic add-in "
+        "collections, enables anything named ModelRisk or Vose, then "
+        "retries the COM Dispatch. Returns a diagnostic showing which "
+        "add-ins were enabled and whether the surface is now "
+        "reachable. Most simulation tools call this transparently — "
+        "use it directly only to debug 'COM unreachable' errors."
+    )
+)
+def ensure_modelrisk_active() -> dict[str, Any]:
+    return get_bridge().ensure_modelrisk_active()
 
 
 @mcp.tool(

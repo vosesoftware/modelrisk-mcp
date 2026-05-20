@@ -335,6 +335,109 @@ class ExcelBridge:
         except Exception as exc:
             raise CellReferenceError(f"Excel.Undo() failed: {exc}") from exc
 
+    # ------------------------------------------------------------------
+    # Add-in management
+    # ------------------------------------------------------------------
+
+    def list_com_addins(self) -> list[dict[str, Any]]:
+        """Return Excel's COM Add-ins collection as plain dicts.
+
+        Each entry: `{description, progid, connected, guid}`.
+        """
+        app = self._ensure()
+        out: list[dict[str, Any]] = []
+        try:
+            for addin in app.api.COMAddIns:
+                out.append(
+                    {
+                        "description": str(getattr(addin, "Description", "")),
+                        "progid": str(getattr(addin, "ProgID", "")),
+                        "guid": str(getattr(addin, "Guid", "")),
+                        "connected": bool(getattr(addin, "Connect", False)),
+                    }
+                )
+        except Exception:
+            return []
+        return out
+
+    def list_excel_addins(self) -> list[dict[str, Any]]:
+        """Return Excel's classic AddIns collection (XLL / XLA) as
+        plain dicts. Each entry: `{name, installed, path}`."""
+        app = self._ensure()
+        out: list[dict[str, Any]] = []
+        try:
+            for addin in app.api.AddIns:
+                out.append(
+                    {
+                        "name": str(getattr(addin, "Name", "")),
+                        "installed": bool(getattr(addin, "Installed", False)),
+                        "path": str(getattr(addin, "FullName", "")),
+                    }
+                )
+        except Exception:
+            return []
+        return out
+
+    def enable_com_addin(
+        self, predicate: Callable[[dict[str, Any]], bool]
+    ) -> list[str]:
+        """Set `.Connect = True` on every COM add-in matching `predicate`.
+
+        Returns the list of names (progid/description) actually flipped from
+        off to on. No-op for add-ins already connected."""
+        app = self._ensure()
+        flipped: list[str] = []
+        try:
+            for addin in app.api.COMAddIns:
+                info = {
+                    "description": str(getattr(addin, "Description", "")),
+                    "progid": str(getattr(addin, "ProgID", "")),
+                    "guid": str(getattr(addin, "Guid", "")),
+                    "connected": bool(getattr(addin, "Connect", False)),
+                }
+                if not predicate(info):
+                    continue
+                if info["connected"]:
+                    continue
+                try:
+                    addin.Connect = True
+                    name = str(info["description"] or info["progid"])
+                    flipped.append(name)
+                except Exception:
+                    # Some add-ins refuse to be enabled from automation
+                    # (signed-only policy, etc.). Best-effort.
+                    continue
+        except Exception:
+            return flipped
+        return flipped
+
+    def enable_excel_addin(
+        self, predicate: Callable[[dict[str, Any]], bool]
+    ) -> list[str]:
+        """Set `.Installed = True` on every classic add-in matching
+        `predicate`. Returns the names of those flipped on."""
+        app = self._ensure()
+        flipped: list[str] = []
+        try:
+            for addin in app.api.AddIns:
+                info = {
+                    "name": str(getattr(addin, "Name", "")),
+                    "installed": bool(getattr(addin, "Installed", False)),
+                    "path": str(getattr(addin, "FullName", "")),
+                }
+                if not predicate(info):
+                    continue
+                if info["installed"]:
+                    continue
+                try:
+                    addin.Installed = True
+                    flipped.append(str(info["name"]))
+                except Exception:
+                    continue
+        except Exception:
+            return flipped
+        return flipped
+
 
 # ----------------------------------------------------------------------
 # Helpers

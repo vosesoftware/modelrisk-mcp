@@ -57,16 +57,34 @@ def fake_com() -> FakeSimulationCom:
 @pytest.fixture
 def bridge(
     fake_com: FakeSimulationCom,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> Iterator[ModelRiskBridge]:
     # ExcelBridge is irrelevant for the simulation tools — they go
-    # through SimulationController only. Pass a typed-as-Any stub.
+    # through SimulationController only. Pass a typed-as-Any stub that
+    # also pretends ModelRisk is "always loaded" so the simulation
+    # tools' ensure_modelrisk_or_raise gate doesn't gatekeep us.
     class _NoExcel:
         def list_workbooks(self) -> list[Any]:
             return []
+
+        def list_com_addins(self) -> list[dict[str, Any]]:
+            return []
+
+        def list_excel_addins(self) -> list[dict[str, Any]]:
+            return []
+
+        def enable_com_addin(self, predicate: Any) -> list[str]:
+            return []
+
+        def enable_excel_addin(self, predicate: Any) -> list[str]:
+            return []
+
     bridge = ModelRiskBridge(
         excel=_NoExcel(),  # type: ignore[arg-type]
         simulation=SimulationController(com=fake_com),
     )
+    # Real Dispatch would fail without Excel — short-circuit it for tests.
+    monkeypatch.setattr(bridge, "_try_dispatch", lambda: True)
     reading.set_bridge_for_testing(bridge)
     yield bridge
     reading.set_bridge_for_testing(None)
