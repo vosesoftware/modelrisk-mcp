@@ -161,8 +161,7 @@ def get_simulation_results(
     workbook_name: str,
     output_names: list[str] | None = None,
 ) -> list[SimulationResult]:
-    _ = workbook_name  # routing is implicit via the live ModelRiskSimulationResults COM object
-    return get_bridge().get_simulation_results(output_names)
+    return get_bridge().get_simulation_results(workbook_name, output_names)
 
 
 @mcp.tool(
@@ -177,8 +176,7 @@ def get_correlation_matrix(
     workbook_name: str,
     name_list: list[str] | None = None,
 ) -> CorrelationMatrix:
-    _ = workbook_name
-    return get_bridge().get_correlation_matrix(name_list)
+    return get_bridge().get_correlation_matrix(workbook_name, name_list)
 
 
 @mcp.tool(
