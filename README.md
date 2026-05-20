@@ -104,6 +104,21 @@ Restart Claude Desktop. The ModelRisk tools appear under the connections icon. F
 
 ---
 
+## Wire into Claude for Excel (HTTP transport)
+
+Claude for Excel runs inside an Office.js sandbox and can't spawn subprocesses, so it talks to MCP servers over HTTP. Start the server in HTTP mode:
+
+```powershell
+$env:MODELRISK_MCP_TOKEN = [Guid]::NewGuid().ToString("N") * 2
+modelrisk-mcp --transport=streamable-http --port=8000 --token=$env:MODELRISK_MCP_TOKEN
+```
+
+Then in Claude for Excel: Settings → Connectors → Add MCP server, URL `http://127.0.0.1:8000/mcp`, paste the token. Full guide: [docs/claude-for-excel.md](docs/claude-for-excel.md).
+
+**Why this is interesting:** Claude for Excel's sandbox can't reach Excel's COM surface or the ModelRisk ribbon on its own. ModelRisk MCP runs outside the sandbox and bridges that gap — Claude for Excel can do things via this server it structurally can't do otherwise (run simulations, dispatch ModelRisk COM, write distributions through the safety pipeline).
+
+---
+
 ## First conversation
 
 Open a workbook in Excel that has at least one Vose function — even a single `=VoseNormal(0,1)`. Then in Claude:

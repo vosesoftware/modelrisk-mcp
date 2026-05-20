@@ -4,6 +4,24 @@ All notable changes to ModelRisk MCP. Follows [Keep a Changelog](https://keepach
 
 ## [Unreleased]
 
+## [0.2.0-alpha.1] — 2026-05-20
+
+HTTP transport — unblocks Claude for Excel and other remote MCP clients that can't spawn local subprocesses.
+
+### Added
+
+- `--transport={stdio,streamable-http,sse}` CLI flag in `__main__.py`. stdio remains the default for backwards compatibility.
+- `--host`, `--port`, `--mount-path` flags for HTTP transports. Defaults to `127.0.0.1:8000`.
+- Bearer-token middleware (`http_auth.py`) — required on non-loopback HTTP binds, recommended even on loopback. Constant-time comparison via `hmac.compare_digest`. Token via `--token` or `MODELRISK_MCP_TOKEN` env var.
+- `docs/claude-for-excel.md` — wiring guide covering the Office.js sandbox / COM-bridge architectural story.
+- README section on HTTP transport with the strategic framing.
+- `tests/unit/test_cli.py` + `tests/unit/test_http_auth.py` — 14 new tests covering parser defaults, middleware reject/accept paths, RFC 6750 case-insensitivity of the Bearer keyword.
+
+### Changed
+
+- Spec §2.2 — "Hosting the MCP server remotely" no longer a non-goal.
+- README front-page table picks up a "Works with Claude for Excel" implication (no UI change needed — Claude for Excel was always in the compatible-clients list).
+
 ## [0.1.0] — 2026-05-20
 
 Public v0.1 release. Repository goes public at this tag.
