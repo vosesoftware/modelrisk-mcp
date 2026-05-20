@@ -126,6 +126,11 @@ def _build_bridge(
         excel=_FakeExcel(com_addins, excel_addins),  # type: ignore[arg-type]
     )
     monkeypatch.setattr(bridge, "_try_dispatch", lambda: dispatchable_after)
+    monkeypatch.setattr(
+        bridge,
+        "_try_dispatch_with_error",
+        lambda: (dispatchable_after, None if dispatchable_after else "fake-error"),
+    )
     return bridge
 
 

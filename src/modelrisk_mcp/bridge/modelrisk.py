@@ -13,13 +13,20 @@ from __future__ import annotations
 
 import json
 import re
+import struct
+import sys
+import winreg
 from datetime import datetime
 from pathlib import Path
 from typing import Any
 
 from modelrisk_mcp.bridge.catalogue import FunctionCatalogue, load_catalogue
 from modelrisk_mcp.bridge.excel import ExcelBridge
-from modelrisk_mcp.bridge.progids import PROGID_DISTRIBUTIONS
+from modelrisk_mcp.bridge.progids import (
+    CLSID_DISTRIBUTIONS,
+    CLSID_SIMULATION,
+    PROGID_DISTRIBUTIONS,
+)
 from modelrisk_mcp.bridge.results import ResultsReader
 from modelrisk_mcp.bridge.simulation import SimulationController
 from modelrisk_mcp.config import Settings
@@ -119,15 +126,25 @@ class ModelRiskBridge:
         return self._try_dispatch()
 
     def _try_dispatch(self) -> bool:
+        ok, _err = self._try_dispatch_with_error()
+        return ok
+
+    def _try_dispatch_with_error(self) -> tuple[bool, str | None]:
+        """Returns (success, error_message). Captures the COM exception
+        so the diagnostic can surface the actual HRESULT to the LLM —
+        invaluable for distinguishing 'class not registered' from a
+        bitness mismatch."""
         try:
             import win32com.client as com
-        except ImportError:
-            return False
+        except ImportError as exc:
+            return False, f"pywin32 not importable: {exc}"
         try:
             obj = com.Dispatch(PROGID_DISTRIBUTIONS)
-        except Exception:
-            return False
-        return obj is not None
+        except Exception as exc:
+            return False, f"{type(exc).__name__}: {exc}"
+        if obj is None:
+            return False, "Dispatch returned None"
+        return True, None
 
     def ensure_modelrisk_active(self) -> dict[str, Any]:
         """Make sure the ModelRisk add-in is loaded inside the running
@@ -156,8 +173,8 @@ class ModelRiskBridge:
         xll_seen = self._excel.list_excel_addins()
         com_enabled = self._excel.enable_com_addin(_is_modelrisk)
         xll_enabled = self._excel.enable_excel_addin(_is_modelrisk)
-        dispatchable = self._try_dispatch()
-        return {
+        dispatchable, dispatch_error = self._try_dispatch_with_error()
+        diag: dict[str, Any] = {
             "com_addins_enabled": com_enabled,
             "excel_addins_enabled": xll_enabled,
             "com_addins_seen": [
@@ -165,7 +182,96 @@ class ModelRiskBridge:
             ],
             "excel_addins_seen": [a["name"] for a in xll_seen],
             "modelrisk_dispatchable": dispatchable,
+            "dispatch_error": dispatch_error,
+            "com_addins_already_connected": [
+                a["description"] or a["progid"]
+                for a in com_seen
+                if a["connected"] and _is_modelrisk(a)
+            ],
+            "excel_addins_already_installed": [
+                a["name"] for a in xll_seen if a["installed"] and _is_modelrisk(a)
+            ],
         }
+        if not dispatchable:
+            diag["bitness"] = self._bitness_report()
+            diag["root_cause_hypothesis"] = self._classify_root_cause(diag)
+        return diag
+
+    def _bitness_report(self) -> dict[str, Any]:
+        """Gather a Python / Excel / ModelRiskAtl.dll bitness snapshot.
+
+        Each field is best-effort — failures degrade to None rather
+        than raising, because this is diagnostic code that runs *after*
+        something else is already broken."""
+        report: dict[str, Any] = {
+            "python_bits": 64 if sys.maxsize > 2**32 else 32,
+            "excel_path": None,
+            "excel_bits_guess": None,
+            "modelriskatl_clsid": None,
+            "modelriskatl_path": None,
+            "modelriskatl_bits": None,
+        }
+        # Excel path → bitness guess via "Program Files (x86)" marker.
+        try:
+            app = getattr(self._excel, "_app", None)
+            if app is not None:
+                excel_path = str(app.api.Path)
+                report["excel_path"] = excel_path
+                report["excel_bits_guess"] = (
+                    32 if "(x86)" in excel_path else 64
+                )
+        except Exception:
+            pass
+        # ModelRiskAtl.dll registered path via HKCR.
+        try:
+            clsid, dll_path = _lookup_modelrisk_inproc_server()
+            report["modelriskatl_clsid"] = clsid
+            report["modelriskatl_path"] = dll_path
+            if dll_path:
+                report["modelriskatl_bits"] = _pe_bits(dll_path)
+        except Exception:
+            pass
+        return report
+
+    def _classify_root_cause(self, diag: dict[str, Any]) -> str:
+        bits = diag.get("bitness") or {}
+        py_bits = bits.get("python_bits")
+        dll_bits = bits.get("modelriskatl_bits")
+        if dll_bits and py_bits and dll_bits != py_bits:
+            return (
+                f"BITNESS MISMATCH: ModelRiskAtl.dll is {dll_bits}-bit; "
+                f"this Python is {py_bits}-bit. COM can only load "
+                f"matching bitness in-process. Install a "
+                f"{dll_bits}-bit Python (or run modelrisk-mcp under one) "
+                f"and rerun `uv sync` against that interpreter."
+            )
+        if dll_bits is None and bits.get("modelriskatl_clsid"):
+            return (
+                "ModelRiskAtl.dll path was found in the registry but "
+                "the file isn't readable or has no PE header — the "
+                "registered path may be broken. Reinstall ModelRisk "
+                "or run `regsvr32 ModelRiskAtl.dll` from the install dir."
+            )
+        if not bits.get("modelriskatl_clsid"):
+            return (
+                "ModelRisk's CLSID isn't registered in HKCR — the COM "
+                "self-registration step didn't run, or it ran under a "
+                "different bitness's registry hive (HKCR is reflected). "
+                "Try `regsvr32 ModelRiskAtl.dll` from the ModelRisk "
+                "install folder; on x64 systems with a 32-bit DLL, use "
+                "`%SystemRoot%\\SysWOW64\\regsvr32.exe`."
+            )
+        if diag.get("com_addins_already_connected") or diag.get(
+            "excel_addins_already_installed"
+        ):
+            return (
+                "Add-ins are loaded in Excel but Dispatch still fails. "
+                "Most common cause: bitness mismatch couldn't be confirmed "
+                "automatically. Compare your Excel install path "
+                f"({bits.get('excel_path')!r}) and the Python "
+                f"interpreter bitness ({py_bits}-bit)."
+            )
+        return "Unrecognised failure mode. Inspect `dispatch_error`."
 
     # ------------------------------------------------------------------
     # Reading tools (§7.1)
@@ -500,6 +606,55 @@ def _parse_ts(ts: str) -> datetime:
         return datetime.fromisoformat(ts)
     except (TypeError, ValueError):
         return datetime.min
+
+
+def _lookup_modelrisk_inproc_server() -> tuple[str | None, str | None]:
+    """Read HKCR\\CLSID\\{clsid}\\InprocServer32 for ModelRisk's main
+    coclass. Returns (clsid, dll_path) — either may be None if the
+    registry entry isn't there or can't be read."""
+    for clsid in (CLSID_DISTRIBUTIONS, CLSID_SIMULATION):
+        for hive in (winreg.HKEY_CLASSES_ROOT, winreg.HKEY_CURRENT_USER):
+            sub = (
+                f"CLSID\\{clsid}\\InprocServer32"
+                if hive == winreg.HKEY_CLASSES_ROOT
+                else f"Software\\Classes\\CLSID\\{clsid}\\InprocServer32"
+            )
+            try:
+                with winreg.OpenKey(hive, sub) as key:
+                    dll, _ = winreg.QueryValueEx(key, "")
+                    return clsid, str(dll)
+            except OSError:
+                continue
+    return None, None
+
+
+def _pe_bits(dll_path: str) -> int | None:
+    """Read a Windows PE header and return 32 or 64. Best-effort —
+    returns None if the file isn't a recognisable PE."""
+    try:
+        with open(dll_path, "rb") as f:
+            # DOS header → e_lfanew at offset 0x3C points to the PE header.
+            f.seek(0x3C)
+            pe_offset_bytes = f.read(4)
+            if len(pe_offset_bytes) < 4:
+                return None
+            pe_offset = struct.unpack("<I", pe_offset_bytes)[0]
+            f.seek(pe_offset)
+            sig = f.read(4)
+            if sig != b"PE\x00\x00":
+                return None
+            # IMAGE_FILE_HEADER.Machine at PE+4 (16-bit little-endian).
+            machine_bytes = f.read(2)
+            if len(machine_bytes) < 2:
+                return None
+            machine = struct.unpack("<H", machine_bytes)[0]
+            if machine == 0x014C:  # IMAGE_FILE_MACHINE_I386
+                return 32
+            if machine in (0x8664, 0xAA64):  # AMD64 or ARM64
+                return 64
+    except OSError:
+        return None
+    return None
 
 
 __all__ = ["ModelRiskBridge"]

@@ -83,8 +83,12 @@ def bridge(
         excel=_NoExcel(),  # type: ignore[arg-type]
         simulation=SimulationController(com=fake_com),
     )
-    # Real Dispatch would fail without Excel — short-circuit it for tests.
+    # Real Dispatch would fail without Excel — short-circuit both the
+    # public and the with-error variants for tests.
     monkeypatch.setattr(bridge, "_try_dispatch", lambda: True)
+    monkeypatch.setattr(
+        bridge, "_try_dispatch_with_error", lambda: (True, None)
+    )
     reading.set_bridge_for_testing(bridge)
     yield bridge
     reading.set_bridge_for_testing(None)
