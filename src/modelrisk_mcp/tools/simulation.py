@@ -119,6 +119,22 @@ def ensure_modelrisk_active() -> dict[str, Any]:
 
 @mcp.tool(
     description=(
+        "ModelRisk: Switch the simulation controller to a VBA helper "
+        "module running inside Excel's process. Use this when out-of-"
+        "process COM Dispatch returns E_NOINTERFACE (ModelRiskAtl.dll "
+        "is an ATL add-in that only works in-process with Excel). "
+        "Injects a small VBA module into a hidden helper workbook on "
+        "first call; subsequent simulation tools call into the helper "
+        "via Excel.Application.Run. Requires 'Trust access to the VBA "
+        "project object model' to be enabled in Excel's Trust Center."
+    )
+)
+def use_vba_helper_for_simulation() -> dict[str, Any]:
+    return get_bridge().use_vba_helper_for_simulation()
+
+
+@mcp.tool(
+    description=(
         "ModelRisk: Cancel a running simulation. Currently raises "
         "SimulationNotAvailableError — ModelRisk's COM surface doesn't "
         "yet expose StopSimulation. In current ModelRisk versions, press "

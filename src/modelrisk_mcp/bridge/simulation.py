@@ -108,6 +108,55 @@ class _LiveSimulationCom:
         return self._get_sim().StartSimulation()
 
 
+@dataclass
+class _VbaSimulationCom:
+    """SimulationCom that routes through a VBA helper module running
+    inside Excel's process. Used when out-of-process CoCreateInstance
+    on ModelRiskAtl.dll returns E_NOINTERFACE (the ATL 'only works
+    in-host-process' pattern)."""
+
+    helper: Any  # VbaHelperBridge — typed as Any to avoid a top-level import cycle
+
+    def set_samples(self, n: int) -> None:
+        self.helper.run("ModelRiskMcp_SetSamples", int(n))
+
+    def set_simulations(self, n: int) -> None:
+        # The current VBA helper doesn't expose Simulations; fall back to
+        # samples (the property serving the same role in single-run flows).
+        # Future helper revision can split these.
+        self.helper.run("ModelRiskMcp_SetSamples", int(n))
+
+    def set_use_fixed_seed(self, b: bool) -> None:
+        # Seed setter implies UseFixedSeed=True in the helper. No-op
+        # when called separately to avoid contradicting set_seed.
+        pass
+
+    def set_seed(self, index: int, value: float) -> None:
+        # The helper writes Seed(0) and flips UseFixedSeed=True together.
+        if index != 0:
+            return
+        self.helper.run("ModelRiskMcp_SetSeed", float(value))
+
+    def set_multiple_seed_type(self, t: int) -> None:
+        # Not exposed by the helper. Most users won't touch this.
+        pass
+
+    def set_hide_progress_window(self, b: bool) -> None:
+        self.helper.run("ModelRiskMcp_SetHideProgressWindow", bool(b))
+
+    def set_refresh_excel(self, b: bool) -> None:
+        pass
+
+    def set_refresh_rate(self, r: int) -> None:
+        pass
+
+    def set_stop_on_output_error(self, b: bool) -> None:
+        pass
+
+    def start(self) -> Any:
+        return self.helper.run("ModelRiskMcp_RunSim")
+
+
 def _dispatch(progid: str) -> Any:
     try:
         import win32com.client as com

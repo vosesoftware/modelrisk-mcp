@@ -227,35 +227,94 @@ class ModelRiskBridge:
         """Walk Excel.COMAddIns for a ModelRisk entry and grab its
         `.Object` property. Returns the same {ok, error} shape as the
         other strategies; on success also records the add-in name we
-        found."""
+        found. Reports `addins_checked` (what we matched) and `null_object`
+        (matched but .Object was None) so the diagnostic distinguishes
+        'no match' from 'matched but the add-in didn't hand us an
+        object'."""
         try:
             app = getattr(self._excel, "_app", None)
             if app is None:
-                # Try to attach; tolerate failure.
                 self._excel.connect()
                 app = getattr(self._excel, "_app", None)
             if app is None:
                 return {"ok": False, "error": "Excel not reachable"}
+            checked: list[str] = []
+            null_object: list[str] = []
             for addin in app.api.COMAddIns:
                 desc = str(getattr(addin, "Description", "") or "")
                 progid = str(getattr(addin, "ProgID", "") or "")
-                if "modelrisk" not in (desc + progid).lower() and "vose" not in (
-                    desc + progid
-                ).lower():
+                guid = str(getattr(addin, "Guid", "") or "")
+                blob = (desc + " " + progid + " " + guid).lower()
+                if "modelrisk" not in blob and "vose" not in blob:
                     continue
+                name = desc or progid
+                checked.append(name)
                 try:
                     obj = addin.Object
                 except Exception as exc:
                     return {
                         "ok": False,
-                        "error": f"COMAddIn({desc!r}).Object: {exc}",
+                        "error": f"COMAddIn({name!r}).Object raised: {exc}",
+                        "addins_checked": checked,
                     }
                 if obj is None:
+                    null_object.append(name)
                     continue
-                return {"ok": True, "error": None, "addin_name": desc or progid}
+                return {
+                    "ok": True,
+                    "error": None,
+                    "addin_name": name,
+                    "addins_checked": checked,
+                }
+            if checked:
+                return {
+                    "ok": False,
+                    "error": (
+                        f"matched {checked!r} but every .Object was None "
+                        "(the add-in didn't hand us a programmable "
+                        "interface; this is normal for ribbon-only add-ins)"
+                    ),
+                    "addins_checked": checked,
+                    "null_object": null_object,
+                }
         except Exception as exc:
             return {"ok": False, "error": f"{type(exc).__name__}: {exc}"}
-        return {"ok": False, "error": "no ModelRisk COMAddIn found"}
+        return {"ok": False, "error": "no ModelRisk COMAddIn matched"}
+
+    def use_vba_helper_for_simulation(self) -> dict[str, Any]:
+        """Switch the simulation controller from in-process COM to the
+        VBA helper running inside Excel. Returns a diagnostic dict
+        from the injection attempt. Idempotent.
+
+        This is the last-resort path when out-of-process Dispatch on
+        ModelRiskAtl.dll returns E_NOINTERFACE — the helper runs the
+        CreateObject + StartSimulation calls *inside* Excel's process
+        where the DLL is happy."""
+        from modelrisk_mcp.bridge.simulation import (
+            SimulationController,
+            _VbaSimulationCom,
+        )
+        from modelrisk_mcp.bridge.vba_helper import VbaHelperBridge
+
+        helper = VbaHelperBridge(self._excel)
+        result = helper.inject_if_needed()
+        if not result.ok:
+            return {
+                "ok": False,
+                "error": result.error,
+                "workbook_name": result.workbook_name,
+            }
+        self._simulation = SimulationController(com=_VbaSimulationCom(helper))
+        return {
+            "ok": True,
+            "workbook_name": result.workbook_name,
+            "note": (
+                "Simulation tools now route through a VBA helper module "
+                "inside the hidden helper workbook. Subsequent "
+                "run_simulation / set_simulation_settings calls execute "
+                "inside Excel's process."
+            ),
+        }
 
     def ensure_modelrisk_active(self) -> dict[str, Any]:
         """Make sure the ModelRisk add-in is loaded inside the running
