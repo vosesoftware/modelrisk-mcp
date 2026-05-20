@@ -133,18 +133,129 @@ class ModelRiskBridge:
         """Returns (success, error_message). Captures the COM exception
         so the diagnostic can surface the actual HRESULT to the LLM —
         invaluable for distinguishing 'class not registered' from a
-        bitness mismatch."""
+        bitness mismatch from E_NOINTERFACE (the usual gen_py-cache
+        or wrong-coclass culprit)."""
+        ok, _strategy, err = self._dispatch_via_first_working_strategy()
+        return ok, err
+
+    def _dispatch_via_first_working_strategy(
+        self,
+    ) -> tuple[bool, str | None, str | None]:
+        """Try every plausible Dispatch path and return the first one
+        that returns a usable object. Returns (success, strategy_name,
+        error_message). On success, error_message is None; on failure,
+        strategy_name is None and error_message summarises all the
+        attempts."""
+        results = self.diagnose_dispatch_strategies()
+        for strategy in (
+            "dispatch_ex",     # always-late-bound; bypasses gen_py cache
+            "co_create",       # bypasses pywin32 entirely
+            "dispatch",        # may hit gen_py cache
+            "via_comaddin",    # ask Excel for its in-process instance
+        ):
+            outcome = results.get(strategy, {})
+            if outcome.get("ok"):
+                return True, strategy, None
+        # Compose a one-line summary of every attempt for the diagnostic.
+        summary = "; ".join(
+            f"{name}={outcome.get('error') or 'ok'}"
+            for name, outcome in results.items()
+        )
+        return False, None, summary
+
+    def diagnose_dispatch_strategies(self) -> dict[str, dict[str, Any]]:
+        """Run every dispatch strategy and report each outcome.
+
+        Strategies:
+          - dispatch:    win32com.client.Dispatch(progid) — the standard
+                         path; may pick up a stale gen_py cache.
+          - dispatch_ex: win32com.client.DispatchEx(progid) — always
+                         late-bound; bypasses gen_py.
+          - co_create:   pythoncom.CoCreateInstance(clsid, ...,
+                         IID_IDispatch) — pywin32's lowest-level path.
+          - via_comaddin: walk Excel.COMAddIns for a ModelRisk entry and
+                         return its `.Object`. Useful when the COM coclass
+                         requires Office to have initialised it.
+        """
+        out: dict[str, dict[str, Any]] = {}
         try:
             import win32com.client as com
         except ImportError as exc:
-            return False, f"pywin32 not importable: {exc}"
+            for name in ("dispatch", "dispatch_ex", "co_create", "via_comaddin"):
+                out[name] = {"ok": False, "error": f"pywin32 missing: {exc}"}
+            return out
+
+        # 1. plain Dispatch
         try:
             obj = com.Dispatch(PROGID_DISTRIBUTIONS)
+            out["dispatch"] = {"ok": obj is not None, "error": None}
         except Exception as exc:
-            return False, f"{type(exc).__name__}: {exc}"
-        if obj is None:
-            return False, "Dispatch returned None"
-        return True, None
+            out["dispatch"] = {"ok": False, "error": f"{type(exc).__name__}: {exc}"}
+
+        # 2. DispatchEx — late-bound, ignores gen_py cache
+        try:
+            obj = com.DispatchEx(PROGID_DISTRIBUTIONS)
+            out["dispatch_ex"] = {"ok": obj is not None, "error": None}
+        except Exception as exc:
+            out["dispatch_ex"] = {
+                "ok": False,
+                "error": f"{type(exc).__name__}: {exc}",
+            }
+
+        # 3. CoCreateInstance via pythoncom
+        try:
+            import pythoncom
+            clsid = pythoncom.MakeIID(CLSID_DISTRIBUTIONS)
+            obj = pythoncom.CoCreateInstance(
+                clsid,
+                None,
+                pythoncom.CLSCTX_INPROC_SERVER | pythoncom.CLSCTX_LOCAL_SERVER,
+                pythoncom.IID_IDispatch,
+            )
+            out["co_create"] = {"ok": obj is not None, "error": None}
+        except Exception as exc:
+            out["co_create"] = {
+                "ok": False,
+                "error": f"{type(exc).__name__}: {exc}",
+            }
+
+        # 4. via Excel.COMAddIns.Object — the add-in's own IDispatch
+        out["via_comaddin"] = self._try_via_comaddin()
+        return out
+
+    def _try_via_comaddin(self) -> dict[str, Any]:
+        """Walk Excel.COMAddIns for a ModelRisk entry and grab its
+        `.Object` property. Returns the same {ok, error} shape as the
+        other strategies; on success also records the add-in name we
+        found."""
+        try:
+            app = getattr(self._excel, "_app", None)
+            if app is None:
+                # Try to attach; tolerate failure.
+                self._excel.connect()
+                app = getattr(self._excel, "_app", None)
+            if app is None:
+                return {"ok": False, "error": "Excel not reachable"}
+            for addin in app.api.COMAddIns:
+                desc = str(getattr(addin, "Description", "") or "")
+                progid = str(getattr(addin, "ProgID", "") or "")
+                if "modelrisk" not in (desc + progid).lower() and "vose" not in (
+                    desc + progid
+                ).lower():
+                    continue
+                try:
+                    obj = addin.Object
+                except Exception as exc:
+                    return {
+                        "ok": False,
+                        "error": f"COMAddIn({desc!r}).Object: {exc}",
+                    }
+                if obj is None:
+                    continue
+                return {"ok": True, "error": None, "addin_name": desc or progid}
+        except Exception as exc:
+            return {"ok": False, "error": f"{type(exc).__name__}: {exc}"}
+        return {"ok": False, "error": "no ModelRisk COMAddIn found"}
 
     def ensure_modelrisk_active(self) -> dict[str, Any]:
         """Make sure the ModelRisk add-in is loaded inside the running
@@ -194,6 +305,7 @@ class ModelRiskBridge:
         }
         if not dispatchable:
             diag["bitness"] = self._bitness_report()
+            diag["dispatch_strategies"] = self.diagnose_dispatch_strategies()
             diag["root_cause_hypothesis"] = self._classify_root_cause(diag)
         return diag
 
@@ -237,6 +349,32 @@ class ModelRiskBridge:
         bits = diag.get("bitness") or {}
         py_bits = bits.get("python_bits")
         dll_bits = bits.get("modelriskatl_bits")
+        strategies = diag.get("dispatch_strategies") or {}
+        # If one strategy worked, point at that.
+        winners = [n for n, r in strategies.items() if r.get("ok")]
+        if winners:
+            return (
+                f"Dispatch succeeded via {winners[0]!r}. The primary "
+                f"path is broken (gen_py cache pollution, wrong coclass, "
+                f"or integrity-level mismatch) but the fallback works. "
+                f"This run will use that path."
+            )
+        # Heuristic on the dominant error.
+        first_err = str(
+            (strategies.get("dispatch") or {}).get("error") or ""
+        ).lower()
+        if "no such interface" in first_err or "e_nointerface" in first_err:
+            return (
+                "E_NOINTERFACE on every strategy. Likely causes: "
+                "(1) stale pywin32 gen_py cache — delete "
+                "%LOCALAPPDATA%\\Temp\\gen_py\\ and retry. "
+                "(2) Excel running elevated while Python isn't, or "
+                "vice versa — COM Dispatch across integrity levels "
+                "returns this exact HRESULT. (3) ModelRiskAtl.dll's "
+                "TypeLib registration is broken — try "
+                "`regsvr32 \"" + (bits.get("modelriskatl_path") or "ModelRiskAtl.dll") + "\"` "
+                "from an elevated prompt."
+            )
         if dll_bits and py_bits and dll_bits != py_bits:
             return (
                 f"BITNESS MISMATCH: ModelRiskAtl.dll is {dll_bits}-bit; "

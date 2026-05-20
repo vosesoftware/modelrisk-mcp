@@ -246,3 +246,72 @@ class TestIsModelriskLoadedAutoActivates:
         )
         monkeypatch.setattr(bridge, "_try_dispatch", lambda: False)
         assert bridge.is_modelrisk_loaded() is False
+
+
+class TestStrategyDispatcher:
+    """`_dispatch_via_first_working_strategy` falls through to the next
+    strategy when the previous one returns ok=False."""
+
+    def test_picks_first_working_strategy(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        bridge = ModelRiskBridge(
+            excel=_FakeExcel([], []),  # type: ignore[arg-type]
+        )
+        monkeypatch.setattr(
+            bridge,
+            "diagnose_dispatch_strategies",
+            lambda: {
+                "dispatch": {"ok": False, "error": "E_NOINTERFACE"},
+                "dispatch_ex": {"ok": True, "error": None},
+                "co_create": {"ok": False, "error": "not tried"},
+                "via_comaddin": {"ok": False, "error": "not tried"},
+            },
+        )
+        ok, strategy, err = bridge._dispatch_via_first_working_strategy()
+        assert ok is True
+        assert strategy == "dispatch_ex"
+        assert err is None
+
+    def test_falls_through_to_comaddin(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        bridge = ModelRiskBridge(
+            excel=_FakeExcel([], []),  # type: ignore[arg-type]
+        )
+        monkeypatch.setattr(
+            bridge,
+            "diagnose_dispatch_strategies",
+            lambda: {
+                "dispatch": {"ok": False, "error": "E_NOINTERFACE"},
+                "dispatch_ex": {"ok": False, "error": "E_NOINTERFACE"},
+                "co_create": {"ok": False, "error": "E_NOINTERFACE"},
+                "via_comaddin": {"ok": True, "addin_name": "ModelRisk Ribbon"},
+            },
+        )
+        ok, strategy, _ = bridge._dispatch_via_first_working_strategy()
+        assert ok is True
+        assert strategy == "via_comaddin"
+
+    def test_reports_all_failures_when_nothing_works(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        bridge = ModelRiskBridge(
+            excel=_FakeExcel([], []),  # type: ignore[arg-type]
+        )
+        monkeypatch.setattr(
+            bridge,
+            "diagnose_dispatch_strategies",
+            lambda: {
+                "dispatch": {"ok": False, "error": "E_NOINTERFACE"},
+                "dispatch_ex": {"ok": False, "error": "E_NOINTERFACE"},
+                "co_create": {"ok": False, "error": "REGDB_E_CLASSNOTREG"},
+                "via_comaddin": {"ok": False, "error": "no ModelRisk COMAddIn"},
+            },
+        )
+        ok, strategy, err = bridge._dispatch_via_first_working_strategy()
+        assert ok is False
+        assert strategy is None
+        # Summary mentions every attempt.
+        assert "E_NOINTERFACE" in (err or "")
+        assert "REGDB_E_CLASSNOTREG" in (err or "")

@@ -5,7 +5,7 @@ from modelrisk_mcp.server import mcp
 
 
 def test_version_is_set() -> None:
-    assert __version__ == "0.2.0a3"
+    assert __version__ == "0.2.0a4"
 
 
 def test_server_name() -> None:

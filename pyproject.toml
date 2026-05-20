@@ -1,6 +1,6 @@
 [project]
 name = "modelrisk-mcp"
-version = "0.2.0a3"
+version = "0.2.0a4"
 description = "Open MCP server bridging Anthropic Claude (and any MCP-compatible client) with the ModelRisk Excel add-in."
 readme = "README.md"
 requires-python = ">=3.11"
@@ -112,6 +112,7 @@ module = [
     "win32com.*",
     "win32api.*",
     "win32event.*",
+    "pythoncom.*",
     "pywintypes.*",
     "yaml.*",
 ]
