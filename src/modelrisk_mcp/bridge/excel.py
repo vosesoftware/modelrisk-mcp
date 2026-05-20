@@ -292,6 +292,49 @@ class ExcelBridge:
             ) from exc
         r.formula = formulas
 
+    # ------------------------------------------------------------------
+    # Named ranges
+    # ------------------------------------------------------------------
+
+    def set_named_range(
+        self,
+        workbook: str,
+        name: str,
+        range_ref: str,
+    ) -> None:
+        """Create or overwrite a workbook-level named range. `range_ref`
+        is the A1 reference the name points to, e.g. 'Sheet1!$A$1:$A$10'.
+
+        xlwings exposes `book.names.add(name, refers_to)`. We first
+        attempt to remove an existing same-name entry so re-creation
+        succeeds idempotently."""
+        book = self._get_book(workbook)
+        try:
+            existing = book.names[name]
+        except Exception:
+            existing = None
+        if existing is not None:
+            try:
+                existing.delete()
+            except Exception:
+                pass
+        try:
+            book.names.add(name, refers_to=f"={range_ref}")
+        except Exception as exc:
+            raise CellReferenceError(
+                f"Could not create named range {name!r} pointing to "
+                f"{range_ref!r}: {exc}"
+            ) from exc
+
+    def undo(self) -> None:
+        """Trigger Excel's Undo. Used by integration tests to confirm
+        the writes we make land in Excel's undo stack."""
+        app = self._ensure()
+        try:
+            app.api.Undo()
+        except Exception as exc:
+            raise CellReferenceError(f"Excel.Undo() failed: {exc}") from exc
+
 
 # ----------------------------------------------------------------------
 # Helpers

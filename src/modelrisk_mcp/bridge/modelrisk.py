@@ -11,14 +11,25 @@ Nothing here touches COM directly — all Excel access goes through
 
 from __future__ import annotations
 
+import json
 import re
+from datetime import datetime
+from pathlib import Path
 from typing import Any
 
 from modelrisk_mcp.bridge.catalogue import FunctionCatalogue, load_catalogue
 from modelrisk_mcp.bridge.excel import ExcelBridge
 from modelrisk_mcp.bridge.progids import PROGID_DISTRIBUTIONS
 from modelrisk_mcp.bridge.results import ResultsReader
-from modelrisk_mcp.safety import extract_call_heads
+from modelrisk_mcp.config import Settings
+from modelrisk_mcp.errors import CellReferenceError
+from modelrisk_mcp.safety import (
+    WriterMutex,
+    append_write_log,
+    extract_call_heads,
+    is_vose_formula,
+)
+from modelrisk_mcp.schemas.distributions import InsertResult
 from modelrisk_mcp.schemas.results import (
     CorrelationMatrix,
     SensitivityRanking,
@@ -57,10 +68,14 @@ class ModelRiskBridge:
         excel: ExcelBridge,
         catalogue: FunctionCatalogue | None = None,
         results: ResultsReader | None = None,
+        settings: Settings | None = None,
+        writer_mutex: WriterMutex | None = None,
     ) -> None:
         self._excel = excel
         self._catalogue = catalogue or load_catalogue()
         self._results = results or ResultsReader()
+        self._settings = settings or Settings()
+        self._writer_mutex = writer_mutex or WriterMutex()
 
     @property
     def catalogue(self) -> FunctionCatalogue:
@@ -205,6 +220,98 @@ class ModelRiskBridge:
     def get_sensitivity_ranking(self, output_name: str) -> SensitivityRanking:
         return self._results.get_sensitivity_ranking(output_name)
 
+    # ------------------------------------------------------------------
+    # Building-tool support (Phase 3) — every write goes through here
+    # ------------------------------------------------------------------
+
+    def safe_write_cell(
+        self,
+        ref: CellRef,
+        new_formula: str,
+        *,
+        allow_overwrite_non_vose: bool = False,
+    ) -> InsertResult:
+        """Wraps every cell write with the §11 safety mechanisms:
+        writer-mutex acquisition, non-Vose-formula refusal,
+        before/after audit log append. Returns an InsertResult whose
+        `previous_formula` field carries what we replaced."""
+        with self._writer_mutex.held(timeout_ms=0):
+            existing = self._excel.get_cell(ref.workbook, ref.sheet, ref.cell)
+            previous_formula = existing.formula or ""
+            previous_value = existing.value
+            if (
+                previous_formula
+                and not allow_overwrite_non_vose
+                and not is_vose_formula(previous_formula, self._catalogue)
+            ):
+                raise CellReferenceError(
+                    f"Refusing to overwrite cell {ref.a1!r}: it contains a "
+                    f"non-Vose formula ({previous_formula!r}). Use a tool "
+                    f"that explicitly replaces (e.g. "
+                    f"replace_constant_with_distribution), or pass a "
+                    f"cell that's empty or already contains a Vose formula."
+                )
+            self._excel.write_cell(ref.workbook, ref.sheet, ref.cell, new_formula)
+            append_write_log(
+                cell=f"{ref.workbook}!{ref.sheet}!{ref.cell}",
+                before_formula=previous_formula,
+                before_value=previous_value,
+                after_formula=new_formula,
+                log_path=self._settings.writes_log_path,
+            )
+        return InsertResult(
+            cell=ref,
+            formula=new_formula,
+            written=True,
+            previous_formula=previous_formula or None,
+        )
+
+    def restore_cell(
+        self,
+        ref: CellRef,
+        *,
+        since: datetime | None = None,
+    ) -> InsertResult:
+        """Find the oldest matching entry in writes.log (optionally
+        filtered to entries newer than `since`) and restore that cell's
+        pre-write formula. Returns an InsertResult describing what was
+        written back."""
+        records = _read_audit_log(self._settings.writes_log_path)
+        target = f"{ref.workbook}!{ref.sheet}!{ref.cell}"
+        matches = [
+            r for r in records
+            if r.get("cell") == target
+            and (since is None or _parse_ts(r.get("ts", "")) >= since)
+        ]
+        if not matches:
+            raise CellReferenceError(
+                f"No audit-log entry found for {ref.a1!r}"
+                + (f" since {since.isoformat()}" if since else "")
+                + "."
+            )
+        # Oldest first — we want to roll back to the state before the
+        # earliest write in the window.
+        matches.sort(key=lambda r: r.get("ts", ""))
+        pre_formula = matches[0].get("before_formula") or ""
+        with self._writer_mutex.held(timeout_ms=0):
+            current = self._excel.get_cell(ref.workbook, ref.sheet, ref.cell)
+            self._excel.write_cell(
+                ref.workbook, ref.sheet, ref.cell, pre_formula
+            )
+            append_write_log(
+                cell=f"{ref.workbook}!{ref.sheet}!{ref.cell}",
+                before_formula=current.formula or "",
+                before_value=current.value,
+                after_formula=pre_formula,
+                log_path=self._settings.writes_log_path,
+            )
+        return InsertResult(
+            cell=ref,
+            formula=pre_formula,
+            written=True,
+            previous_formula=current.formula or None,
+        )
+
     def find_hard_coded_inputs(self, workbook: str) -> list[CellRef]:
         """Heuristic: numeric cells that are referenced by at least one
         formula cell elsewhere in the workbook. v0.1 version returns the
@@ -310,6 +417,29 @@ def _coerce_displayable(value: Any) -> float | str | None:
     if isinstance(value, (int, float)):
         return float(value)
     return str(value)
+
+
+def _read_audit_log(path: Path) -> list[dict[str, Any]]:
+    if not path.exists():
+        return []
+    records: list[dict[str, Any]] = []
+    for line in path.read_text(encoding="utf-8").splitlines():
+        line = line.strip()
+        if not line:
+            continue
+        try:
+            records.append(json.loads(line))
+        except json.JSONDecodeError:
+            continue
+    return records
+
+
+def _parse_ts(ts: str) -> datetime:
+    try:
+        # fromisoformat handles "2026-05-20T10:30:00+00:00" since 3.11.
+        return datetime.fromisoformat(ts)
+    except (TypeError, ValueError):
+        return datetime.min
 
 
 __all__ = ["ModelRiskBridge"]
