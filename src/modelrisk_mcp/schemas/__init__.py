@@ -14,6 +14,10 @@ from modelrisk_mcp.schemas.results import (
     SensitivityEntry,
     SensitivityRanking,
     SimulationResult,
+    SimulationRunResponse,
+    SimulationSettingsRequest,
+    SimulationSettingsResponse,
+    SimulationStatus,
 )
 from modelrisk_mcp.schemas.workbook import (
     CellInfo,
@@ -43,6 +47,10 @@ __all__ = [
     "SensitivityEntry",
     "SensitivityRanking",
     "SimulationResult",
+    "SimulationRunResponse",
+    "SimulationSettingsRequest",
+    "SimulationSettingsResponse",
+    "SimulationStatus",
     "WorkbookInfo",
     "WorkbookSummary",
     "WrapResult",

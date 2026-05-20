@@ -54,6 +54,40 @@ class SensitivityRanking(BaseModel):
     iterations: int = 0
 
 
+class SimulationSettingsRequest(BaseModel):
+    """Subset of `IModelRiskSimulationSettings` we expose. Every field
+    is optional — only the ones explicitly passed get written."""
+
+    samples: int | None = Field(default=None, ge=1)
+    simulations: int | None = Field(default=None, ge=1)
+    use_fixed_seed: bool | None = None
+    seed: float | None = None
+    multiple_seed_type: int | None = None
+    hide_progress_window: bool | None = None
+    refresh_excel: bool | None = None
+    refresh_rate: int | None = Field(default=None, ge=0)
+    stop_on_output_error: bool | None = None
+
+
+class SimulationSettingsResponse(BaseModel):
+    """Echo of what was applied. Helpful for the LLM to confirm the
+    settings actually landed."""
+
+    applied: dict[str, float | int | bool] = Field(default_factory=dict)
+
+
+class SimulationRunResponse(BaseModel):
+    iterations_requested: int | None = None
+    seed_used: float | None = None
+    succeeded: bool = True
+    note: str = ""
+
+
+class SimulationStatus(BaseModel):
+    status: Literal["idle", "running", "complete", "error"] = "idle"
+    note: str = ""
+
+
 class AuditFinding(BaseModel):
     severity: Literal["error", "warning", "info"]
     cell: CellRef | None = None

@@ -21,6 +21,7 @@ from modelrisk_mcp.bridge.catalogue import FunctionCatalogue, load_catalogue
 from modelrisk_mcp.bridge.excel import ExcelBridge
 from modelrisk_mcp.bridge.progids import PROGID_DISTRIBUTIONS
 from modelrisk_mcp.bridge.results import ResultsReader
+from modelrisk_mcp.bridge.simulation import SimulationController
 from modelrisk_mcp.config import Settings
 from modelrisk_mcp.errors import CellReferenceError
 from modelrisk_mcp.safety import (
@@ -68,12 +69,14 @@ class ModelRiskBridge:
         excel: ExcelBridge,
         catalogue: FunctionCatalogue | None = None,
         results: ResultsReader | None = None,
+        simulation: SimulationController | None = None,
         settings: Settings | None = None,
         writer_mutex: WriterMutex | None = None,
     ) -> None:
         self._excel = excel
         self._catalogue = catalogue or load_catalogue()
         self._results = results or ResultsReader()
+        self._simulation = simulation or SimulationController()
         self._settings = settings or Settings()
         self._writer_mutex = writer_mutex or WriterMutex()
 
@@ -88,6 +91,10 @@ class ModelRiskBridge:
     @property
     def results(self) -> ResultsReader:
         return self._results
+
+    @property
+    def simulation(self) -> SimulationController:
+        return self._simulation
 
     # ------------------------------------------------------------------
     # Environment checks
