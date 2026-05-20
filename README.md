@@ -1,32 +1,206 @@
 # ModelRisk MCP
 
-**An open Model Context Protocol server for Vose Software's ModelRisk Excel add-in.**
+**An open Model Context Protocol server for [Vose Software's ModelRisk](https://www.vosesoftware.com).**
 
 Use it with Claude Desktop, Claude Code, Cursor, Zed, or any MCP-compliant client to read, build, fit, and run Monte Carlo risk models in Excel from a conversation.
 
-> Status: pre-release scaffold. v0.1.0 ships before 30 June 2026. See [the implementation spec](../../Downloads/modelrisk-mcp-server-spec.md) for the phased roadmap.
+> ModelRisk MCP is an open MCP server on the standard Anthropic Model Context Protocol. No proprietary layer, no lock-in. The 1417-entry function catalogue, the Vose methodology principles, and the audit rule set are all included in the package — and editable.
 
-## What you can do
+---
 
-- **Read** an existing ModelRisk model: inputs, outputs, distributions, results, percentiles, sensitivity rankings.
-- **Build** new models: insert distributions, fit from data, wrap inputs/outputs, build aggregates, copulas, time series, and risk events.
-- **Run** simulations directly from the conversation.
-- **Audit** a model against Vose methodology rules.
-- **Interpret** results with structured executive summaries.
+## What this does
 
-## Quick start (placeholder — full docs in Phase 6)
+This server turns Claude (or any MCP client) into a methodology-aware co-pilot for ModelRisk. It can:
+
+- **Build** new Monte Carlo models from a description — insert distributions, fit families to data, build aggregates, copulas, time-series, risk events.
+- **Run** simulations from the conversation.
+- **Read** model structure and per-iteration results — inputs, outputs, percentiles, correlation matrices, tornado rankings.
+- **Audit** a workbook against Vose's methodology rules and propose fixes.
+- **Interpret** results into structured executive summaries with contingency analysis.
+
+Every formula written to Excel is validated against the ModelRisk function catalogue first — there's no path to a hallucinated function name reaching your workbook.
+
+---
+
+## Feature comparison
+
+| Capability | ModelRisk MCP | Closed alternatives |
+|---|:---:|:---:|
+| Read model structure (inputs, outputs, distributions) | ✓ | ✓ |
+| Read simulation results, percentiles, sensitivity | ✓ | ✓ |
+| Insert distributions into cells | ✓ | — |
+| Fit distributions from data | ✓ | — |
+| Build aggregate (frequency × severity) models | ✓ | — |
+| Build copulas / correlated inputs | ✓ | — |
+| Build time-series stochastic processes | ✓ | — |
+| Run simulations from the conversation | ✓ | — |
+| Audit model for common methodology mistakes | ✓ | — |
+| Works with Claude Desktop / Code / Cursor / Zed / any MCP client | ✓ | — |
+| Open source, MIT licensed | ✓ | — |
+| Local-only, no telemetry | ✓ | varies |
+| Default-safe (dry-run preview before every write) | ✓ | n/a |
+
+---
+
+## Install
+
+### Prerequisites
+
+- Windows 10 or 11, 64-bit
+- Excel 2019 or newer with the ModelRisk add-in installed and loaded
+- One of:
+  - Python 3.11+ (recommended via [`uv`](https://docs.astral.sh/uv/))
+  - Or the standalone `modelrisk-mcp.exe` from the [latest release](https://github.com/vosesoftware/modelrisk-mcp/releases/latest) — no Python knowledge required
+
+### From PyPI
 
 ```powershell
-# Local development install
-uv sync
-uv run python -m modelrisk_mcp
+pip install modelrisk-mcp
 ```
+
+### From source
+
+```powershell
+git clone https://github.com/vosesoftware/modelrisk-mcp
+cd modelrisk-mcp
+uv sync
+uv run python -m modelrisk_mcp     # speaks MCP over stdio
+```
+
+### Standalone `.exe`
+
+Download `modelrisk-mcp.exe` from [Releases](https://github.com/vosesoftware/modelrisk-mcp/releases/latest), drop it anywhere on disk, and point Claude Desktop at it. See [docs/claude-desktop.md](docs/claude-desktop.md).
+
+---
+
+## Wire into Claude Desktop
+
+Open `%APPDATA%\Claude\claude_desktop_config.json` and add:
+
+```json
+{
+  "mcpServers": {
+    "modelrisk": {
+      "command": "python",
+      "args": ["-m", "modelrisk_mcp"]
+    }
+  }
+}
+```
+
+Or, if you downloaded the `.exe`:
+
+```json
+{
+  "mcpServers": {
+    "modelrisk": {
+      "command": "C:/path/to/modelrisk-mcp.exe"
+    }
+  }
+}
+```
+
+Restart Claude Desktop. The ModelRisk tools appear under the connections icon. Full guide: [docs/claude-desktop.md](docs/claude-desktop.md). Claude Code setup: [docs/claude-code.md](docs/claude-code.md).
+
+---
+
+## First conversation
+
+Open a workbook in Excel that has at least one Vose function — even a single `=VoseNormal(0,1)`. Then in Claude:
+
+> Summarise the active workbook's risk model — inputs, outputs, distributions.
+
+Or jump straight into building:
+
+> /build-risk-model
+
+This walks through 9 steps, from identifying outputs through running the simulation and interpreting results. See [the slash-command catalogue](src/modelrisk_mcp/prompts) for the other workflows.
+
+---
+
+## Safety by design
+
+The server can both read *and* modify your workbook — that's the central differentiator. We make that safe with nine layered mechanisms (spec §11):
+
+1. **`dry_run=True` is the default** on every building tool. Claude must explicitly pass `dry_run=False` to commit. Previewing comes free; a forgotten flag becomes a preview, never an overwrite.
+2. **Every write lands in Excel's native undo stack.** `Ctrl+Z` works exactly as you'd expect.
+3. **Bulk-write guard.** Tools writing >50 cells in one call require explicit `confirm_bulk=True`. Time-series and copula tools — which write contiguous ranges by design — are exempt.
+4. **No automatic saves.** The server never calls `Workbook.Save()`. You control `Ctrl+S`.
+5. **No overwriting non-Vose formulas.** A formula-tokenised detector (not a substring check) refuses to overwrite a cell whose existing formula uses non-Vose functions. The one tool explicitly allowed to do this is `replace_constant_with_distribution`, by design.
+6. **Audit log** of every write in `%LOCALAPPDATA%\VoseSoftware\modelrisk-mcp\writes.log` — timestamp, cell, before/after formulas, before value. JSONL, append-only.
+7. **Read-only mode.** Launch with `--read-only` to disable every building/simulation tool.
+8. **Single-writer mutex.** Two MCP server instances can't drive the same Excel concurrently — the second instance raises `ConcurrentWriterError` on any building tool call.
+9. **Restore from audit log.** The `restore_cell` tool reads writes.log and rewrites the pre-write formula — even after Excel's undo stack has been cleared.
+
+---
+
+## What's inside
+
+- **31 tools** — 12 reading, 11 building, 4 simulation control, 4 workflow
+- **7 resources** — `modelrisk://functions`, `modelrisk://functions/{name}`, `modelrisk://distributions`, `modelrisk://methodology`, `modelrisk://workbook/current`, `modelrisk://workbook/current/sheet/{name}`, `modelrisk://audit-rules`
+- **5 slash-command prompts** — `/build-risk-model`, `/audit-model`, `/interpret-results`, `/add-uncertainty`, `/import-legacy-model`
+- **1417-entry function catalogue** extracted directly from the ModelRisk IDL + XLL header
+- **6 audit rules** with editable severity in `data/audit_rules.yaml`
+- **Methodology-grounded distribution selection guide** in `data/distributions.yaml`
+
+---
+
+## Methodology
+
+The server is opinionated about Monte Carlo methodology — fetch `modelrisk://methodology` from any MCP client to read the 8 core principles. Highlights:
+
+- Every uncertain input is a distribution. Treating a noisy input as deterministic understates total uncertainty by exactly the amount it could swing.
+- Distribution fits use `uncertainty=TRUE`. Carry parameter uncertainty through the simulation; don't pretend the best-fit parameters are exact.
+- Risk events use `VoseRiskEvent`, not `probability * impact`. The bimodal nature matters.
+- Correlated inputs use copulas. Independent inputs that are actually correlated produce artificially tight outputs.
+
+---
+
+## Architecture
+
+Three layers, each unit-testable in isolation:
+
+```
+┌──────────────────────────────────┐
+│  MCP client                      │
+│  (Claude Desktop, Code, etc.)    │
+└────────────────┬─────────────────┘
+                 │ JSON-RPC / stdio
+                 ▼
+┌──────────────────────────────────┐
+│  FastMCP layer (tools, resources,│
+│   prompts)                       │
+├──────────────────────────────────┤
+│  ModelRiskBridge (domain)        │
+│  + SimulationController          │
+│  + ResultsReader                 │
+├──────────────────────────────────┤
+│  ExcelBridge (xlwings/pywin32)   │
+└────────────────┬─────────────────┘
+                 │ COM, in-process
+                 ▼
+┌──────────────────────────────────┐
+│  Microsoft Excel                 │
+│  + ModelRisk add-in              │
+└──────────────────────────────────┘
+```
+
+More: [docs/architecture.md](docs/architecture.md), [docs/com-surface.md](docs/com-surface.md).
+
+---
 
 ## License
 
 MIT. See [LICENSE](LICENSE).
 
+---
+
 ## Links
 
-- Vose Software: <https://www.vosesoftware.com>
-- Repository: <https://github.com/vosesoftware/modelrisk-mcp>
+- **Vose Software**: <https://www.vosesoftware.com>
+- **ModelRisk product page**: <https://www.vosesoftware.com/products/modelrisk/>
+- **Source**: <https://github.com/vosesoftware/modelrisk-mcp>
+- **Releases**: <https://github.com/vosesoftware/modelrisk-mcp/releases>
+- **Issues**: <https://github.com/vosesoftware/modelrisk-mcp/issues>
+- **Changelog**: [CHANGELOG.md](CHANGELOG.md)
+- **MCP spec**: <https://modelcontextprotocol.io>

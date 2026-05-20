@@ -1,6 +1,6 @@
 [project]
 name = "modelrisk-mcp"
-version = "0.1.0rc1"
+version = "0.1.0"
 description = "Open MCP server bridging Anthropic Claude (and any MCP-compatible client) with the ModelRisk Excel add-in."
 readme = "README.md"
 requires-python = ">=3.11"
@@ -17,7 +17,7 @@ keywords = [
     "risk-analysis", "simulation", "probability", "vose",
 ]
 classifiers = [
-    "Development Status :: 4 - Beta",
+    "Development Status :: 5 - Production/Stable",
     "Environment :: Console",
     "Intended Audience :: Developers",
     "Intended Audience :: Financial and Insurance Industry",

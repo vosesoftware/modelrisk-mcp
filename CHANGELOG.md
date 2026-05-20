@@ -4,6 +4,21 @@ All notable changes to ModelRisk MCP. Follows [Keep a Changelog](https://keepach
 
 ## [Unreleased]
 
+## [0.1.0] — 2026-05-20
+
+Public v0.1 release. Repository goes public at this tag.
+
+### Added
+
+- Public-ready README leading with the strategic narrative (open, agentic, methodology-aware), feature comparison table, and full Safety by design section.
+- `docs/demo-script.md` — beat-by-beat recording guide for the README demo GIF.
+- `docs/community-submission.md` — drafted PR text for the modelcontextprotocol/servers directory.
+- Spec doc updated to v1.4 with the per-phase completion record.
+
+### Changed
+
+- `Development Status` classifier moved to `5 - Production/Stable`.
+
 ## [0.1.0-rc.1] — 2026-05-20
 
 First release candidate. Feature surface matches the v0.1 spec. PyPI publication path and standalone `.exe` build pipeline both verified locally.
