@@ -127,3 +127,16 @@ class DistributionCell(BaseModel):
     has_input_wrapper: bool = False
     has_output_wrapper: bool = False
     formula: str = ""
+
+
+class WorkbookSummary(BaseModel):
+    """Aggregated counts for a workbook — output of `get_workbook_summary`."""
+
+    workbook: str
+    sheets: list[str] = Field(default_factory=list)
+    input_count: int = 0
+    output_count: int = 0
+    distribution_count: int = 0
+    formula_cell_count: int = 0
+    numeric_cell_count: int = 0
+    modelrisk_loaded: bool = False

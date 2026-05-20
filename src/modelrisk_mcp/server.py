@@ -1,3 +1,14 @@
+"""FastMCP server entrypoint.
+
+Constructs the `mcp` instance and triggers tool registration by importing
+`modelrisk_mcp.tools`. The tools/* modules attach themselves via the
+`@mcp.tool(...)` decorator side-effect.
+
+Resources and prompts are registered the same way and land in Phase 5.
+"""
+
+from __future__ import annotations
+
 from mcp.server.fastmcp import FastMCP
 
 from modelrisk_mcp import __version__
@@ -8,17 +19,18 @@ settings = Settings()
 mcp = FastMCP(
     name="modelrisk-mcp",
     instructions=(
-        "ModelRisk MCP exposes read and write access to Vose Software's ModelRisk "
-        "Excel add-in. In v0.0.1 the tool surface is empty; tools, resources, and "
-        "prompts land across Phases 2 through 5."
+        "ModelRisk MCP exposes read and write access to Vose Software's "
+        "ModelRisk Excel add-in. Use the reading tools to inspect an "
+        "existing model and its simulation results, and (in later "
+        "phases) the building tools to insert distributions, fit "
+        "distributions to data, build aggregates, copulas, and "
+        "time-series, and run simulations."
     ),
 )
 
 
-@mcp.resource("modelrisk://server/about")
-def about() -> str:
-    return (
-        f"ModelRisk MCP Server v{__version__}\n"
-        f"Read-only mode: {settings.read_only}\n"
-        "Tool surface: empty (Phase 0 scaffold)."
-    )
+# Importing the tools package side-effects every @mcp.tool registration.
+# This MUST come after `mcp` is constructed.
+from modelrisk_mcp import tools  # noqa: E402, F401
+
+__all__ = ["__version__", "mcp", "settings"]

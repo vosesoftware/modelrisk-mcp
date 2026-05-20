@@ -8,6 +8,11 @@ from modelrisk_mcp.schemas.distributions import (
 )
 from modelrisk_mcp.schemas.results import (
     AuditFinding,
+    AuditReport,
+    CorrelationEntry,
+    CorrelationMatrix,
+    SensitivityEntry,
+    SensitivityRanking,
     SimulationResult,
 )
 from modelrisk_mcp.schemas.workbook import (
@@ -18,12 +23,16 @@ from modelrisk_mcp.schemas.workbook import (
     ModelRiskOutput,
     RangeInfo,
     WorkbookInfo,
+    WorkbookSummary,
 )
 
 __all__ = [
     "AuditFinding",
+    "AuditReport",
     "CellInfo",
     "CellRef",
+    "CorrelationEntry",
+    "CorrelationMatrix",
     "DistributionCell",
     "DistributionParameter",
     "InsertDistributionRequest",
@@ -31,7 +40,10 @@ __all__ = [
     "ModelRiskInput",
     "ModelRiskOutput",
     "RangeInfo",
+    "SensitivityEntry",
+    "SensitivityRanking",
     "SimulationResult",
     "WorkbookInfo",
+    "WorkbookSummary",
     "WrapResult",
 ]

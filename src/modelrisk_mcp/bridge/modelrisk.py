@@ -17,13 +17,20 @@ from typing import Any
 from modelrisk_mcp.bridge.catalogue import FunctionCatalogue, load_catalogue
 from modelrisk_mcp.bridge.excel import ExcelBridge
 from modelrisk_mcp.bridge.progids import PROGID_DISTRIBUTIONS
+from modelrisk_mcp.bridge.results import ResultsReader
 from modelrisk_mcp.safety import extract_call_heads
+from modelrisk_mcp.schemas.results import (
+    CorrelationMatrix,
+    SensitivityRanking,
+    SimulationResult,
+)
 from modelrisk_mcp.schemas.workbook import (
     CellInfo,
     CellRef,
     DistributionCell,
     ModelRiskInput,
     ModelRiskOutput,
+    WorkbookSummary,
 )
 
 # Pattern for `VoseInput("foo")` or `VoseOutput("foo")` at any position
@@ -49,13 +56,23 @@ class ModelRiskBridge:
         self,
         excel: ExcelBridge,
         catalogue: FunctionCatalogue | None = None,
+        results: ResultsReader | None = None,
     ) -> None:
         self._excel = excel
         self._catalogue = catalogue or load_catalogue()
+        self._results = results or ResultsReader()
 
     @property
     def catalogue(self) -> FunctionCatalogue:
         return self._catalogue
+
+    @property
+    def excel(self) -> ExcelBridge:
+        return self._excel
+
+    @property
+    def results(self) -> ResultsReader:
+        return self._results
 
     # ------------------------------------------------------------------
     # Environment checks
@@ -136,6 +153,57 @@ class ModelRiskBridge:
                 )
             )
         return result
+
+    def get_workbook_summary(self, workbook: str) -> WorkbookSummary:
+        """Aggregate counts over every used cell in the workbook in a
+        single pass, so the LLM gets the high-level picture without
+        running four separate tools."""
+        wb_info = next(
+            (w for w in self._excel.list_workbooks() if w.name == workbook),
+            None,
+        )
+        sheets = list(wb_info.sheets) if wb_info else []
+        input_count = 0
+        output_count = 0
+        distribution_count = 0
+        formula_cell_count = 0
+        numeric_cell_count = 0
+        for cell in self._excel.iterate_cells(workbook):
+            if cell.formula:
+                formula_cell_count += 1
+                if _VOSE_INPUT_RE.search(cell.formula):
+                    input_count += 1
+                if _VOSE_OUTPUT_RE.search(cell.formula):
+                    output_count += 1
+                if self._first_distribution_head(cell.formula) is not None:
+                    distribution_count += 1
+            elif isinstance(cell.value, (int, float)) and not isinstance(
+                cell.value, bool
+            ):
+                numeric_cell_count += 1
+        return WorkbookSummary(
+            workbook=workbook,
+            sheets=sheets,
+            input_count=input_count,
+            output_count=output_count,
+            distribution_count=distribution_count,
+            formula_cell_count=formula_cell_count,
+            numeric_cell_count=numeric_cell_count,
+            modelrisk_loaded=self.is_modelrisk_loaded(),
+        )
+
+    def get_simulation_results(
+        self, output_names: list[str] | None = None
+    ) -> list[SimulationResult]:
+        return self._results.get_simulation_results(output_names)
+
+    def get_correlation_matrix(
+        self, names: list[str] | None = None
+    ) -> CorrelationMatrix:
+        return self._results.get_correlation_matrix(names)
+
+    def get_sensitivity_ranking(self, output_name: str) -> SensitivityRanking:
+        return self._results.get_sensitivity_ranking(output_name)
 
     def find_hard_coded_inputs(self, workbook: str) -> list[CellRef]:
         """Heuristic: numeric cells that are referenced by at least one

@@ -29,10 +29,29 @@ class CorrelationEntry(BaseModel):
     spearman: float | None = None
 
 
+class CorrelationMatrix(BaseModel):
+    """Result of `get_correlation_matrix`. `names` is the ordered list of
+    variables; `pearson[i][j]` and `spearman[i][j]` give the two
+    correlation matrices. NaN slots become None."""
+
+    names: list[str] = Field(default_factory=list)
+    pearson: list[list[float | None]] = Field(default_factory=list)
+    spearman: list[list[float | None]] = Field(default_factory=list)
+    iterations: int = 0
+
+
 class SensitivityEntry(BaseModel):
     input_name: str
     correlation: float
     regression_coefficient: float | None = None
+
+
+class SensitivityRanking(BaseModel):
+    """Tornado data for one output. Entries sorted by abs(correlation) desc."""
+
+    output_name: str
+    entries: list[SensitivityEntry] = Field(default_factory=list)
+    iterations: int = 0
 
 
 class AuditFinding(BaseModel):
