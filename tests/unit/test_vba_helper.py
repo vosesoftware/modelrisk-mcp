@@ -290,6 +290,52 @@ class TestRun:
             ("Profit", 0.9),
         )
 
+    def test_inject_timeout_returns_clear_diagnostic(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """When inject_if_needed hangs (the user-reported failure mode
+        for VBOM-trust-off / modal Excel dialog / stale COM state),
+        the timeout fires and returns a diagnostic listing the four
+        likely causes instead of blocking."""
+        import time
+
+        excel = _FakeExcelBridge()
+
+        def _hang() -> Any:
+            time.sleep(5)
+            return None
+
+        # Override the internal hot loop to hang for longer than timeout.
+        helper = VbaHelperBridge(excel)
+        monkeypatch.setattr(
+            helper, "_find_or_create_helper_book", _hang
+        )
+        result = helper.inject_if_needed(timeout_s=0.3)
+        assert result.ok is False
+        assert "timed out" in (result.error or "").lower()
+        assert "Trust access to the VBA project object model" in (
+            result.error or ""
+        )
+
+    def test_run_timeout_raises_with_clear_diagnostic(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        import time
+
+        excel = _FakeExcelBridge()
+        helper = VbaHelperBridge(excel)
+        # Get past inject first (instantly).
+        helper.inject_if_needed()
+
+        # Now make Application.Run hang.
+        def _hang(*args: Any, **kwargs: Any) -> Any:
+            time.sleep(5)
+            return None
+
+        monkeypatch.setattr(excel._app.api, "Run", _hang)
+        with pytest.raises(RuntimeError, match="timed out"):
+            helper.run("ModelRiskMcp_RunSim", timeout_s=0.3)
+
     def test_raises_when_injection_fails(self) -> None:
         excel = _FakeExcelBridge()
 

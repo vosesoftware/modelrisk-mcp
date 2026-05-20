@@ -31,8 +31,34 @@ Excel removes the workbook; we never write to the user's own files.
 
 from __future__ import annotations
 
+import concurrent.futures
+from collections.abc import Callable
 from dataclasses import dataclass
-from typing import Any
+from typing import Any, TypeVar
+
+T = TypeVar("T")
+
+# Conservative defaults: every COM call against a possibly-blocked
+# Excel gets a hard wall-clock timeout. If injection takes more than
+# `INJECT_TIMEOUT_S` something else is wrong (the four likely causes are
+# listed in the timeout's error message); same for `RUN_TIMEOUT_S`.
+INJECT_TIMEOUT_S: float = 30.0
+RUN_TIMEOUT_S: float = 120.0
+
+
+_TIMEOUT_HINT: str = (
+    "The COM call to Excel hung for the timeout window. The four "
+    "likely causes, in order:\n"
+    "  (1) 'Trust access to the VBA project object model' is OFF. "
+    "Enable in File → Options → Trust Center → Trust Center Settings "
+    "→ Macro Settings.\n"
+    "  (2) A modal Excel dialog is waiting offscreen — Alt+Tab to "
+    "find it.\n"
+    "  (3) Stale COM state from earlier failed Dispatch attempts. Quit "
+    "every EXCEL.EXE in Task Manager and reopen Excel.\n"
+    "  (4) ModelRisk is showing a first-run / license / activation "
+    "prompt inside Excel."
+)
 
 VBA_MODULE_NAME: str = "ModelRiskMcpHelper"
 
@@ -250,52 +276,75 @@ class VbaHelperBridge:
         self._injected: bool = False
         self._used_early_binding: bool = False
 
-    def inject_if_needed(self) -> VbaInjectionResult:
+    def inject_if_needed(
+        self, timeout_s: float = INJECT_TIMEOUT_S
+    ) -> VbaInjectionResult:
         """Idempotent. On first call: find or create the helper workbook,
-        add a Reference to ModelRiskAtl.dll, write the VBA module."""
+        add a Reference to ModelRiskAtl.dll, write the VBA module.
+
+        The whole sequence runs on a worker thread with a hard
+        wall-clock timeout, so a hung COM call (the common symptom of
+        VBOM-trust-off, modal Excel dialogs, or a stuck Excel instance)
+        returns a clear diagnostic instead of blocking the MCP server."""
         if self._injected:
             return VbaInjectionResult(
                 ok=True,
                 workbook_name=self.HELPER_WORKBOOK_NAME,
                 used_early_binding=self._used_early_binding,
             )
-        try:
-            book = self._find_or_create_helper_book()
-        except Exception as exc:
-            return VbaInjectionResult(
-                ok=False,
-                error=(
-                    f"Could not create the helper workbook: {exc}. "
-                    "Confirm Excel is running and that "
-                    "'Trust access to the VBA project object model' is "
-                    "enabled in File → Options → Trust Center → Macro "
-                    "Settings."
-                ),
-            )
-        try:
-            self._inject_module(book)
-        except Exception as exc:
-            return VbaInjectionResult(
-                ok=False,
-                workbook_name=self.HELPER_WORKBOOK_NAME,
-                error=(
-                    f"VBA module injection failed: {exc}. "
-                    "Most likely cause: 'Trust access to the VBA "
-                    "project object model' is OFF in Excel's Trust "
-                    "Center. Turn it on and retry."
-                ),
-            )
-        self._injected = True
-        return VbaInjectionResult(
-            ok=True,
-            workbook_name=self.HELPER_WORKBOOK_NAME,
-            used_early_binding=self._used_early_binding,
-        )
 
-    def run(self, sub_name: str, *args: Any) -> Any:
+        def _do_inject() -> VbaInjectionResult:
+            try:
+                book = self._find_or_create_helper_book()
+            except Exception as exc:
+                return VbaInjectionResult(
+                    ok=False,
+                    error=(
+                        f"Could not create the helper workbook: {exc}. "
+                        "Confirm Excel is running."
+                    ),
+                )
+            try:
+                self._inject_module(book)
+            except Exception as exc:
+                return VbaInjectionResult(
+                    ok=False,
+                    workbook_name=self.HELPER_WORKBOOK_NAME,
+                    error=(
+                        f"VBA module injection failed: {exc}. "
+                        "Most likely cause: 'Trust access to the VBA "
+                        "project object model' is OFF in Excel's Trust "
+                        "Center. Turn it on and retry."
+                    ),
+                )
+            self._injected = True
+            return VbaInjectionResult(
+                ok=True,
+                workbook_name=self.HELPER_WORKBOOK_NAME,
+                used_early_binding=self._used_early_binding,
+            )
+
+        try:
+            return _run_with_timeout(_do_inject, timeout_s)
+        except TimeoutError:
+            return VbaInjectionResult(
+                ok=False,
+                error=(
+                    f"VBA helper injection timed out after {timeout_s:.0f}s. "
+                    + _TIMEOUT_HINT
+                ),
+            )
+
+    def run(
+        self,
+        sub_name: str,
+        *args: Any,
+        timeout_s: float = RUN_TIMEOUT_S,
+    ) -> Any:
         """Invoke `Excel.Application.Run("<helper-workbook>!<sub>", *args)`
-        and return the result. Caller is responsible for converting the
-        result type if needed."""
+        and return the result. Runs on a worker thread with a hard
+        timeout — Excel can otherwise stall indefinitely if a modal
+        dialog is open."""
         injection = self.inject_if_needed()
         if not injection.ok:
             raise RuntimeError(
@@ -303,7 +352,17 @@ class VbaHelperBridge:
             )
         app = self._excel._app
         qualified = f"{self.HELPER_WORKBOOK_NAME}!{sub_name}"
-        return app.api.Run(qualified, *args)
+
+        def _do_run() -> Any:
+            return app.api.Run(qualified, *args)
+
+        try:
+            return _run_with_timeout(_do_run, timeout_s)
+        except TimeoutError as exc:
+            raise RuntimeError(
+                f"Excel.Application.Run({qualified!r}) timed out after "
+                f"{timeout_s:.0f}s. " + _TIMEOUT_HINT
+            ) from exc
 
     # ----- helpers ----------------------------------------------------
 
@@ -394,7 +453,26 @@ class VbaHelperBridge:
             return False
 
 
+def _run_with_timeout(
+    fn: Callable[[], T], timeout_s: float
+) -> T:
+    """Run `fn` on a worker thread; raise TimeoutError if it doesn't
+    return within `timeout_s` seconds. The worker thread keeps running
+    after timeout (we can't safely interrupt a COM call), but control
+    returns to the caller so the MCP server stays responsive."""
+    with concurrent.futures.ThreadPoolExecutor(max_workers=1) as ex:
+        future = ex.submit(fn)
+        try:
+            return future.result(timeout=timeout_s)
+        except concurrent.futures.TimeoutError as exc:
+            raise TimeoutError(
+                f"Operation hung for >{timeout_s:.0f}s"
+            ) from exc
+
+
 __all__ = [
+    "INJECT_TIMEOUT_S",
+    "RUN_TIMEOUT_S",
     "VBA_MODULE_CODE",
     "VBA_MODULE_CODE_EARLY",
     "VBA_MODULE_CODE_LATE",
