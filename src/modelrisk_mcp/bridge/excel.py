@@ -109,7 +109,12 @@ class ExcelBridge:
         app = self._ensure()
         result: list[WorkbookInfo] = []
         for book in app.books:
-            result.append(self._workbook_info(book))
+            try:
+                result.append(self._workbook_info(book))
+            except Exception:
+                # An individual workbook that can't be introspected (e.g.
+                # protected, mid-recalc) shouldn't break enumeration.
+                continue
         return result
 
     def get_active_workbook(self) -> WorkbookInfo:
@@ -117,7 +122,20 @@ class ExcelBridge:
         try:
             book = app.books.active
         except Exception as exc:
-            raise WorkbookNotFoundError("No active workbook.") from exc
+            # xlwings' `.active` accessor walks the books and can stumble
+            # on OneDrive path resolution. Fall back to the COM API for
+            # ActiveWorkbook directly — that one only touches Workbook.Name.
+            try:
+                api_book = app.api.ActiveWorkbook
+            except Exception:
+                raise WorkbookNotFoundError("No active workbook.") from exc
+            if api_book is None:
+                raise WorkbookNotFoundError("No active workbook.") from exc
+            try:
+                name = str(api_book.Name)
+            except Exception:
+                raise WorkbookNotFoundError("No active workbook.") from exc
+            return WorkbookInfo(name=name, path="", sheets=[], active_sheet=None)
         if book is None:
             raise WorkbookNotFoundError("No active workbook.")
         return self._workbook_info(book)
@@ -132,15 +150,40 @@ class ExcelBridge:
             ) from exc
 
     def _workbook_info(self, book: Any) -> WorkbookInfo:
-        sheets = [s.name for s in book.sheets]
+        # `book.fullname` triggers xlwings' OneDrive path resolution, which
+        # raises if the `ONEDRIVE_COMMERCIAL_WIN` env var isn't set. The
+        # name alone is what every downstream operation needs (Excel COM
+        # indexes by Workbook.Name), so degrade gracefully: empty path,
+        # full name still returned.
+        try:
+            sheets = [s.name for s in book.sheets]
+        except Exception:
+            sheets = []
         active = None
         try:
             active = book.sheets.active.name
         except Exception:
             pass
+        try:
+            path = getattr(book, "fullname", "") or ""
+        except Exception:
+            # OneDrive / SharePoint workbooks can blow up here. The COM
+            # Workbook.FullName property would also raise — that's the
+            # whole bug. Fall back to a name-only WorkbookInfo.
+            path = ""
+        # `book.name` is a thin wrapper over Workbook.Name and should be
+        # safe even when path resolution fails — but guard it anyway so a
+        # broken book never tanks list_workbooks().
+        try:
+            name = book.name
+        except Exception:
+            try:
+                name = str(book.api.Name)
+            except Exception:
+                name = ""
         return WorkbookInfo(
-            name=book.name,
-            path=getattr(book, "fullname", "") or "",
+            name=name,
+            path=path,
             sheets=sheets,
             active_sheet=active,
         )

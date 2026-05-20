@@ -212,6 +212,46 @@ def find_hard_coded_inputs(
     ]
 
 
+@mcp.tool(
+    description=(
+        "ModelRisk: Pin a specific `.vmrs` file as the source of simulation "
+        "results. Pass the absolute path of the file; subsequent calls to "
+        "get_simulation_results / get_correlation_matrix / "
+        "get_sensitivity_ranking will read from it instead of trying to "
+        "locate a sibling file next to the workbook. Pass an empty string "
+        "to clear the override."
+    )
+)
+def set_active_vmrs(
+    path: Annotated[
+        str,
+        Field(description="Absolute path to a .vmrs file, or '' to clear."),
+    ],
+) -> dict[str, str]:
+    p = path.strip() or None
+    get_bridge().results.set_active_vmrs(p)
+    return {"active_vmrs": p or ""}
+
+
+@mcp.tool(
+    description=(
+        "ModelRisk: Read simulation results directly from a `.vmrs` file. "
+        "Convenience wrapper for `set_active_vmrs` + `get_simulation_results` "
+        "that doesn't need an open workbook. Pass `output_names` to filter; "
+        "leave empty to attempt enumeration of all known outputs."
+    )
+)
+def read_vmrs(
+    path: Annotated[
+        str, Field(description="Absolute path to a .vmrs file.")
+    ],
+    output_names: list[str] | None = None,
+) -> list[SimulationResult]:
+    reader = get_bridge().results
+    reader.set_active_vmrs(path)
+    return reader.get_simulation_results(None, output_names)
+
+
 __all__ = [
     "find_hard_coded_inputs",
     "get_active_workbook",
@@ -226,5 +266,7 @@ __all__ = [
     "list_modelrisk_outputs",
     "list_open_workbooks",
     "read_range",
+    "read_vmrs",
+    "set_active_vmrs",
     "set_bridge_for_testing",
 ]
