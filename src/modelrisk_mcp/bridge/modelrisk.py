@@ -38,6 +38,9 @@ from modelrisk_mcp.safety import (
 from modelrisk_mcp.schemas.distributions import InsertResult
 from modelrisk_mcp.schemas.results import (
     CorrelationMatrix,
+    ScenarioOutcome,
+    ScenarioRun,
+    ScenarioSweepResult,
     SensitivityRanking,
     SimulationResult,
 )
@@ -291,6 +294,81 @@ class ModelRiskBridge:
             workbook, names, include_inputs=True
         )
         return self._results.get_correlation_matrix(wb_path, resolved_names)
+
+    def run_scenarios(
+        self,
+        sheet: str,
+        cell: str,
+        values: list[float],
+        *,
+        workbook: str | None = None,
+        samples: int = 1000,
+        seed: int = 1,
+    ) -> ScenarioSweepResult:
+        """Sweep a fixed input across `values`, running a full simulation
+        per value. Returns aggregate stats per output per scenario.
+
+        Workflow:
+        1. Capture the cell's current formula (so we can restore it).
+        2. For each value: write the literal, run a sim, pull P5/P50/P95
+           + mean for every output.
+        3. Restore the original formula — even if a scenario raises.
+
+        The cell ends up holding its original content after the sweep
+        regardless of outcome, so this is safe to interrupt."""
+        wb_name = workbook or self._excel.get_active_workbook().name
+        original = self._excel.get_cell(wb_name, sheet, cell)
+        original_formula = original.formula or ""
+        # If the cell holds a raw number (no formula), restoring means
+        # writing the literal back; serialize via Excel's expected form.
+        if not original_formula and original.value is not None:
+            original_formula = f"={original.value}"
+
+        result = ScenarioSweepResult(
+            workbook_name=wb_name,
+            sheet=sheet,
+            cell=cell,
+            original_formula=original_formula,
+            samples_per_scenario=samples,
+        )
+        try:
+            for value in values:
+                # Write the override (literal value, no formula prefix).
+                self._excel.write_cell(wb_name, sheet, cell, str(value))
+                # Run the sim — produces .vmrs and auto-pins it.
+                self.run_simulation(
+                    workbook=wb_name, samples=samples, seed=seed,
+                )
+                # Read every output's stats from the just-produced .vmrs.
+                output_names = [o.name for o in self.list_outputs(wb_name)]
+                stats_list = self._results.get_simulation_results(
+                    None, output_names, percentiles=(0.05, 0.50, 0.95),
+                )
+                outcomes = [
+                    ScenarioOutcome(
+                        output_name=s.output_name,
+                        mean=s.mean,
+                        p5=s.percentiles.get(0.05, s.min),
+                        p50=s.percentiles.get(0.50, s.mean),
+                        p95=s.percentiles.get(0.95, s.max),
+                    )
+                    for s in stats_list
+                ]
+                result.scenarios.append(
+                    ScenarioRun(scenario_value=value, outputs=outcomes)
+                )
+        finally:
+            # Restore — even on exception. This is non-negotiable; an
+            # interrupted sweep that left the cell at a random scenario
+            # value would be a nightmare for the user.
+            if original_formula:
+                try:
+                    self._excel.write_cell(
+                        wb_name, sheet, cell, original_formula
+                    )
+                except Exception:
+                    pass
+        return result
 
     def list_vmrs_variables(
         self,

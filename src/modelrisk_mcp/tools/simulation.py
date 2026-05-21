@@ -19,6 +19,7 @@ from typing import Annotated
 
 from pydantic import BaseModel, Field
 
+from modelrisk_mcp.schemas.results import ScenarioSweepResult
 from modelrisk_mcp.server import mcp
 from modelrisk_mcp.tools.reading import get_bridge
 
@@ -103,4 +104,51 @@ def run_simulation(
     )
 
 
-__all__ = ["RunSimulationResult", "run_simulation"]
+@mcp.tool(
+    description=(
+        "ModelRisk: Sweep a single input cell across multiple "
+        "deterministic values, running a full simulation at each. "
+        "Returns per-output P5 / P50 / P95 / mean for every scenario "
+        "value. Useful for what-if analysis: 'what if widget cost is "
+        "$50 vs $75 vs $100'. The cell's original formula is captured "
+        "before the sweep and restored afterwards (even on error), so "
+        "the workbook ends in its pre-call state. Each scenario takes "
+        "roughly the same time as one `run_simulation` call, so keep "
+        "the values list short — 3-7 scenarios is a normal range."
+    )
+)
+def run_scenarios(
+    sheet: Annotated[str, Field(description="Sheet name holding the input cell.")],
+    cell: Annotated[
+        str, Field(description="A1-style cell reference for the input to sweep.")
+    ],
+    values: Annotated[
+        list[float],
+        Field(
+            min_length=1,
+            max_length=20,
+            description="Deterministic values to test (1-20 scenarios).",
+        ),
+    ],
+    samples: Annotated[
+        int, Field(ge=1, le=100_000, description="Iterations per scenario.")
+    ] = 1000,
+    seed: Annotated[
+        int, Field(description="Fixed seed (same seed across scenarios).")
+    ] = 1,
+    workbook_name: Annotated[
+        str | None,
+        Field(description="Workbook name. Omit for the active workbook."),
+    ] = None,
+) -> ScenarioSweepResult:
+    return get_bridge().run_scenarios(
+        sheet,
+        cell,
+        values,
+        workbook=workbook_name,
+        samples=samples,
+        seed=seed,
+    )
+
+
+__all__ = ["RunSimulationResult", "run_scenarios", "run_simulation"]

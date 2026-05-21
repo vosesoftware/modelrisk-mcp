@@ -22,6 +22,35 @@ class SimulationResult(BaseModel):
     percentiles: dict[float, float] = Field(default_factory=dict)
 
 
+class ScenarioOutcome(BaseModel):
+    """One output's stats under a specific scenario value."""
+
+    output_name: str
+    mean: float
+    p5: float
+    p50: float
+    p95: float
+
+
+class ScenarioRun(BaseModel):
+    """Results from one scenario in a `run_scenarios` sweep — the
+    deterministic override value plus per-output stats."""
+
+    scenario_value: float
+    outputs: list[ScenarioOutcome] = Field(default_factory=list)
+
+
+class ScenarioSweepResult(BaseModel):
+    """Full output of a `run_scenarios` sweep."""
+
+    workbook_name: str
+    sheet: str
+    cell: str
+    original_formula: str = ""
+    scenarios: list[ScenarioRun] = Field(default_factory=list)
+    samples_per_scenario: int = 0
+
+
 class CorrelationEntry(BaseModel):
     name_a: str
     name_b: str
