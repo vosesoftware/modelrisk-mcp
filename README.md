@@ -6,6 +6,8 @@ Use it with Claude Desktop, Claude Code, Cursor, Zed, or any MCP-compliant clien
 
 > ModelRisk MCP is an open MCP server on the standard Anthropic Model Context Protocol. No proprietary layer, no lock-in. The 1417-entry function catalogue, the Vose methodology principles, and the audit rule set are all included in the package — and editable.
 
+**Status: `0.3.0-alpha.3`** — programmatic simulation via the `run_simulation` tool is wired end-to-end (XLL command surface, no fragile COM dispatch); `.vmrs` results read via the official ModelRisk SDK; activation ships bundled so no environment configuration is required.
+
 ---
 
 ## What this does
@@ -13,8 +15,8 @@ Use it with Claude Desktop, Claude Code, Cursor, Zed, or any MCP-compliant clien
 This server turns Claude (or any MCP client) into a methodology-aware co-pilot for ModelRisk. It can:
 
 - **Build** new Monte Carlo models from a description — insert distributions, fit families to data, build aggregates, copulas, time-series, risk events.
-- **Run** simulations from the conversation.
-- **Read** model structure and per-iteration results — inputs, outputs, percentiles, correlation matrices, tornado rankings.
+- **Run** simulations from the conversation. `run_simulation` triggers the same XLL command the ribbon "Simulate" button uses, blocks until the run finishes, saves a `.vmrs` next to the workbook, and auto-pins it as the results source.
+- **Read** model structure and per-iteration results — inputs, outputs, percentiles, correlation matrices, tornado rankings — directly from `.vmrs` files via ModelRisk's official SDK (MRService.dll). No COM dispatch fragility.
 - **Audit** a workbook against Vose's methodology rules and propose fixes.
 - **Interpret** results into structured executive summaries with contingency analysis.
 
@@ -51,6 +53,8 @@ Every formula written to Excel is validated against the ModelRisk function catal
 - One of:
   - Python 3.11+ (recommended via [`uv`](https://docs.astral.sh/uv/))
   - Or the standalone `modelrisk-mcp.exe` from the [latest release](https://github.com/vosesoftware/modelrisk-mcp/releases/latest) — no Python knowledge required
+
+**Activation:** None required. MRService.dll (the SDK that reads `.vmrs` files) is activated automatically by a bundled offline key. Set `MRSERVICE_ACTIVATION_KEY` only if you want to override the default with your own.
 
 ### From PyPI
 
@@ -151,7 +155,7 @@ The server can both read *and* modify your workbook — that's the central diffe
 
 ## What's inside
 
-- **31 tools** — 12 reading, 11 building, 4 simulation control, 4 workflow
+- **30 tools** — 14 reading (incl. `read_vmrs` / `set_active_vmrs` for `.vmrs` access), 10 building, 1 simulation (`run_simulation`), 1 restore (`restore_cell`), 4 workflow
 - **7 resources** — `modelrisk://functions`, `modelrisk://functions/{name}`, `modelrisk://distributions`, `modelrisk://methodology`, `modelrisk://workbook/current`, `modelrisk://workbook/current/sheet/{name}`, `modelrisk://audit-rules`
 - **5 slash-command prompts** — `/build-risk-model`, `/audit-model`, `/interpret-results`, `/add-uncertainty`, `/import-legacy-model`
 - **1417-entry function catalogue** extracted directly from the ModelRisk IDL + XLL header
@@ -173,14 +177,14 @@ The server is opinionated about Monte Carlo methodology — fetch `modelrisk://m
 
 ## Architecture
 
-Three layers, each unit-testable in isolation:
+Three internal layers plus two external integration paths:
 
 ```
 ┌──────────────────────────────────┐
 │  MCP client                      │
 │  (Claude Desktop, Code, etc.)    │
 └────────────────┬─────────────────┘
-                 │ JSON-RPC / stdio
+                 │ JSON-RPC / stdio (or HTTP)
                  ▼
 ┌──────────────────────────────────┐
 │  FastMCP layer (tools, resources,│
@@ -190,17 +194,29 @@ Three layers, each unit-testable in isolation:
 │  + SimulationController          │
 │  + ResultsReader                 │
 ├──────────────────────────────────┤
-│  ExcelBridge (xlwings/pywin32)   │
-└────────────────┬─────────────────┘
-                 │ COM, in-process
-                 ▼
-┌──────────────────────────────────┐
-│  Microsoft Excel                 │
-│  + ModelRisk add-in              │
-└──────────────────────────────────┘
+│  ExcelBridge      MrServiceBridge│
+│  (xlwings)        (ctypes)       │
+└──────┬───────────────────┬───────┘
+       │ Application.Run   │ MRLIB_*
+       │ + cell I/O        │ (read .vmrs)
+       ▼                   ▼
+┌──────────────┐   ┌──────────────────┐
+│ Excel +      │   │  MRService.dll   │
+│ ModelRisk XLL│   │  (SDK)           │
+└──────────────┘   └──────────────────┘
 ```
 
+Two integration paths, each chosen for what it does best:
+
+- **Builds + simulation trigger** → Excel COM via xlwings, plus `Application.Run("VoseStartSimulCustom12", …)` for the simulation kickoff. Mirrors what the ModelRisk ATL does internally; bypasses the fragile ATL CoClass Dispatch surface that doesn't expose IDispatch.
+- **Results read** → MRService.dll directly via ctypes. Vose's official SDK opens `.vmrs` files, returns sample arrays, computes statistics. No COM round-trips per output; per-iteration sample arrays available for arbitrary downstream analysis.
+
 More: [docs/architecture.md](docs/architecture.md), [docs/com-surface.md](docs/com-surface.md).
+
+## Known caveats
+
+- **OneDrive-hosted workbooks**: xlwings can fail to resolve the workbook's full path without `ONEDRIVE_COMMERCIAL_WIN` set. The bridge degrades gracefully — name-based operations still work, and `run_simulation` defaults the `.vmrs` save location to the user's Desktop when the workbook folder can't be resolved.
+- **Active simulation results**: `get_simulation_results` reads from the `.vmrs` file produced by the most recent `run_simulation` call, or the most recent sibling `.vmrs` next to the workbook. Use `set_active_vmrs(path)` or `read_vmrs(path)` to point at a specific file.
 
 ---
 
