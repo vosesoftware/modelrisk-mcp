@@ -86,6 +86,11 @@ jobs:
           echo "$OUT" | grep -q '"serverInfo"' || (echo "exe did not return a serverInfo block" && exit 1)
           echo "$OUT" | grep -q '"modelrisk-mcp"' || (echo "exe did not identify as modelrisk-mcp" && exit 1)
 
+      - name: Scan exe for plain activation key
+        shell: bash
+        run: |
+          uv run python scripts/scan_exe_for_key.py dist/modelrisk-mcp.exe
+
       - name: Upload Windows artifact
         uses: actions/upload-artifact@v4
         with:

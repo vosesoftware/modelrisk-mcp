@@ -4,6 +4,15 @@ All notable changes to ModelRisk MCP. Follows [Keep a Changelog](https://keepach
 
 ## [Unreleased]
 
+### Added
+
+- `scripts/scan_exe_for_key.py` — paranoid scan of a built PyInstaller exe for any encoding of the plain activation key (ASCII decimal, UTF-16 LE, little-endian int64 bytes, big-endian int64 bytes, hex string, composite first4+last4). Exits non-zero on any hit; wired into `release.yml` as a release-blocker before publish so a regression in the obfuscation can't ship.
+
+### Verified
+
+- v0.3.0-alpha.4 exe (39 MB) builds, boots, answers MCP `initialize` correctly.
+- Scanned every encoding the plain key could theoretically appear in: **zero hits**. Even the obfuscated base85 blobs from `_keymat.py` aren't directly findable in the binary because PyInstaller compresses bundled Python into a PYZ archive — the source-level base85 strings become compiled `.pyc` constants, not preserved as ASCII. A reverse-engineer would need to extract the PYZ, decompress the bytecode, and reimplement the XOR decoder. Casual `strings`-based extraction yields nothing.
+
 ## [0.3.0-alpha.4] — 2026-05-21
 
 Four feature additions in one batch: read-path completeness, a one-call session-start tool, deterministic scenario sweeps, and 5 new audit rules. Tool count grows 30 → 34, audit rules 6 → 11. No breaking changes.
