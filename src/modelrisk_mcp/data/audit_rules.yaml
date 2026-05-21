@@ -92,3 +92,73 @@ rules:
       Use propose_distributions_for_inputs to get distribution
       suggestions, then replace_constant_with_distribution to commit
       one at a time.
+
+  - id: VOSE-007
+    name: risk_event_degenerate_probability
+    severity: warning
+    enabled: true
+    description: >
+      A VoseRiskEvent(probability, ...) has a literal probability of 0
+      or 1. p=0 means the event never fires (the wrapper just returns
+      zero — delete it); p=1 means the event always fires (the impact
+      is the impact distribution, no need for the bimodal wrapper).
+    suggested_fix_template: >
+      For p=0: delete the VoseRiskEvent wrapper; the result is always
+      zero. For p=1: replace with the impact distribution directly. For
+      genuinely-uncertain p, use a Beta(alpha, beta) input instead of a
+      literal.
+
+  - id: VOSE-008
+    name: voseoutput_missing_name
+    severity: error
+    enabled: true
+    description: >
+      A cell uses VoseOutput() with no name argument, or an empty
+      string. ModelRisk identifies outputs in the Results Viewer by
+      name; unnamed outputs are nearly impossible to reference later
+      and break get_simulation_results / get_sensitivity_ranking
+      by-name lookups.
+    suggested_fix_template: >
+      Give the output a meaningful name: VoseOutput("Total Cost"). Use
+      wrap_with_output(name=...) to do this safely from an MCP tool.
+
+  - id: VOSE-009
+    name: duplicate_output_names
+    severity: error
+    enabled: true
+    description: >
+      Two or more cells declare a VoseOutput with the same name. The
+      Results Viewer shows conflicting entries, and the by-name result
+      lookups (get_simulation_results) become ambiguous.
+    suggested_fix_template: >
+      Rename one of the duplicate outputs (e.g. add a sheet prefix or a
+      year suffix). Use wrap_with_output to rename cleanly.
+
+  - id: VOSE-010
+    name: input_wrapper_without_distribution
+    severity: warning
+    enabled: true
+    description: >
+      A cell wrapped with VoseInput("...") has no Vose distribution
+      function in its formula. The input is registered with the Results
+      Viewer but won't vary across iterations — its samples will all be
+      identical.
+    suggested_fix_template: >
+      Either wire the cell to a distribution (replace the constant with
+      VoseNormal / VoseLognormal / etc. as appropriate) or remove the
+      VoseInput wrapper.
+
+  - id: VOSE-011
+    name: high_volatility_normal_positive_mean
+    severity: warning
+    enabled: true
+    description: >
+      A VoseNormal(mu, sigma) call has mu > 0 and sigma > mu / 2.
+      Roughly 16% of samples will be negative — usually wrong for
+      quantities like price, demand, or duration that can't be negative.
+      Lognormal, gamma, or Weibull are more appropriate for
+      positive-only quantities with substantial variability.
+    suggested_fix_template: >
+      Consider VoseLognormal(mu, sigma) (matches mean and stdev, always
+      positive) or VoseGamma. If negatives ARE genuinely possible
+      (returns, deltas), use VoseNormalT to truncate at zero.

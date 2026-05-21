@@ -18,10 +18,29 @@ from collections.abc import Callable, Iterable
 from modelrisk_mcp.audit.engine import RuleContext
 from modelrisk_mcp.safety import extract_call_heads
 from modelrisk_mcp.schemas.results import AuditFinding
+from modelrisk_mcp.schemas.workbook import CellRef
 
 _VOSE_NAME_RE = re.compile(r"\bVose[A-Za-z0-9_]+")
 _VOSE_INPUT_RE = re.compile(r'VoseInput\(\s*"[^"]*"\s*\)')
 _VOSE_OUTPUT_RE = re.compile(r'VoseOutput\(\s*"[^"]*"\s*\)')
+
+# Tighter capture: distinguishes "named output" from "VoseOutput()" /
+# "VoseOutput("")". Used by detect_voseoutput_missing_name.
+_VOSE_OUTPUT_NAME_RE = re.compile(
+    r'VoseOutput\(\s*(?:"((?:[^"\\]|\\.|"")*)"\s*)?\)'
+)
+
+# Captures the literal first argument of VoseRiskEvent. Detects integer
+# and float literals only — references and expressions don't match.
+_VOSE_RISK_EVENT_PROB_RE = re.compile(
+    r'VoseRiskEvent\(\s*([+-]?(?:\d+\.?\d*|\.\d+)(?:[eE][+-]?\d+)?)\s*[,)]'
+)
+
+# Captures VoseNormal(mu, sigma) with both args as numeric literals.
+_VOSE_NORMAL_LITERAL_RE = re.compile(
+    r'VoseNormal\(\s*([+-]?(?:\d+\.?\d*|\.\d+)(?:[eE][+-]?\d+)?)\s*,'
+    r'\s*([+-]?(?:\d+\.?\d*|\.\d+)(?:[eE][+-]?\d+)?)\s*\)'
+)
 
 
 def _format_fix(template: str, **kwargs: object) -> str:
@@ -228,6 +247,154 @@ def detect_hard_coded_inputs(ctx: RuleContext) -> Iterable[AuditFinding]:
         )
 
 
+def detect_risk_event_degenerate_probability(
+    ctx: RuleContext,
+) -> Iterable[AuditFinding]:
+    """VOSE-007 — VoseRiskEvent with literal probability of 0 or 1."""
+    for cell in ctx.cells:
+        if not cell.formula or "VoseRiskEvent" not in cell.formula:
+            continue
+        m = _VOSE_RISK_EVENT_PROB_RE.search(cell.formula)
+        if not m:
+            continue
+        try:
+            prob = float(m.group(1))
+        except ValueError:
+            continue
+        if prob not in (0.0, 1.0):
+            continue
+        yield AuditFinding(
+            severity=ctx.rule.severity,  # type: ignore[arg-type]
+            cell=cell.ref,
+            rule_id=ctx.rule.id,
+            message=(
+                f"Cell {cell.ref.a1} has VoseRiskEvent with probability "
+                f"= {int(prob)}. The wrapper is degenerate at this value."
+            ),
+            suggested_fix=_format_fix(ctx.rule.suggested_fix_template),
+        )
+
+
+def detect_voseoutput_missing_name(
+    ctx: RuleContext,
+) -> Iterable[AuditFinding]:
+    """VOSE-008 — VoseOutput() with no name or empty-string name."""
+    for cell in ctx.cells:
+        if not cell.formula or "VoseOutput" not in cell.formula:
+            continue
+        m = _VOSE_OUTPUT_NAME_RE.search(cell.formula)
+        if m is None:
+            continue
+        captured = m.group(1)
+        # Match groups: missing capture → None; empty literal → "".
+        if captured is None or captured == "":
+            yield AuditFinding(
+                severity=ctx.rule.severity,  # type: ignore[arg-type]
+                cell=cell.ref,
+                rule_id=ctx.rule.id,
+                message=(
+                    f"Cell {cell.ref.a1} uses VoseOutput without a name; "
+                    "Results Viewer / get_simulation_results cannot "
+                    "reference it."
+                ),
+                suggested_fix=_format_fix(ctx.rule.suggested_fix_template),
+            )
+
+
+def detect_duplicate_output_names(
+    ctx: RuleContext,
+) -> Iterable[AuditFinding]:
+    """VOSE-009 — same VoseOutput("name") declared on multiple cells."""
+    named_output_re = re.compile(
+        r'VoseOutput\(\s*"((?:[^"\\]|\\.|"")*)"\s*\)'
+    )
+    by_name: dict[str, list[CellRef]] = {}
+    for cell in ctx.cells:
+        if not cell.formula:
+            continue
+        m = named_output_re.search(cell.formula)
+        if not m:
+            continue
+        name = m.group(1)
+        if not name:
+            continue
+        by_name.setdefault(name, []).append(cell.ref)
+    for name, refs in by_name.items():
+        if len(refs) < 2:
+            continue
+        # Emit one finding per duplicated occurrence so the user sees
+        # every offending cell in the report.
+        for ref in refs:
+            yield AuditFinding(
+                severity=ctx.rule.severity,  # type: ignore[arg-type]
+                cell=ref,
+                rule_id=ctx.rule.id,
+                message=(
+                    f"Cell {ref.a1} declares VoseOutput({name!r}); the "
+                    f"same name appears on {len(refs)} cells total."
+                ),
+                suggested_fix=_format_fix(ctx.rule.suggested_fix_template),
+            )
+
+
+def detect_input_wrapper_without_distribution(
+    ctx: RuleContext,
+) -> Iterable[AuditFinding]:
+    """VOSE-010 — VoseInput wrapper but no Vose distribution function
+    in the cell's formula."""
+    for cell in ctx.cells:
+        if not cell.formula or "VoseInput" not in cell.formula:
+            continue
+        if not _VOSE_INPUT_RE.search(cell.formula):
+            continue
+        head = _first_distribution_head(cell.formula, ctx)
+        if head is not None:
+            continue
+        yield AuditFinding(
+            severity=ctx.rule.severity,  # type: ignore[arg-type]
+            cell=cell.ref,
+            rule_id=ctx.rule.id,
+            message=(
+                f"Cell {cell.ref.a1} is wrapped with VoseInput but has "
+                "no Vose distribution function; the input won't vary "
+                "across iterations."
+            ),
+            suggested_fix=_format_fix(ctx.rule.suggested_fix_template),
+        )
+
+
+def detect_high_volatility_normal_positive_mean(
+    ctx: RuleContext,
+) -> Iterable[AuditFinding]:
+    """VOSE-011 — VoseNormal(mu, sigma) with mu > 0 and sigma > mu/2.
+
+    Generates negatives ~16% of the time; user probably wants a
+    positive-only distribution (lognormal, gamma)."""
+    for cell in ctx.cells:
+        if not cell.formula or "VoseNormal" not in cell.formula:
+            continue
+        m = _VOSE_NORMAL_LITERAL_RE.search(cell.formula)
+        if not m:
+            continue
+        try:
+            mu = float(m.group(1))
+            sigma = float(m.group(2))
+        except ValueError:
+            continue
+        if mu <= 0 or sigma <= mu / 2:
+            continue
+        yield AuditFinding(
+            severity=ctx.rule.severity,  # type: ignore[arg-type]
+            cell=cell.ref,
+            rule_id=ctx.rule.id,
+            message=(
+                f"Cell {cell.ref.a1} has VoseNormal({mu:g}, {sigma:g}) "
+                f"— sigma > mu/2, so ~16% of samples will be negative."
+            ),
+            suggested_fix=_format_fix(ctx.rule.suggested_fix_template),
+        )
+
+
 def _first_distribution_head(
     formula: str, ctx: RuleContext
 ) -> str | None:
@@ -261,4 +428,15 @@ RULES_BY_NAME: dict[str, Detector] = {
     ),
     "arithmetic_before_input_wrapper": detect_arithmetic_before_input_wrapper,
     "hard_coded_inputs_present": detect_hard_coded_inputs,
+    "risk_event_degenerate_probability": (
+        detect_risk_event_degenerate_probability
+    ),
+    "voseoutput_missing_name": detect_voseoutput_missing_name,
+    "duplicate_output_names": detect_duplicate_output_names,
+    "input_wrapper_without_distribution": (
+        detect_input_wrapper_without_distribution
+    ),
+    "high_volatility_normal_positive_mean": (
+        detect_high_volatility_normal_positive_mean
+    ),
 }
