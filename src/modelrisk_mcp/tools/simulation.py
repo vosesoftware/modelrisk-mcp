@@ -29,7 +29,12 @@ class RunSimulationResult(BaseModel):
 
     workbook_name: str
     vmrs_path: str
-    iterations: int
+    # The number of iterations the sim actually ran. Named `samples`
+    # to match what ModelRisk's own UI calls it and what the parameter
+    # input uses. Previously this object exposed both `samples` and
+    # `iterations` with identical values — confusing and an attractive
+    # nuisance for callers passing `iterations` as input (which got
+    # silently dropped). The canonical name is now `samples`.
     samples: int
     seed: int
     next_step: str = Field(
@@ -66,8 +71,28 @@ def run_simulation(
         ),
     ] = None,
     samples: Annotated[
-        int, Field(ge=1, le=1_000_000, description="Iteration count.")
-    ] = 1000,
+        int | None,
+        Field(
+            ge=1,
+            le=1_000_000,
+            description=(
+                "Iteration count. Default: 1000. Either `samples` or "
+                "`iterations` is accepted (they mean the same thing). "
+                "If both are passed, `samples` wins."
+            ),
+        ),
+    ] = None,
+    iterations: Annotated[
+        int | None,
+        Field(
+            ge=1,
+            le=1_000_000,
+            description=(
+                "Alias for `samples`. ModelRisk's UI calls this "
+                "'samples'; many users call it 'iterations'. Both work."
+            ),
+        ),
+    ] = None,
     seed: Annotated[
         int,
         Field(description="Random seed for reproducibility (fixed seed)."),
@@ -84,18 +109,29 @@ def run_simulation(
         ),
     ] = None,
 ) -> RunSimulationResult:
+    # Resolve samples / iterations alias. Loud failure if the caller
+    # somehow passed both with different values — silent drops are
+    # exactly the bug we're fixing here.
+    if samples is not None and iterations is not None and samples != iterations:
+        raise ValueError(
+            f"run_simulation received both samples={samples} and "
+            f"iterations={iterations}. Pass one or the other, not both "
+            "with conflicting values."
+        )
+    effective_samples = samples if samples is not None else iterations
+    if effective_samples is None:
+        effective_samples = 1000
     bridge = get_bridge()
     result = bridge.run_simulation(
         workbook=workbook_name,
-        samples=samples,
+        samples=effective_samples,
         seed=seed,
         save_to=save_to,
     )
     return RunSimulationResult(
         workbook_name=result.workbook_name,
         vmrs_path=result.vmrs_path,
-        iterations=result.iterations,
-        samples=samples,
+        samples=effective_samples,
         seed=seed,
         next_step=(
             "Call get_simulation_results to read per-output statistics. "

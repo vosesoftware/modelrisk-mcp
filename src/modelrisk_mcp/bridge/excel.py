@@ -171,6 +171,13 @@ class ExcelBridge:
             # Workbook.FullName property would also raise — that's the
             # whole bug. Fall back to a name-only WorkbookInfo.
             path = ""
+        # Unsaved workbooks: Workbook.FullName returns just the book's
+        # name (e.g. "Book3") with no directory part. That's misleading
+        # — downstream code that treats `path` as a filesystem location
+        # would try to write `.vmrs` to a relative name in cwd. Detect
+        # this by the absence of any path separator and report no path.
+        if path and not any(sep in path for sep in ("\\", "/")):
+            path = ""
         # `book.name` is a thin wrapper over Workbook.Name and should be
         # safe even when path resolution fails — but guard it anyway so a
         # broken book never tanks list_workbooks().
@@ -537,22 +544,36 @@ def _classify_cell(formula: str, value: Any) -> str:
 
 
 def _as_2d(value: Any) -> list[list[Any]]:
-    """Normalise a value as returned by xlwings' `.value` to a 2D list.
+    """Normalise a value as returned by xlwings' `.value` / `.formula`
+    to a 2D list of cell values.
 
-    xlwings returns:
+    xlwings on Windows returns:
     - a scalar for a single cell
-    - a 1D list for a single row or column
-    - a 2D list for a rectangular range
+    - a 1D LIST for `.value` on a single row or column
+    - a 2D LIST for `.value` on a rectangular range
+    - **a TUPLE (or tuple of tuples)** for `.formula` — because the COM
+      property reads through `range.api.Formula` which returns raw COM
+      VARIANT arrays. The xlwings value-side wraps them in lists; the
+      formula-side does not.
+
+    The tuple-vs-list distinction is the bug that silently collapsed
+    every list-scan (list_modelrisk_inputs / get_workbook_summary /
+    run_simulation's input registration). If a tuple lands here and we
+    treat it as a scalar, the entire row's formulas get string-cast as
+    a single "(formula_A, formula_B, formula_C)" tuple — the regex
+    finds the first VoseInput inside that string and we yield one
+    record instead of many.
     """
     if value is None:
         return [[None]]
-    if isinstance(value, list):
+    if isinstance(value, (list, tuple)):
         if not value:
             return [[]]
-        if all(isinstance(row, list) for row in value):
-            return value
-        # 1D row or column — wrap each element in its own row.
-        # xlwings doesn't tell us which orientation, so treat as a single row.
+        if all(isinstance(row, (list, tuple)) for row in value):
+            # 2D — coerce each inner row to a list for downstream uniformity.
+            return [list(row) for row in value]
+        # 1D row or column — wrap as a single row.
+        # xlwings doesn't tell us which orientation, so treat as a row.
         return [list(value)]
     return [[value]]
 

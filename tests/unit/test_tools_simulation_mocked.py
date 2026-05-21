@@ -69,7 +69,9 @@ class TestRunSimulationToolPassthrough:
     ) -> None:
         result = simulation.run_simulation()
         assert result.vmrs_path == r"C:\models\model.vmrs"
-        assert result.iterations == 1000
+        # alpha.11 removed `iterations` from the response shape; use
+        # `samples` (the canonical name matching ModelRisk's UI).
+        assert result.samples == 1000
         assert result.workbook_name == "model.xlsx"
 
     def test_response_echoes_request_samples_and_seed(

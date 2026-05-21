@@ -4,6 +4,37 @@ All notable changes to ModelRisk MCP. Follows [Keep a Changelog](https://keepach
 
 ## [Unreleased]
 
+## [0.3.0-alpha.11] — 2026-05-21
+
+Five real bugs found by a real end-user testing session. All shipped as fixes; one is a critical correctness bug that silently broke every list-scan against real Excel (unit tests passed because the fakes returned lists where real xlwings returns tuples).
+
+### Fixed
+
+- **CRITICAL: list-scan collapse against real Excel.** `ExcelBridge._as_2d` only accepted `list` for value normalisation, but xlwings on Windows returns `Range.formula` as a tuple of tuples (raw COM SAFEARRAY) — only the `.value` accessor wraps in lists. When a workbook had two or more cells, the formula payload arrived as a tuple, `_as_2d` treated it as a scalar, and the whole row's formulas were string-cast into one fake "cell". The regex `_VOSE_INPUT_RE` found the first match in that string and we yielded exactly one record instead of many — silently losing all but one input across `list_modelrisk_inputs`, `list_modelrisk_outputs`, `get_workbook_summary`, `find_hard_coded_inputs`, `audit_model`, and most importantly `run_simulation`'s input registration. Unit tests didn't catch this because the fake Excel returned lists. Fix: `_as_2d` accepts both `list` and `tuple` at every nesting level and normalises to lists. Pinned by 6 new tests in `test_excel_bridge.py::TestAs2dTupleHandling` including a regression test that mirrors the exact production failure mode.
+- **`workbook_path` returns `""` for unsaved workbooks instead of the bare name.** `Workbook.FullName` returns just the workbook's name (`"Book3"`) when the workbook has never been saved. Previously we propagated that string as the `path` field, which misled downstream code that treated it as a filesystem location (a `.vmrs` save targeting `<path>/<book>.vmrs` would resolve to a relative path and land in the user's cwd). Now we detect missing path separators and report empty path explicitly.
+- **`run_simulation` silently dropped `iterations` parameter.** Callers using the natural English term ("run 5000 iterations") rather than ModelRisk's UI term (`samples`) saw their argument silently ignored — the default 1000 ran instead. Now `iterations` is an explicit parameter alias for `samples`; both work. Loudly raises `ValueError` if both are passed with conflicting values (silent drops are exactly the class of bug we're fixing here).
+- **`RunSimulationResult` no longer duplicates `samples` as `iterations`** in its response shape. Previously both fields appeared with identical values — confusing, and an attractive nuisance for callers passing `iterations` as input (which got silently dropped). The canonical name is now `samples` for both input and output.
+
+### Notes on adjacent reports
+
+Several other issues raised in the same session were actually already fixed in earlier alphas:
+
+- `wrap_with_output` refusing to wrap non-Vose formulas: fixed in alpha.10.
+- No `save_workbook_as` / no generic write tool: both shipped in alpha.10 as `save_workbook_as` and `write_formula`.
+- OneDrive `get_active_workbook` hard-fail: fixed in alpha.4.
+- MRService.dll activation error message clarity: moot since alpha.5 ships a bundled activation key.
+
+Two complaints referenced tools that no longer exist in the v0.3 architecture:
+
+- `use_vba_helper_for_simulation`: deleted in v0.3.0-alpha.1 when we pivoted from the ATL VBA-helper approach to the XLL command surface.
+- `ensure_modelrisk_active` with its bitness-mismatch hypothesis: deleted in v0.3.0-alpha.1 along with the rest of the COM-Dispatch diagnostic apparatus.
+
+If a fresh Claude session is still seeing these, it's pulling from training-data documentation of the older architecture, not from the live tool list. The MCP server's actual `tools/list` returns 37 tools, none of which match those names.
+
+### Tests
+
+333 unit tests pass (was 328): +6 covering the tuple-vs-list path through `_as_2d`, plus 1 for the unsaved-workbook path-degradation case.
+
 ## [0.3.0-alpha.10] — 2026-05-21
 
 Two new building tools that fill the gap surfaced when Claude tried to build a Monte Carlo model from scratch end-to-end. Previously: no way to write a non-Vose formula (`=A1*B1`, `=SUM(...)`, `=IF(...)`) and no way to save the workbook to a path. The "build a tiny test model" prompt couldn't be completed without manual user steps.
