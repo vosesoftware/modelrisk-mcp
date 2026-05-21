@@ -35,8 +35,9 @@ def excel_bridge() -> Iterator[ExcelBridge]:
 
 @pytest.fixture(scope="session")
 def modelrisk_loaded(excel_bridge: ExcelBridge) -> bool:
-    """True if ModelRisk's COM object Dispatches. Some integration tests
-    require ModelRisk specifically; they skip if this is False."""
+    """True if MRService.dll loads and activates (bundled key in v0.3+,
+    or via MRSERVICE_ACTIVATION_KEY env override). Tests that read
+    `.vmrs` files skip if this is False."""
     bridge = ModelRiskBridge(excel_bridge)
     return bridge.is_modelrisk_loaded()
 
@@ -47,7 +48,9 @@ def modelrisk_bridge(
 ) -> ModelRiskBridge:
     if not modelrisk_loaded:
         pytest.skip(
-            "ModelRisk COM object did not Dispatch — install/load ModelRisk "
-            "before running ModelRisk-dependent integration tests."
+            "MRService.dll did not activate — install the ModelRisk SDK "
+            "(MRService.dll resolvable via MRSERVICE_DLL or one of the "
+            "standard install paths) before running ModelRisk-dependent "
+            "integration tests."
         )
     return ModelRiskBridge(excel_bridge)
