@@ -18,6 +18,7 @@ test here:
 from __future__ import annotations
 
 from collections.abc import Iterator
+from pathlib import Path
 from typing import Any
 from unittest.mock import MagicMock, patch
 
@@ -29,7 +30,7 @@ from modelrisk_mcp.schemas.results import (
     SensitivityRanking,
     SimulationResult,
 )
-from modelrisk_mcp.schemas.workbook import CellInfo, CellRef
+from modelrisk_mcp.schemas.workbook import CellInfo, CellRef, WorkbookInfo, WorkbookSummary
 from modelrisk_mcp.tools import reading, workflows
 
 
@@ -280,6 +281,126 @@ class TestExecutiveSummary:
         assert "Top sensitivity drivers" in md
         assert "price" in md
         assert "volume" in md
+
+
+# ----------------------------------------------------------------------
+# diagnose_workbook — high-leverage first-call introspection
+# ----------------------------------------------------------------------
+
+
+class TestDiagnoseWorkbook:
+    def _setup_happy_path(self, bridge: MagicMock, tmp_path: Path) -> Path:
+        """Wire bridge fakes for a healthy workbook with one output."""
+        from modelrisk_mcp.config import Settings
+
+        wb_path = tmp_path / "m.xlsx"
+        wb_path.write_text("")
+        vmrs_path = tmp_path / "m.vmrs"
+        vmrs_path.write_bytes(b"fake")
+
+        bridge.excel.get_active_workbook.return_value = WorkbookInfo(
+            name="m.xlsx", path=str(wb_path), sheets=["S1"], active_sheet="S1",
+        )
+        bridge.is_modelrisk_loaded.return_value = True
+        bridge.get_workbook_summary.return_value = WorkbookSummary(
+            workbook="m.xlsx", sheets=["S1"],
+            input_count=3, output_count=1, distribution_count=2,
+            formula_cell_count=10, numeric_cell_count=5,
+            modelrisk_loaded=True,
+        )
+        # The diagnose tool reads _settings.writes_log_path off the bridge
+        # to surface the audit-log location.
+        bridge._settings = Settings()
+        return vmrs_path
+
+    def test_happy_path_no_issues(
+        self, bridge: MagicMock, tmp_path: Path
+    ) -> None:
+        self._setup_happy_path(bridge, tmp_path)
+        out = workflows.diagnose_workbook()
+        assert out["excel_connected"] is True
+        assert out["modelrisk_loaded"] is True
+        assert out["active_workbook"] == "m.xlsx"
+        assert out["input_count"] == 3
+        assert out["output_count"] == 1
+        assert out["vmrs_exists"] is True
+        assert out["vmrs_modified"] is not None
+        assert out["issues"] == []
+
+    def test_no_output_cells_flagged(
+        self, bridge: MagicMock, tmp_path: Path
+    ) -> None:
+        self._setup_happy_path(bridge, tmp_path)
+        bridge.get_workbook_summary.return_value = WorkbookSummary(
+            workbook="m.xlsx", sheets=["S1"],
+            input_count=3, output_count=0, distribution_count=2,
+            formula_cell_count=10, numeric_cell_count=5,
+            modelrisk_loaded=True,
+        )
+        out = workflows.diagnose_workbook()
+        assert any("VoseOutput" in i for i in out["issues"])
+
+    def test_no_vmrs_flagged(self, bridge: MagicMock, tmp_path: Path) -> None:
+        from modelrisk_mcp.config import Settings
+
+        wb_path = tmp_path / "lonely.xlsx"
+        wb_path.write_text("")
+        bridge.excel.get_active_workbook.return_value = WorkbookInfo(
+            name="lonely.xlsx", path=str(wb_path), sheets=["S1"],
+        )
+        bridge.is_modelrisk_loaded.return_value = True
+        bridge.get_workbook_summary.return_value = WorkbookSummary(
+            workbook="lonely.xlsx", sheets=["S1"],
+            input_count=1, output_count=1, distribution_count=1,
+            formula_cell_count=5, numeric_cell_count=2,
+            modelrisk_loaded=True,
+        )
+        bridge._settings = Settings()
+        out = workflows.diagnose_workbook()
+        assert out["vmrs_exists"] is False
+        assert any(".vmrs" in i for i in out["issues"])
+
+    def test_excel_not_reachable_short_circuits(
+        self, bridge: MagicMock
+    ) -> None:
+        """If Excel can't be reached, downstream checks should be skipped
+        and the result should surface the issue cleanly."""
+        from modelrisk_mcp.config import Settings
+
+        bridge._settings = Settings()
+        bridge.excel.get_active_workbook.side_effect = RuntimeError(
+            "Excel not running"
+        )
+        out = workflows.diagnose_workbook()
+        assert out["excel_connected"] is False
+        assert any("Excel not reachable" in i for i in out["issues"])
+        # Downstream bridge calls must not have been invoked.
+        bridge.is_modelrisk_loaded.assert_not_called()
+        bridge.get_workbook_summary.assert_not_called()
+
+    def test_modelrisk_not_activated_flagged(
+        self, bridge: MagicMock, tmp_path: Path
+    ) -> None:
+        self._setup_happy_path(bridge, tmp_path)
+        bridge.is_modelrisk_loaded.return_value = False
+        out = workflows.diagnose_workbook()
+        assert out["modelrisk_loaded"] is False
+        assert any("not activated" in i for i in out["issues"])
+
+    def test_distributions_without_outputs(
+        self, bridge: MagicMock, tmp_path: Path
+    ) -> None:
+        """A workbook with VoseOutputs but no distribution cells produces
+        constant simulation results — flagged."""
+        self._setup_happy_path(bridge, tmp_path)
+        bridge.get_workbook_summary.return_value = WorkbookSummary(
+            workbook="m.xlsx", sheets=["S1"],
+            input_count=0, output_count=2, distribution_count=0,
+            formula_cell_count=5, numeric_cell_count=10,
+            modelrisk_loaded=True,
+        )
+        out = workflows.diagnose_workbook()
+        assert any("no Vose distribution" in i for i in out["issues"])
 
 
 # Quieten unused-imports for types declared via fixtures.

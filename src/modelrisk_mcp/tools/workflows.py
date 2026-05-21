@@ -8,6 +8,7 @@ methodology-aware result.
 from __future__ import annotations
 
 from importlib import resources
+from pathlib import Path
 from typing import Annotated, Any
 
 import yaml
@@ -159,6 +160,119 @@ def audit_model(workbook_name: str) -> AuditReport:
 
 @mcp.tool(
     description=(
+        "ModelRisk: One-call workbook health check. Returns everything an "
+        "MCP client typically wants at the start of a session: whether "
+        "Excel is reachable, whether the ModelRisk SDK is activated, "
+        "the active workbook's name + sheets, counts of inputs / outputs "
+        "/ distributions, whether a sibling `.vmrs` exists and when it "
+        "was last modified, and the audit-log location. Use this as the "
+        "first call instead of orchestrating 4-5 individual reading "
+        "tools."
+    )
+)
+def diagnose_workbook(
+    workbook_name: Annotated[
+        str | None,
+        Field(description="Workbook name. Omit for the active workbook."),
+    ] = None,
+) -> dict[str, Any]:
+    from modelrisk_mcp.bridge.mrservice import find_latest_vmrs
+
+    bridge = get_bridge()
+    out: dict[str, Any] = {
+        "excel_connected": False,
+        "modelrisk_loaded": False,
+        "active_workbook": None,
+        "workbook_path": "",
+        "sheets": [],
+        "input_count": 0,
+        "output_count": 0,
+        "distribution_count": 0,
+        "formula_cell_count": 0,
+        "vmrs_path": None,
+        "vmrs_exists": False,
+        "vmrs_modified": None,
+        "audit_log_path": str(bridge._settings.writes_log_path),
+        "issues": [],
+    }
+    issues: list[str] = []
+
+    # 1. Excel reachability + active workbook
+    try:
+        active = bridge.excel.get_active_workbook()
+        out["excel_connected"] = True
+        wb_name = workbook_name or active.name
+        out["active_workbook"] = active.name
+        out["workbook_path"] = active.path
+    except Exception as exc:
+        issues.append(f"Excel not reachable: {exc!s}")
+        out["issues"] = issues
+        return out
+
+    # 2. MRService.dll activation
+    try:
+        out["modelrisk_loaded"] = bridge.is_modelrisk_loaded()
+        if not out["modelrisk_loaded"]:
+            issues.append(
+                "MRService.dll not activated. Set MRSERVICE_ACTIVATION_KEY "
+                "or rely on the bundled key."
+            )
+    except Exception as exc:
+        issues.append(f"MRService check failed: {exc!s}")
+
+    # 3. Workbook content summary
+    try:
+        summary = bridge.get_workbook_summary(wb_name)
+        out["sheets"] = summary.sheets
+        out["input_count"] = summary.input_count
+        out["output_count"] = summary.output_count
+        out["distribution_count"] = summary.distribution_count
+        out["formula_cell_count"] = summary.formula_cell_count
+        if summary.output_count == 0:
+            issues.append(
+                "Workbook has no VoseOutput cells. run_simulation will "
+                "fail until at least one output is declared."
+            )
+        if summary.distribution_count == 0 and summary.output_count > 0:
+            issues.append(
+                "Workbook has VoseOutput(s) but no Vose distribution cells. "
+                "Simulation will produce constant results."
+            )
+    except Exception as exc:
+        issues.append(f"Workbook summary failed: {exc!s}")
+
+    # 4. Sibling .vmrs status
+    if out["workbook_path"]:
+        try:
+            vmrs = find_latest_vmrs(out["workbook_path"])
+            out["vmrs_path"] = vmrs
+            if vmrs:
+                out["vmrs_exists"] = True
+                out["vmrs_modified"] = _format_mtime(Path(vmrs))
+        except Exception:
+            pass
+    if not out["vmrs_exists"]:
+        issues.append(
+            "No sibling .vmrs file found next to the workbook. Call "
+            "run_simulation to produce one, or set_active_vmrs to point "
+            "at a specific file elsewhere."
+        )
+
+    out["issues"] = issues
+    return out
+
+
+def _format_mtime(path: Path) -> str | None:
+    from datetime import datetime
+
+    try:
+        return datetime.fromtimestamp(path.stat().st_mtime).isoformat()
+    except OSError:
+        return None
+
+
+@mcp.tool(
+    description=(
         "ModelRisk: Generate an executive-audience summary of the most "
         "recent simulation results for a workbook. Returns markdown "
         "ready to paste into a deck/report — covers deterministic vs "
@@ -252,6 +366,7 @@ def generate_executive_summary(
 
 __all__ = [
     "audit_model",
+    "diagnose_workbook",
     "discover_inputs",
     "generate_executive_summary",
     "propose_distributions_for_inputs",
