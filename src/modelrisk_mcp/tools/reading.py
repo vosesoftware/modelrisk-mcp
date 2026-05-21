@@ -214,6 +214,52 @@ def find_hard_coded_inputs(
 
 @mcp.tool(
     description=(
+        "ModelRisk: List every variable in the active simulation results "
+        "(`.vmrs`) that's also declared as a VoseInput or VoseOutput in "
+        "the workbook. Each entry: `{name, kind, var_id, iterations}`. "
+        "Use this before `get_samples` or `read_vmrs` when you don't "
+        "already know which outputs / inputs exist in the file."
+    )
+)
+def list_vmrs_variables(
+    workbook_name: Annotated[
+        str | None,
+        Field(description="Workbook name. Omit for the active workbook."),
+    ] = None,
+) -> list[dict[str, str | int]]:
+    return get_bridge().list_vmrs_variables(workbook_name)
+
+
+@mcp.tool(
+    description=(
+        "ModelRisk: Return raw per-iteration sample values for a single "
+        "output or input. Useful for custom histograms, arbitrary "
+        "percentiles, downstream analysis. Caps at 10 000 samples by "
+        "default to keep the MCP response small; raise `max_n` if you "
+        "need more (a 100 000-iteration sim returns ~100 KB of JSON at "
+        "max_n=100000)."
+    )
+)
+def get_samples(
+    output_name: Annotated[str, Field(description="VoseInput or VoseOutput name.")],
+    max_n: Annotated[
+        int,
+        Field(
+            ge=1,
+            le=1_000_000,
+            description="Maximum samples to return (default 10 000).",
+        ),
+    ] = 10_000,
+    workbook_name: Annotated[
+        str | None,
+        Field(description="Workbook name. Omit for the active workbook."),
+    ] = None,
+) -> list[float]:
+    return get_bridge().get_samples(output_name, workbook_name, max_n=max_n)
+
+
+@mcp.tool(
+    description=(
         "ModelRisk: Pin a specific `.vmrs` file as the source of simulation "
         "results. Pass the absolute path of the file; subsequent calls to "
         "get_simulation_results / get_correlation_matrix / "
@@ -258,6 +304,7 @@ __all__ = [
     "get_bridge",
     "get_cell",
     "get_correlation_matrix",
+    "get_samples",
     "get_sensitivity_ranking",
     "get_simulation_results",
     "get_workbook_summary",
@@ -265,6 +312,7 @@ __all__ = [
     "list_modelrisk_inputs",
     "list_modelrisk_outputs",
     "list_open_workbooks",
+    "list_vmrs_variables",
     "read_range",
     "read_vmrs",
     "set_active_vmrs",

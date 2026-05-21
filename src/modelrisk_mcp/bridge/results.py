@@ -43,6 +43,38 @@ _DEFAULT_PERCENTILES: tuple[float, ...] = (
 )
 
 
+# ----------------------------------------------------------------------
+# Variable enumeration entry
+# ----------------------------------------------------------------------
+
+
+class VmrsVariableEntry:
+    """One variable in a `.vmrs` confirmed against the open workbook.
+
+    `kind` is "input" / "output" / "unknown" depending on which Excel
+    list the name was found in. The `.vmrs` itself doesn't store these
+    semantics — they come from the VoseInput / VoseOutput wrappers in
+    the workbook."""
+
+    __slots__ = ("iterations", "kind", "name", "var_id")
+
+    def __init__(
+        self, name: str, var_id: int, kind: str, iterations: int
+    ) -> None:
+        self.name = name
+        self.var_id = var_id
+        self.kind = kind
+        self.iterations = iterations
+
+    def to_dict(self) -> dict[str, str | int]:
+        return {
+            "name": self.name,
+            "var_id": self.var_id,
+            "kind": self.kind,
+            "iterations": self.iterations,
+        }
+
+
 class ResultsReader:
     """Opens the active workbook's .vmrs file lazily and exposes the
     statistics surface the §7.1 reading tools need.
@@ -150,6 +182,65 @@ class ResultsReader:
                 spearman=_matrix_to_optional_list(_corrcoef(_rank_matrix(matrix))),
                 iterations=int(n),
             )
+
+    def list_variables(
+        self,
+        workbook_path: str | None,
+        candidate_names: Iterable[tuple[str, str]],
+    ) -> list[VmrsVariableEntry]:
+        """Open the .vmrs and return the subset of `candidate_names` that
+        actually have data. `candidate_names` is an iterable of
+        `(name, kind)` pairs — kind is typically 'input' or 'output'.
+
+        The SDK doesn't expose a name-enumeration call against a .vmrs,
+        so we lookup-and-probe each candidate via MRLIB_GetModelVarID.
+        That's why the caller must supply the candidates (usually pulled
+        from VoseInput / VoseOutput cells in the open workbook)."""
+        vmrs = self._resolve_vmrs(workbook_path)
+        if vmrs is None:
+            raise SimulationFailedError(
+                "No .vmrs file found. Run a simulation in Excel first, "
+                "then ask again. Or pin a specific file with set_active_vmrs."
+            )
+        out: list[VmrsVariableEntry] = []
+        seen: set[str] = set()
+        with self._mrservice.open_vmrs(vmrs) as handle:
+            iterations = handle.iteration_count()
+            for name, kind in candidate_names:
+                if name in seen:
+                    continue
+                seen.add(name)
+                var_id = self._lookup_var_id(handle, name)
+                if var_id is None:
+                    continue
+                out.append(VmrsVariableEntry(name, var_id, kind, iterations))
+        return out
+
+    def get_samples(
+        self,
+        name: str,
+        workbook_path: str | None = None,
+        *,
+        max_n: int = 10_000,
+    ) -> tuple[float, ...]:
+        """Return raw per-iteration samples for one variable. Filtered
+        and errored samples are removed by MRService.dll. `max_n` caps
+        the returned length for sanity over the MCP wire — a 1M-iteration
+        sim would otherwise blow the JSON-RPC response budget."""
+        vmrs = self._resolve_vmrs(workbook_path)
+        if vmrs is None:
+            raise SimulationFailedError(
+                "No .vmrs file found. Run a simulation in Excel first, "
+                "or pin a specific file with set_active_vmrs."
+            )
+        with self._mrservice.open_vmrs(vmrs) as handle:
+            var_id = self._lookup_var_id(handle, name)
+            if var_id is None:
+                raise SimulationFailedError(
+                    f"Variable {name!r} not found in {vmrs!r}. "
+                    "Call list_vmrs_variables to see what's available."
+                )
+            return handle.get_samples(var_id, max_samples=max_n)
 
     def get_sensitivity_ranking(
         self,

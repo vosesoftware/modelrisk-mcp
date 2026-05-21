@@ -330,5 +330,56 @@ class TestVmrsPinning:
         assert second_call_args == (None, None)
 
 
+# ----------------------------------------------------------------------
+# Variable enumeration + raw samples (v0.3.0-alpha.4)
+# ----------------------------------------------------------------------
+
+
+class TestVmrsVariableEnumeration:
+    def test_list_vmrs_variables_default_active(
+        self, bridge: MagicMock
+    ) -> None:
+        bridge.list_vmrs_variables.return_value = [
+            {"name": "profit", "var_id": 0, "kind": "output", "iterations": 1000},
+            {"name": "demand", "var_id": 1, "kind": "input", "iterations": 1000},
+        ]
+        result = reading.list_vmrs_variables()
+        bridge.list_vmrs_variables.assert_called_once_with(None)
+        assert len(result) == 2
+        assert result[0]["name"] == "profit"
+
+    def test_list_vmrs_variables_with_workbook_name(
+        self, bridge: MagicMock
+    ) -> None:
+        bridge.list_vmrs_variables.return_value = []
+        reading.list_vmrs_variables(workbook_name="m.xlsx")
+        bridge.list_vmrs_variables.assert_called_once_with("m.xlsx")
+
+
+class TestGetSamples:
+    def test_get_samples_passes_max_n_as_keyword(
+        self, bridge: MagicMock
+    ) -> None:
+        """Bridge signature is `get_samples(name, workbook, *, max_n=)` —
+        the wrapper must keep max_n keyword-only."""
+        bridge.get_samples.return_value = [1.0, 2.0, 3.0]
+        reading.get_samples("profit")
+        bridge.get_samples.assert_called_once_with("profit", None, max_n=10_000)
+
+    def test_get_samples_forwards_all_args(self, bridge: MagicMock) -> None:
+        bridge.get_samples.return_value = [1.0]
+        reading.get_samples("profit", max_n=500, workbook_name="m.xlsx")
+        bridge.get_samples.assert_called_once_with(
+            "profit", "m.xlsx", max_n=500
+        )
+
+    def test_get_samples_returns_list_of_floats(
+        self, bridge: MagicMock
+    ) -> None:
+        bridge.get_samples.return_value = [1.5, 2.5, 3.5]
+        result = reading.get_samples("profit")
+        assert result == [1.5, 2.5, 3.5]
+
+
 # Quieten unused-imports for types referenced via fixtures only.
 _ = DistributionCell

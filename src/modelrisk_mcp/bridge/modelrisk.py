@@ -292,6 +292,37 @@ class ModelRiskBridge:
         )
         return self._results.get_correlation_matrix(wb_path, resolved_names)
 
+    def list_vmrs_variables(
+        self,
+        workbook: str | None = None,
+    ) -> list[dict[str, str | int]]:
+        """Enumerate VoseInput / VoseOutput names from the workbook
+        that also have data in the active `.vmrs`. Each entry includes
+        name, kind ('input' / 'output'), variable ID, and iteration count."""
+        wb_path, _ = self._resolve_workbook_and_outputs(workbook, None)
+        wb = workbook or self._excel.get_active_workbook().name
+        candidates: list[tuple[str, str]] = []
+        for o in self.list_outputs(wb):
+            candidates.append((o.name, "output"))
+        for i in self.list_inputs(wb):
+            candidates.append((i.name, "input"))
+        entries = self._results.list_variables(wb_path, candidates)
+        return [e.to_dict() for e in entries]
+
+    def get_samples(
+        self,
+        output_name: str,
+        workbook: str | None = None,
+        *,
+        max_n: int = 10_000,
+    ) -> list[float]:
+        """Raw per-iteration sample array for one variable."""
+        wb_path, _ = self._resolve_workbook_and_outputs(workbook, None)
+        samples = self._results.get_samples(
+            output_name, wb_path, max_n=max_n
+        )
+        return list(samples)
+
     def get_sensitivity_ranking(
         self,
         output_name: str,
