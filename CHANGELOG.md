@@ -4,6 +4,36 @@ All notable changes to ModelRisk MCP. Follows [Keep a Changelog](https://keepach
 
 ## [Unreleased]
 
+## [0.3.0-alpha.10] — 2026-05-21
+
+Two new building tools that fill the gap surfaced when Claude tried to build a Monte Carlo model from scratch end-to-end. Previously: no way to write a non-Vose formula (`=A1*B1`, `=SUM(...)`, `=IF(...)`) and no way to save the workbook to a path. The "build a tiny test model" prompt couldn't be completed without manual user steps.
+
+### Added
+
+- **`write_formula(workbook, sheet, cell, formula, allow_overwrite=False, dry_run=True)`** — single MCP tool for writing arbitrary formulas / literal values into a cell. Use for wiring inputs into outputs (`=A1*B1`), aggregations (`=SUM(B1:B10)`), conditional logic, or anything else not covered by the Vose-specific building tools. Safety: empty cells write freely; non-empty cells require `allow_overwrite=True` (protects both user-written formulas and prior Vose distributions). Defaults to `dry_run=True` like every other building tool. Adds a leading `=` automatically for formula-shaped input; numeric literals pass through unchanged.
+- **`save_workbook_as(workbook, path, overwrite=False)`** — explicit-path save. Distinct from the user's Ctrl+S — the server still never calls `Workbook.Save()` implicitly. Only fires when the caller named a target file. Refuses to overwrite an existing file unless `overwrite=True`. Validates the target has an Excel extension. Returns the resolved absolute path that was written.
+
+### Why this matters
+
+Without these, the "build a model from scratch" workflow had a dead-end: Claude could generate distributions and wrap inputs/outputs around existing content, but couldn't put the existing content there to wrap. And it couldn't save the result so a future session could read the `.vmrs`. End users hit this on the very first "build me a test model" prompt — Claude correctly flagged the missing surface upfront rather than producing a partial result.
+
+### Bridge changes
+
+- `ExcelBridge.save_workbook_as(workbook, path, overwrite=False) -> str` — thin wrapper over xlwings' `book.save(path)` with the file-existence + extension safety checks. Raises `CellReferenceError` on refused overwrites or bad paths.
+
+### Tests
+
+Brings total to 327 unit tests (was 320 in alpha.9). +7 new building-tool tests covering:
+- dry-run-by-default
+- commit to empty cell
+- leading `=` auto-prepend on formula-shaped input vs. numeric-literal pass-through
+- refuse-to-overwrite-non-empty (default safety)
+- `allow_overwrite=True` lets caller clobber
+- the typical "wire-then-wrap" workflow (`write_formula` → `wrap_with_output`)
+- `save_workbook_as` passthrough + overwrite flag wiring
+
+Tool count grows to 37 (was 35).
+
 ## [0.3.0-alpha.9] — 2026-05-21
 
 End-user install friction drops sharply: a single `modelrisk-mcp install` command now wires the server into every detected MCP client config, with backups and per-client dry-run friendly output. README also documents the zero-install `uvx` route for users who already have `uv` set up.

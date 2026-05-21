@@ -113,6 +113,12 @@ class WritableFakeExcel:
     def undo(self) -> None:
         self.undo_calls += 1
 
+    def save_workbook_as(
+        self, workbook: str, path: str, *, overwrite: bool = False,
+    ) -> str:
+        self.saved_to = (workbook, path, overwrite)
+        return path
+
 
 # ----------------------------------------------------------------------
 # Fixture
@@ -492,3 +498,149 @@ class TestRestoreRoundTrip:
     ) -> None:
         with pytest.raises(CellReferenceError):
             restore.restore_cell("book.xlsx", "Sheet1", "Z99")
+
+
+# ----------------------------------------------------------------------
+# write_formula + save_workbook_as — the v0.3.0-alpha.10 additions that
+# fill the "build a model from scratch" gap.
+# ----------------------------------------------------------------------
+
+
+class TestWriteFormula:
+    def test_dry_run_returns_formula_without_writing(
+        self,
+        fake_excel: WritableFakeExcel,
+        bridge_with_audit: tuple[ModelRiskBridge, Path],
+    ) -> None:
+        result = building.write_formula(
+            "book.xlsx", "Sheet1", "C1", "=A1*B1",
+        )
+        assert result.written is False
+        assert result.formula == "=A1*B1"
+        # Nothing landed in the fake Excel.
+        assert ("book.xlsx", "Sheet1", "C1") not in fake_excel.cells
+
+    def test_commit_writes_formula_to_empty_cell(
+        self,
+        fake_excel: WritableFakeExcel,
+        bridge_with_audit: tuple[ModelRiskBridge, Path],
+    ) -> None:
+        result = building.write_formula(
+            "book.xlsx", "Sheet1", "C1", "=A1*B1", dry_run=False,
+        )
+        assert result.written is True
+        assert (
+            fake_excel.cells[("book.xlsx", "Sheet1", "C1")].formula
+            == "=A1*B1"
+        )
+
+    def test_adds_leading_equals_to_formula_shaped_input(
+        self,
+        fake_excel: WritableFakeExcel,
+        bridge_with_audit: tuple[ModelRiskBridge, Path],
+    ) -> None:
+        """User-friendly: `A1*B1` -> `=A1*B1`. Bare numeric literals
+        are left alone."""
+        r = building.write_formula(
+            "book.xlsx", "Sheet1", "C1", "A1*B1", dry_run=False,
+        )
+        assert r.formula == "=A1*B1"
+
+        r2 = building.write_formula(
+            "book.xlsx", "Sheet1", "C2", "42", dry_run=False,
+        )
+        # Numeric literal: no '=' added — caller wants a constant.
+        assert r2.formula == "42"
+
+    def test_refuses_to_overwrite_non_empty_cell_without_flag(
+        self,
+        fake_excel: WritableFakeExcel,
+        bridge_with_audit: tuple[ModelRiskBridge, Path],
+    ) -> None:
+        # Pre-populate with a non-Vose formula.
+        fake_excel.write_cell("book.xlsx", "Sheet1", "C1", "=SUM(A:A)")
+        with pytest.raises(CellReferenceError):
+            building.write_formula(
+                "book.xlsx", "Sheet1", "C1", "=A1*B1", dry_run=False,
+            )
+        # The original is intact.
+        assert (
+            fake_excel.cells[("book.xlsx", "Sheet1", "C1")].formula
+            == "=SUM(A:A)"
+        )
+
+    def test_allow_overwrite_lets_caller_clobber(
+        self,
+        fake_excel: WritableFakeExcel,
+        bridge_with_audit: tuple[ModelRiskBridge, Path],
+    ) -> None:
+        fake_excel.write_cell("book.xlsx", "Sheet1", "C1", "=SUM(A:A)")
+        result = building.write_formula(
+            "book.xlsx", "Sheet1", "C1", "=A1*B1",
+            allow_overwrite=True, dry_run=False,
+        )
+        assert result.written is True
+        assert (
+            fake_excel.cells[("book.xlsx", "Sheet1", "C1")].formula
+            == "=A1*B1"
+        )
+
+    def test_typical_wire_then_wrap_workflow(
+        self,
+        fake_excel: WritableFakeExcel,
+        bridge_with_audit: tuple[ModelRiskBridge, Path],
+    ) -> None:
+        """The exact flow Claude needs for `=VoseOutput("Revenue")+A1*B1`:
+        write the arithmetic first, then wrap with VoseOutput."""
+        # Step 1: write the arithmetic.
+        building.write_formula(
+            "book.xlsx", "Sheet1", "C1", "=A1*B1", dry_run=False,
+        )
+        # Step 2: wrap with VoseOutput.
+        wrapped = building.wrap_with_output(
+            "book.xlsx", "Sheet1", "C1", "Revenue", dry_run=False,
+        )
+        assert wrapped.written is True
+        assert 'VoseOutput("Revenue")' in wrapped.formula
+        assert "A1*B1" in wrapped.formula
+
+
+class TestSaveWorkbookAs:
+    """save_workbook_as goes through the ExcelBridge directly (not
+    safe_write_cell). The fake doesn't simulate filesystem state — we
+    just verify the call shape and the safety rails."""
+
+    def test_calls_bridge_save_with_resolved_path(
+        self,
+        bridge_with_audit: tuple[ModelRiskBridge, Path],
+        tmp_path: Path,
+    ) -> None:
+        from unittest.mock import patch
+
+        bridge, _ = bridge_with_audit
+        target = str(tmp_path / "saved.xlsx")
+        with patch.object(
+            bridge.excel, "save_workbook_as", return_value=target
+        ) as p:
+            result = building.save_workbook_as(
+                "book.xlsx", target, overwrite=False,
+            )
+        p.assert_called_once_with("book.xlsx", target, overwrite=False)
+        assert result == {"saved_to": target, "workbook": "book.xlsx"}
+
+    def test_overwrite_flag_passed_through(
+        self,
+        bridge_with_audit: tuple[ModelRiskBridge, Path],
+        tmp_path: Path,
+    ) -> None:
+        from unittest.mock import patch
+
+        bridge, _ = bridge_with_audit
+        target = str(tmp_path / "saved.xlsx")
+        with patch.object(
+            bridge.excel, "save_workbook_as", return_value=target
+        ) as p:
+            building.save_workbook_as(
+                "book.xlsx", target, overwrite=True,
+            )
+        p.assert_called_once_with("book.xlsx", target, overwrite=True)

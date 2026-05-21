@@ -115,7 +115,8 @@ def wrap_with_input(
     formula = build_input_wrapper(name, inner)
     if dry_run:
         return WrapResult(cell=ref, formula=formula, written=False)
-    result = bridge.safe_write_cell(ref, formula, allow_overwrite_non_vose=False)
+    # Wrapping preserves the inner content — see wrap_with_output.
+    result = bridge.safe_write_cell(ref, formula, allow_overwrite_non_vose=True)
     return WrapResult(
         cell=ref,
         formula=result.formula,
@@ -144,7 +145,11 @@ def wrap_with_output(
     formula = build_output_wrapper(name, inner)
     if dry_run:
         return WrapResult(cell=ref, formula=formula, written=False)
-    result = bridge.safe_write_cell(ref, formula, allow_overwrite_non_vose=False)
+    # Wrapping PRESERVES the inner content (it becomes the inner of
+    # `=VoseOutput(name)+<inner>`), so the "refuse-to-overwrite-non-Vose"
+    # guard is unnecessarily strict here. The wrap is a non-destructive
+    # transformation by construction.
+    result = bridge.safe_write_cell(ref, formula, allow_overwrite_non_vose=True)
     return WrapResult(
         cell=ref,
         formula=result.formula,
@@ -434,3 +439,96 @@ def _split_a1(ref: str) -> tuple[int, int]:
         col = col * 26 + (ord(c) - ord("A") + 1)
     row = int(row_digits) if row_digits else 1
     return col, row
+
+
+# ----------------------------------------------------------------------
+# write_formula + save_workbook_as — wiring + persistence tools that
+# fill the "build a model from scratch" gap. Both go through the §11
+# safety pipeline.
+# ----------------------------------------------------------------------
+
+
+@mcp.tool(
+    description=(
+        "ModelRisk: Write an arbitrary formula or value into a single "
+        "cell. Use this for wiring cells (e.g. =A1*B1, =SUM(...), "
+        "=IF(...), or links to other sheets) that aren't covered by "
+        "the Vose-specific tools. Safety: refuses to overwrite a cell "
+        "containing an existing formula unless allow_overwrite=True — "
+        "that protects user-written formulas AND prior Vose "
+        "distributions. Empty cells write freely. Defaults to "
+        "dry_run=True; pass dry_run=False to commit. Every commit "
+        "appends to the audit log so `restore_cell` can roll back."
+    )
+)
+def write_formula(
+    workbook: str,
+    sheet: str,
+    cell: Annotated[str, Field(description="A1 cell reference like 'C1'.")],
+    formula: Annotated[
+        str,
+        Field(
+            description=(
+                "Formula or value to write. Excel-style; leading '=' is "
+                "optional (we'll add it if missing for non-numeric content)."
+            )
+        ),
+    ],
+    allow_overwrite: Annotated[
+        bool,
+        Field(
+            description=(
+                "Permit overwriting a non-empty cell. Required if the "
+                "cell already has any content. Without this flag the "
+                "tool refuses and returns the existing formula so "
+                "Claude can decide what to do."
+            )
+        ),
+    ] = False,
+    dry_run: bool = True,
+) -> InsertResult:
+    ref = CellRef(workbook=workbook, sheet=sheet, cell=cell)
+    # Ensure leading '=' for formula-shaped content. Bare numbers /
+    # strings stay as-is so the caller can write literal values too.
+    body = formula.strip()
+    if body and not body.startswith("=") and not _looks_like_value(body):
+        body = "=" + body
+    if dry_run:
+        return InsertResult(cell=ref, formula=body, written=False)
+    return get_bridge().safe_write_cell(
+        ref, body, allow_overwrite_non_vose=allow_overwrite,
+    )
+
+
+def _looks_like_value(s: str) -> bool:
+    """Heuristic — if it parses as a number, treat as a literal value
+    (no '=' prefix). Otherwise assume a formula needing the prefix."""
+    try:
+        float(s)
+        return True
+    except ValueError:
+        return False
+
+
+@mcp.tool(
+    description=(
+        "ModelRisk: Save the workbook to a specific path on disk. "
+        "Distinct from the user's Ctrl+S — the MCP server never calls "
+        "Workbook.Save() implicitly. Use only when the caller "
+        "explicitly named a target file. Refuses to overwrite an "
+        "existing file unless overwrite=True. Returns the resolved "
+        "absolute path that was written."
+    )
+)
+def save_workbook_as(
+    workbook: str,
+    path: Annotated[
+        str,
+        Field(description="Absolute path. Must end in .xlsx, .xlsm, .xlsb, or .xls."),
+    ],
+    overwrite: bool = False,
+) -> dict[str, str]:
+    saved_path = get_bridge().excel.save_workbook_as(
+        workbook, path, overwrite=overwrite,
+    )
+    return {"saved_to": saved_path, "workbook": workbook}

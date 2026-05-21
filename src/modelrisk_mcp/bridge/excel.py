@@ -378,6 +378,41 @@ class ExcelBridge:
         except Exception as exc:
             raise CellReferenceError(f"Excel.Undo() failed: {exc}") from exc
 
+    def save_workbook_as(
+        self, workbook: str, path: str, *, overwrite: bool = False,
+    ) -> str:
+        """Save `workbook` to `path` (absolute). Returns the resolved
+        path that was actually written.
+
+        Distinct from `Workbook.Save()` (which we never call implicitly
+        per the §11 safety policy). This is the *explicit* save: the
+        caller named a path; we honour it. The user-controls-Ctrl+S
+        invariant is preserved because nothing here triggers without
+        the caller explicitly asking."""
+        from pathlib import Path
+
+        from modelrisk_mcp.errors import WorkbookNotFoundError
+
+        target = Path(path).expanduser().resolve()
+        if not overwrite and target.exists():
+            raise CellReferenceError(
+                f"Refusing to overwrite existing file {target!r}: pass "
+                "overwrite=True to confirm."
+            )
+        if target.suffix.lower() not in {".xlsx", ".xlsm", ".xlsb", ".xls"}:
+            raise CellReferenceError(
+                f"Save target {target!r} doesn't have an Excel extension. "
+                "Use .xlsx, .xlsm, .xlsb, or .xls."
+            )
+        book = self._get_book(workbook)
+        try:
+            book.save(str(target))
+        except Exception as exc:
+            raise WorkbookNotFoundError(
+                f"Excel refused to save {workbook!r} to {target!r}: {exc}"
+            ) from exc
+        return str(target)
+
     # ------------------------------------------------------------------
     # Add-in management
     # ------------------------------------------------------------------
