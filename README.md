@@ -6,7 +6,7 @@ Use it with Claude Desktop, Claude Code, Cursor, Zed, or any MCP-compliant clien
 
 > ModelRisk MCP is an open MCP server on the standard Anthropic Model Context Protocol. No proprietary layer, no lock-in. The 1417-entry function catalogue, the Vose methodology principles, and the audit rule set are all included in the package — and editable.
 
-**Status: `0.3.0-alpha.3`** — programmatic simulation via the `run_simulation` tool is wired end-to-end (XLL command surface, no fragile COM dispatch); `.vmrs` results read via the official ModelRisk SDK; activation ships bundled so no environment configuration is required.
+**Status: `0.3.0-alpha.4`** — programmatic simulation via the `run_simulation` tool wired end-to-end (XLL command surface, no fragile COM dispatch); `.vmrs` results read via the official ModelRisk SDK; activation ships bundled so no environment configuration is required. 34 tools across reading, building, simulation, scenario-sweep, restore, audit, and workflow surfaces.
 
 ---
 
@@ -155,11 +155,11 @@ The server can both read *and* modify your workbook — that's the central diffe
 
 ## What's inside
 
-- **30 tools** — 14 reading (incl. `read_vmrs` / `set_active_vmrs` for `.vmrs` access), 10 building, 1 simulation (`run_simulation`), 1 restore (`restore_cell`), 4 workflow
+- **34 tools** — 16 reading (incl. `read_vmrs` / `set_active_vmrs` / `list_vmrs_variables` / `get_samples`), 10 building, 2 simulation (`run_simulation` + `run_scenarios`), 1 restore (`restore_cell`), 5 workflow (incl. `diagnose_workbook`)
 - **7 resources** — `modelrisk://functions`, `modelrisk://functions/{name}`, `modelrisk://distributions`, `modelrisk://methodology`, `modelrisk://workbook/current`, `modelrisk://workbook/current/sheet/{name}`, `modelrisk://audit-rules`
 - **5 slash-command prompts** — `/build-risk-model`, `/audit-model`, `/interpret-results`, `/add-uncertainty`, `/import-legacy-model`
 - **1417-entry function catalogue** extracted directly from the ModelRisk IDL + XLL header
-- **6 audit rules** with editable severity in `data/audit_rules.yaml`
+- **11 audit rules** with editable severity in `data/audit_rules.yaml`; add your own with `docs/authoring-audit-rules.md`
 - **Methodology-grounded distribution selection guide** in `data/distributions.yaml`
 
 ---

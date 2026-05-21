@@ -4,6 +4,38 @@ All notable changes to ModelRisk MCP. Follows [Keep a Changelog](https://keepach
 
 ## [Unreleased]
 
+## [0.3.0-alpha.4] — 2026-05-21
+
+Four feature additions in one batch: read-path completeness, a one-call session-start tool, deterministic scenario sweeps, and 5 new audit rules. Tool count grows 30 → 34, audit rules 6 → 11. No breaking changes.
+
+### Added
+
+- `list_vmrs_variables(workbook_name?)` — enumerates VoseInput / VoseOutput names that exist in the active `.vmrs`. Workbook drives the candidate list (the SDK exposes no name-enumeration call against a `.vmrs` directly — `MRVarsGetModelVarsNames` takes a different ModelID and access-violates against `OpenSimulationModel`'s pointer).
+- `get_samples(output_name, max_n=10000, workbook_name?)` — raw per-iteration sample array for one variable. Unlocks custom histograms, arbitrary percentiles, and any downstream analysis the aggregate-only `get_simulation_results` couldn't cover. Capped at 10 000 by default to stay under MCP-wire budget; configurable up to 1 000 000.
+- `diagnose_workbook(workbook_name?)` — one-call session-start introspection. Returns Excel connection state, MRService activation, active workbook + sheets, input/output/distribution/formula counts, sibling `.vmrs` path + modification timestamp, audit-log location, and an `issues[]` list with human-readable strings flagging anything that would block downstream operations. Saves 4-5 individual tool calls per session. Short-circuits cleanly on Excel-not-reachable.
+- `run_scenarios(sheet, cell, values, samples?, seed?, workbook_name?)` — sweep an input cell across deterministic values, running a full simulation at each, returning per-output P5/P50/P95/mean for every scenario. The cell's original formula is always restored afterwards, even when a scenario raises mid-sweep. `values` capped at 1-20 entries to prevent runaway compute.
+- 5 new audit rules:
+  - **VOSE-007** `risk_event_degenerate_probability` — `VoseRiskEvent` with literal probability of 0 or 1 (wrapper is degenerate).
+  - **VOSE-008** `voseoutput_missing_name` — `VoseOutput()` with no name or empty-string name.
+  - **VOSE-009** `duplicate_output_names` — same `VoseOutput("X")` declared on multiple cells.
+  - **VOSE-010** `input_wrapper_without_distribution` — `VoseInput` wrapper but no distribution → input won't vary across iterations.
+  - **VOSE-011** `high_volatility_normal_positive_mean` — `VoseNormal(mu, sigma)` with `mu > 0` and `sigma > mu/2` (~16% negative samples; lognormal probably wanted).
+- `docs/authoring-audit-rules.md` — guide for adding new rules. Three-file pattern (YAML + detector + tests), worked example using VOSE-007, when-not-to-add-a-rule discussion.
+
+### Bridge / schema changes
+
+- `bridge/results.py::ResultsReader.list_variables()` and `.get_samples()` — new methods consumed by the new MCP tools.
+- `bridge/modelrisk.py::ModelRiskBridge.run_scenarios()` — orchestrates Excel write + sim + read with guaranteed cell-state restoration in a `try/finally`.
+- New schemas in `schemas/results.py`: `ScenarioOutcome`, `ScenarioRun`, `ScenarioSweepResult`, `VmrsVariableEntry`.
+
+### Tests
+
+290 unit tests pass (was 256 at start of alpha.4 work). 34 new tests across the four features: 5 for read-path tools, 6 for `diagnose_workbook`, 6 for scenario sweeps, 17 for the new audit detectors (positive + negative cases per rule, plus threshold-boundary tests for VOSE-011).
+
+### Notes
+
+False-positive avoidance pattern adopted in the new audit rules: numeric-threshold rules skip cell-reference args (e.g. `VoseRiskEvent(B5, ...)` is NOT flagged because we can't statically know what's in B5). Static analysis should be conservative when it lacks information.
+
 ## [0.3.0-alpha.3] — 2026-05-21
 
 End-user-frictionless activation + obfuscation so the bundled MRService.dll key isn't grep-able from the wheel, plus 50 new MCP-wrapper tests that were missing since the v0.3 refactor.
