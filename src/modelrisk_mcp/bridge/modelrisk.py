@@ -20,6 +20,7 @@ from pathlib import Path
 from typing import Any
 
 from modelrisk_mcp.bridge.catalogue import FunctionCatalogue, load_catalogue
+from modelrisk_mcp.bridge.charts import TornadoChartResult, TornadoChartWriter
 from modelrisk_mcp.bridge.excel import ExcelBridge
 from modelrisk_mcp.bridge.mrservice import MrServiceBridge
 from modelrisk_mcp.bridge.results import ResultsReader
@@ -294,6 +295,32 @@ class ModelRiskBridge:
             workbook, names, include_inputs=True
         )
         return self._results.get_correlation_matrix(wb_path, resolved_names)
+
+    def create_tornado_chart(
+        self,
+        output_name: str,
+        workbook: str | None = None,
+        *,
+        sheet_name: str | None = None,
+    ) -> TornadoChartResult:
+        """Render a tornado chart of input sensitivity for `output_name`.
+
+        Reuses the existing `get_sensitivity_ranking` machinery for the
+        data; writes the sorted table + a native Excel BarClustered
+        chart to a new sheet via `TornadoChartWriter`. Idempotent — if
+        the target sheet already exists, it's replaced."""
+        wb_name = workbook or self._excel.get_active_workbook().name
+        ranking = self.get_sensitivity_ranking(output_name, wb_name)
+        # Force a connect if we haven't yet (the chart writer needs the
+        # raw xlwings book handle, not just bridge methods).
+        if not self._excel.is_connected():
+            self._excel.connect()
+        app = self._excel._app  # bridge-internal access
+        assert app is not None  # connect() guarantees this
+        book = app.books[wb_name]
+        return TornadoChartWriter.write(
+            book, output_name, ranking.entries, sheet_name=sheet_name
+        )
 
     def run_scenarios(
         self,

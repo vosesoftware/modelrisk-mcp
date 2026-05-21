@@ -15,6 +15,7 @@ import yaml
 from pydantic import Field
 
 from modelrisk_mcp.audit.engine import run_audit
+from modelrisk_mcp.bridge.charts import TornadoChartResult
 from modelrisk_mcp.schemas.results import AuditReport, SimulationResult
 from modelrisk_mcp.schemas.workbook import CellRef
 from modelrisk_mcp.server import mcp
@@ -278,6 +279,49 @@ def _format_mtime(path: Path) -> str | None:
 
 @mcp.tool(
     description=(
+        "ModelRisk: Render a tornado chart of input sensitivity for a "
+        "single output as a new sheet in the workbook. The sheet has "
+        "a sorted data table (Spearman rank correlation + regression "
+        "coefficient per input) plus a native Excel BarClustered chart "
+        "with the largest-magnitude input at the top. Idempotent — if "
+        "a sheet with the target name already exists, it's replaced. "
+        "Useful when the user wants the visualization persisted in the "
+        "workbook, not just returned over MCP."
+    )
+)
+def create_tornado_chart(
+    output_name: Annotated[
+        str, Field(description="VoseOutput name to analyze.")
+    ],
+    workbook_name: Annotated[
+        str | None,
+        Field(description="Workbook name. Omit for the active workbook."),
+    ] = None,
+    sheet_name: Annotated[
+        str | None,
+        Field(
+            description=(
+                "Target sheet name. Default: `Tornado_<output_name>` "
+                "(truncated to Excel's 31-char limit)."
+            )
+        ),
+    ] = None,
+) -> dict[str, Any]:
+    result: TornadoChartResult = get_bridge().create_tornado_chart(
+        output_name, workbook_name, sheet_name=sheet_name,
+    )
+    return {
+        "sheet_name": result.sheet_name,
+        "chart_name": result.chart_name,
+        "output_name": result.output_name,
+        "input_count": result.input_count,
+        "top_input": result.top_input,
+        "top_correlation": result.top_correlation,
+    }
+
+
+@mcp.tool(
+    description=(
         "ModelRisk: Generate an executive-audience summary of the most "
         "recent simulation results for a workbook. Returns markdown "
         "ready to paste into a deck/report — covers deterministic vs "
@@ -371,6 +415,7 @@ def generate_executive_summary(
 
 __all__ = [
     "audit_model",
+    "create_tornado_chart",
     "diagnose_workbook",
     "discover_inputs",
     "generate_executive_summary",
