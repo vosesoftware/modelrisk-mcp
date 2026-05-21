@@ -4,6 +4,26 @@ All notable changes to ModelRisk MCP. Follows [Keep a Changelog](https://keepach
 
 ## [Unreleased]
 
+## [0.3.0-alpha.3] — 2026-05-21
+
+End-user-frictionless activation + obfuscation so the bundled MRService.dll key isn't grep-able from the wheel, plus 50 new MCP-wrapper tests that were missing since the v0.3 refactor.
+
+### Added
+
+- Bundled MRService.dll activation. The DLL needs per-process activation to open `.vmrs` files; we now ship a Vose Software-owned key as a fallback in `bridge/mrservice.py::_activate()` so the read path works out of the box. Precedence: `MRSERVICE_ACTIVATION_KEY` env var → `MRSERVICE_ACTIVATION_KEY1`/`_2` env vars → bundled key. `MRSERVICE_DISABLE_BUNDLED_KEY=1` opts out.
+- `bridge/_keymat.py` + `scripts/encode_activation_key.py` — XOR-encoded + base85-stored key material so the literal int never appears in shipped source or `strings` output. Algorithm is public (Kerckhoffs); only the value is secret.
+- `tests/unit/test_tools_{reading,workflows,simulation,restore}_mocked.py` (50 tests) — MCP-tool wrappers were previously untested; these guard against bridge method-rename / kwarg-shape regressions that only surface at end-user runtime.
+- CI guard `test_no_literal_in_package_sources` recursively scans every shipped `.py` for the decoded key's decimal form; fails if anyone re-inlines it.
+
+### Verified
+
+- Wheel and sdist scans for the plain activation key return zero hits.
+- Bundled key activates the real MRService.dll end-to-end (smoke test in the bridge).
+
+### Tests
+
+256 unit tests pass (was 206). 50 new MCP-wrapper tests + 3 reworked activation tests.
+
 ## [0.3.0-alpha.2] — 2026-05-20
 
 Adds programmatic simulation triggering via the XLL command surface (no ATL COM dispatch needed), graceful OneDrive path handling, and the missing `read_vmrs` / `set_active_vmrs` tools.
