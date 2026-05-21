@@ -36,6 +36,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
+from modelrisk_mcp.bridge._keymat import decode_bundled_key
 from modelrisk_mcp.errors import (
     ModelRiskNotLoadedError,
     SimulationFailedError,
@@ -47,6 +48,17 @@ from modelrisk_mcp.errors import (
 
 
 _DLL_NAME: str = "MRService.dll"
+
+# Bundled offline activation key. ModelRisk requires per-process activation
+# of MRService.dll before it will open .vmrs files; rather than make every
+# end user acquire and configure their own key, we ship one with the MCP
+# server so the read path "just works". The plain integer is NOT in this
+# file — it's reconstructed from obfuscated blobs in `_keymat` so the
+# literal value isn't visible to `strings`, grep, or a curious wheel
+# inspector. See `_keymat.py` for the rationale and the rotation script.
+#
+# `MRSERVICE_ACTIVATION_KEY` env var still takes precedence — useful for
+# testing against a different key without rebuilding.
 
 # Standard install paths in priority order. The env-var override is the
 # canonical way for users to point at a non-standard install.
@@ -195,8 +207,12 @@ class MrServiceBridge:
 
     def _activate(self) -> None:
         assert self._lib is not None
-        # Prefer single-key. Two-key is the fallback for users on the
-        # older activation flow.
+        # Precedence:
+        #   1. MRSERVICE_ACTIVATION_KEY (single int64) — env override
+        #   2. MRSERVICE_ACTIVATION_KEY1/2 (split int64s) — env override
+        #   3. _BUNDLED_ACTIVATION_KEY — ships with the MCP server so the
+        #      read path is plug-and-play. Tests can suppress this by
+        #      setting MRSERVICE_DISABLE_BUNDLED_KEY=1.
         single = os.environ.get("MRSERVICE_ACTIVATION_KEY")
         if single:
             try:
@@ -234,11 +250,28 @@ class MrServiceBridge:
                 )
             self._activated = True
             return
+        if not os.environ.get("MRSERVICE_DISABLE_BUNDLED_KEY"):
+            # Decode then immediately consume — don't keep the plain key
+            # in a Python binding any longer than necessary.
+            bundled = c_int64(decode_bundled_key())
+            ok = bool(self._lib.MRLIB_SetOfflineActivationKey(bundled))
+            del bundled
+            if ok:
+                self._activated = True
+                return
+            # Bundled key rejected — fall through to the clear error
+            # rather than silently leaving the bridge unactivated.
+            raise SimulationFailedError(
+                "Bundled activation key was rejected by MRService.dll. "
+                "Your installed ModelRisk SDK may be too new/old for this "
+                "key. Set MRSERVICE_ACTIVATION_KEY to override, or "
+                "report this to the modelrisk-mcp maintainers."
+            )
         raise SimulationFailedError(
-            "MRService.dll requires activation. Set the env var "
-            "MRSERVICE_ACTIVATION_KEY (a single int64) or both "
-            "MRSERVICE_ACTIVATION_KEY1 and MRSERVICE_ACTIVATION_KEY2 "
-            "(two int64s) before running the MCP server."
+            "MRService.dll requires activation. Set MRSERVICE_ACTIVATION_KEY "
+            "(a single int64) or both MRSERVICE_ACTIVATION_KEY1 and "
+            "MRSERVICE_ACTIVATION_KEY2 (two int64s). MRSERVICE_DISABLE_"
+            "BUNDLED_KEY is set, so the bundled key was not tried."
         )
 
     # ----- vmrs read API -------------------------------------------------

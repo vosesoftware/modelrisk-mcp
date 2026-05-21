@@ -15,6 +15,7 @@ from pathlib import Path
 
 import pytest
 
+from modelrisk_mcp.bridge._keymat import decode_bundled_key
 from modelrisk_mcp.bridge.mrservice import (
     MrServiceBridge,
     find_latest_vmrs,
@@ -59,22 +60,64 @@ class TestBridgeLifecycle:
         assert "MRService.dll not found" in msg
         assert "MRSERVICE_DLL" in msg
 
-    def test_missing_activation_key_raises(
-        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    def test_bundled_key_used_when_no_env(
+        self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        """If MRService.dll loads but no activation key env vars are
-        set, activation should fail with an actionable error."""
-        # We won't actually load a real DLL — mock the lib + skip _load.
+        """No env override → the bundled activation key is tried via
+        `MRLIB_SetOfflineActivationKey`. Tests fake the lib so we
+        record the call without needing the real DLL."""
+        calls: list[int] = []
+
+        class _FakeLib:
+            def MRLIB_SetOfflineActivationKey(self, key: object) -> bool:  # noqa: N802
+                calls.append(int(getattr(key, "value", key)))  # type: ignore[arg-type]
+                return True
+
+        bridge = MrServiceBridge()
+        bridge._lib = _FakeLib()  # type: ignore[assignment]
+        monkeypatch.delenv("MRSERVICE_ACTIVATION_KEY", raising=False)
+        monkeypatch.delenv("MRSERVICE_ACTIVATION_KEY1", raising=False)
+        monkeypatch.delenv("MRSERVICE_ACTIVATION_KEY2", raising=False)
+        monkeypatch.delenv("MRSERVICE_DISABLE_BUNDLED_KEY", raising=False)
+        bridge._activate()
+        assert bridge._activated
+        assert len(calls) == 1
+        assert calls[0] > 0  # the bundled key, whatever its current value
+
+    def test_env_override_beats_bundled(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """An explicit MRSERVICE_ACTIVATION_KEY env var is preferred
+        over the bundled fallback."""
+        calls: list[int] = []
+
+        class _FakeLib:
+            def MRLIB_SetOfflineActivationKey(self, key: object) -> bool:  # noqa: N802
+                calls.append(int(getattr(key, "value", key)))  # type: ignore[arg-type]
+                return True
+
+        bridge = MrServiceBridge()
+        bridge._lib = _FakeLib()  # type: ignore[assignment]
+        monkeypatch.setenv("MRSERVICE_ACTIVATION_KEY", "9999")
+        bridge._activate()
+        assert calls == [9999]
+
+    def test_bundled_key_can_be_disabled(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """MRSERVICE_DISABLE_BUNDLED_KEY=1 suppresses the fallback,
+        restoring the original 'must configure env var' behaviour."""
         bridge = MrServiceBridge()
         bridge._lib = object()  # type: ignore[assignment]
         monkeypatch.delenv("MRSERVICE_ACTIVATION_KEY", raising=False)
         monkeypatch.delenv("MRSERVICE_ACTIVATION_KEY1", raising=False)
         monkeypatch.delenv("MRSERVICE_ACTIVATION_KEY2", raising=False)
+        monkeypatch.setenv("MRSERVICE_DISABLE_BUNDLED_KEY", "1")
         with pytest.raises(SimulationFailedError) as exc:
             bridge._activate()
         msg = str(exc.value)
         assert "MRSERVICE_ACTIVATION_KEY" in msg
-        assert "activation" in msg.lower()
+        assert "bundled" in msg.lower()
 
     def test_non_integer_key_rejected(
         self, monkeypatch: pytest.MonkeyPatch
@@ -84,6 +127,41 @@ class TestBridgeLifecycle:
         monkeypatch.setenv("MRSERVICE_ACTIVATION_KEY", "not-a-number")
         with pytest.raises(SimulationFailedError, match="not an integer"):
             bridge._activate()
+
+
+class TestKeyObfuscation:
+    """The bundled activation key must never appear as a plain integer
+    or as its decimal string in any shipped source file. These tests
+    guard against regressions — if someone accidentally inlines the
+    literal again, CI will fail."""
+
+    def test_decode_returns_positive_int64(self) -> None:
+        key = decode_bundled_key()
+        assert isinstance(key, int)
+        assert 0 < key < (1 << 63)
+
+    def test_decode_is_deterministic(self) -> None:
+        assert decode_bundled_key() == decode_bundled_key()
+
+    def test_no_literal_in_package_sources(self) -> None:
+        """Recursively scan every .py file in the package for the
+        decoded key's decimal representation. Skip the test module
+        itself (this assertion would otherwise be self-defeating)."""
+        from pathlib import Path
+
+        import modelrisk_mcp
+
+        key_str = str(decode_bundled_key())
+        pkg_root = Path(modelrisk_mcp.__file__).parent
+        offenders: list[str] = []
+        for py in pkg_root.rglob("*.py"):
+            text = py.read_text(encoding="utf-8", errors="ignore")
+            if key_str in text:
+                offenders.append(str(py.relative_to(pkg_root)))
+        assert not offenders, (
+            f"Plain activation key found in shipped sources: {offenders}. "
+            "Run scripts/encode_activation_key.py and replace the literal."
+        )
 
 
 class TestVmrsDiscovery:
