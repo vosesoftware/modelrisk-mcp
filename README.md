@@ -1,5 +1,7 @@
 # ModelRisk MCP
 
+<!-- mcp-name: io.github.vosesoftware/modelrisk-mcp -->
+
 **An open Model Context Protocol server for [Vose Software's ModelRisk](https://www.vosesoftware.com).**
 
 Use it with Claude Desktop, Claude Code, Cursor, Zed, or any MCP-compliant client to read, build, fit, and run Monte Carlo risk models in Excel from a conversation.

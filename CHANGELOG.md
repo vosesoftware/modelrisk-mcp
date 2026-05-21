@@ -4,6 +4,20 @@ All notable changes to ModelRisk MCP. Follows [Keep a Changelog](https://keepach
 
 ## [Unreleased]
 
+## [0.3.0-alpha.6] — 2026-05-21
+
+Registers the server with the official [MCP Registry](https://registry.modelcontextprotocol.io/) so users can discover it through the canonical channel (and aggregator clients can index it).
+
+### Added
+
+- `server.json` at repo root — MCP Registry metadata. Server name: `io.github.vosesoftware/modelrisk-mcp`. Declares the PyPI package as the canonical artifact for `transport: stdio` clients.
+- `<!-- mcp-name: io.github.vosesoftware/modelrisk-mcp -->` marker in the README. The MCP Registry verifies ownership by fetching the PyPI package's README (which is the `long_description` baked into the wheel) and looking for this string. It's a Markdown comment so it stays invisible in rendered views.
+- New release-pipeline job `publish-mcp-registry`. Runs after `publish-pypi` (so PyPI has the new README with the marker before the registry verifier looks for it), waits 60s for PyPI's CDN, then authenticates via GitHub OIDC and runs `mcp-publisher publish`. No tokens to manage — same trust model as PyPI trusted publishing.
+
+### Changed
+
+- `docs/community-submission.md` rewritten. The old draft targeted the `modelcontextprotocol/servers` README's "Community Servers" section, which has been retired (upstream now redirects all server submissions to the MCP Registry). New doc walks through the actual automated flow, ownership verification, and emergency-manual-publish procedure.
+
 ## [0.3.0-alpha.5] — 2026-05-21
 
 First publish-ready release. Adds the tornado chart writer, fixes a real `discover_inputs` scoring bug, closes the security verification loop on the obfuscated activation key, and refreshes internal docs to match v0.3 architecture.

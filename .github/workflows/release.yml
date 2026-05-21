@@ -113,6 +113,36 @@ jobs:
       - name: Publish to PyPI
         uses: pypa/gh-action-pypi-publish@release/v1
 
+  publish-mcp-registry:
+    # PyPI must publish first — the registry verifies ownership by
+    # fetching the package's README from PyPI and looking for the
+    # `mcp-name: <server-name>` marker. If PyPI doesn't have the new
+    # version yet the verification fails.
+    needs: publish-pypi
+    runs-on: ubuntu-latest
+    permissions:
+      id-token: write  # for GitHub OIDC against the registry
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install mcp-publisher
+        run: |
+          curl -L "https://github.com/modelcontextprotocol/registry/releases/latest/download/mcp-publisher_linux_amd64.tar.gz" \
+            | tar xz mcp-publisher
+          chmod +x mcp-publisher
+
+      - name: Wait for PyPI to surface the new version
+        # PyPI's CDN can take 30-60s to make a freshly-published
+        # version visible to the registry's verifier. Give it room.
+        run: sleep 60
+
+      - name: Authenticate to the MCP Registry (GitHub OIDC)
+        run: ./mcp-publisher login github-oidc
+
+      - name: Publish server.json to the MCP Registry
+        run: ./mcp-publisher publish
+
   github-release:
     needs: [build-wheel, build-windows-exe]
     runs-on: ubuntu-latest
