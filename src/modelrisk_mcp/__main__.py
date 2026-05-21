@@ -23,7 +23,7 @@ from __future__ import annotations
 import argparse
 import os
 import sys
-from typing import Literal
+from typing import Literal, cast
 
 from modelrisk_mcp.server import mcp
 
@@ -129,6 +129,20 @@ def _run_http(
 
 
 def main(argv: list[str] | None = None) -> None:
+    if argv is None:
+        argv = sys.argv[1:]
+
+    # Subcommand dispatch — we keep the legacy "no subcommand = serve"
+    # behaviour because Claude Desktop configs in the wild say
+    # `"command": "modelrisk-mcp"` with no args. Only intercept the
+    # first arg if it's a recognised non-server subcommand.
+    if argv and argv[0] in {"install", "uninstall"}:
+        return _run_install(
+            cast(Literal["install", "uninstall"], argv[0]), argv[1:]
+        )
+    if argv and argv[0] == "serve":
+        argv = argv[1:]  # `modelrisk-mcp serve --transport=stdio` works too
+
     args = _build_parser().parse_args(argv)
     if args.transport == "stdio":
         _run_stdio()
@@ -140,6 +154,80 @@ def main(argv: list[str] | None = None) -> None:
             mount_path=args.mount_path,
             token=args.token,
         )
+
+
+def _run_install(mode: Literal["install", "uninstall"], argv: list[str]) -> None:
+    """Dispatch the install / uninstall subcommand.
+
+    Kept in `__main__.py` (rather than `install.py`) because it's the
+    CLI argparse glue — `install.py` is import-safe and side-effect-
+    free."""
+    from modelrisk_mcp import install as install_mod
+
+    parser = argparse.ArgumentParser(
+        prog=f"modelrisk-mcp {mode}",
+        description=(
+            "Add the modelrisk MCP server entry to every detected MCP "
+            "client's config (Claude Desktop, Claude Code). Backs up "
+            "existing configs before writing."
+            if mode == "install"
+            else
+            "Remove the modelrisk MCP server entry from every detected "
+            "MCP client's config. Idempotent."
+        ),
+    )
+    parser.add_argument(
+        "--name",
+        default="modelrisk",
+        help=(
+            "Server name under `mcpServers`. Default: 'modelrisk'. Useful "
+            "if you want to register multiple instances (e.g. dev + "
+            "production) side by side."
+        ),
+    )
+    if mode == "install":
+        parser.add_argument(
+            "--force",
+            action="store_true",
+            help=(
+                "Overwrite an existing entry with the same name. Without "
+                "this flag, install skips clients where the name is "
+                "already taken by a different command."
+            ),
+        )
+    args = parser.parse_args(argv)
+
+    try:
+        if mode == "install":
+            results = install_mod.install(
+                server_name=args.name, force=args.force,
+            )
+        else:
+            results = install_mod.uninstall(server_name=args.name)
+    except install_mod.InstallError as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        raise SystemExit(1) from exc
+
+    exit_code = 0
+    for r in results:
+        symbol = {
+            "added":   "+",
+            "updated": "~",
+            "removed": "-",
+            "skipped": ".",
+            "error":   "X",
+        }.get(r.action, "?")
+        print(f"  {symbol} {r.client:<16} {r.action:<8} {r.config_path}")
+        if r.message:
+            print(f"      {r.message}")
+        if r.backup_path:
+            print(f"      backup: {r.backup_path}")
+        if r.action == "error":
+            exit_code = 1
+    if mode == "install":
+        print()
+        print("Restart Claude Desktop / Claude Code to pick up the new server.")
+    raise SystemExit(exit_code)
 
 
 if __name__ == "__main__":

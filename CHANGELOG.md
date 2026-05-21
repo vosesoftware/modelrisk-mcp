@@ -4,6 +4,21 @@ All notable changes to ModelRisk MCP. Follows [Keep a Changelog](https://keepach
 
 ## [Unreleased]
 
+## [0.3.0-alpha.9] — 2026-05-21
+
+End-user install friction drops sharply: a single `modelrisk-mcp install` command now wires the server into every detected MCP client config, with backups and per-client dry-run friendly output. README also documents the zero-install `uvx` route for users who already have `uv` set up.
+
+### Added
+
+- New CLI subcommand: `modelrisk-mcp install`. Detects Claude Desktop (`%APPDATA%\Claude\claude_desktop_config.json`) and Claude Code (`~/.claude/settings.json`), backs up each existing config with a timestamped `.bak.` suffix, merges in the `modelrisk` server entry without clobbering other servers, and reports per-client status. Uses the absolute path to the installed `modelrisk-mcp` exe so the registration works even when `Scripts/` isn't on PATH for Claude's spawned subprocess. Flags: `--name` (custom server key for side-by-side dev/prod installs), `--force` (overwrite an existing entry under the same name).
+- Reverse subcommand: `modelrisk-mcp uninstall`. Removes the entry idempotently — reports `skipped` if it isn't there to begin with.
+- New module `src/modelrisk_mcp/install.py` holds the config-mangling logic; `__main__.py` provides the argparse glue. The legacy "no subcommand → run the server" behaviour is preserved (existing `claude_desktop_config.json` entries like `"command": "modelrisk-mcp"` keep working unchanged).
+- README "Wire into Claude Desktop" section rewritten to present three options ordered by friction: `modelrisk-mcp install` (one command), `uvx modelrisk-mcp` (zero install if you have `uv`), and the hand-edit JSON snippet (last resort).
+
+### Tests
+
+320 unit tests pass (was 303): +17 for the install module covering create-on-missing, merge-into-existing, custom server names, force-overwrite, idempotent uninstall, malformed-JSON refusal, the CLI dispatch back to the install entry point, and the backward-compat "no subcommand defaults to serve" path.
+
 ## [0.3.0-alpha.8] — 2026-05-21
 
 End-to-end integration test passed live for the first time, surfacing one operational caveat now documented.

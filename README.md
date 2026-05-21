@@ -81,20 +81,47 @@ Download `modelrisk-mcp.exe` from [Releases](https://github.com/vosesoftware/mod
 
 ## Wire into Claude Desktop
 
-Open `%APPDATA%\Claude\claude_desktop_config.json` and add:
+Three options, simplest first.
+
+### One-command auto-wire (recommended)
+
+```powershell
+pip install modelrisk-mcp
+modelrisk-mcp install
+```
+
+`modelrisk-mcp install` detects every installed MCP client (Claude Desktop, Claude Code), backs up its existing config, and adds the `modelrisk` server entry — preserving any other servers you already have configured. Output looks like:
+
+```
+  + Claude Desktop   added    C:\Users\you\AppData\Roaming\Claude\claude_desktop_config.json
+      Registered 'modelrisk' -> {'command': 'C:\\...\\Scripts\\modelrisk-mcp.exe'}
+      backup: ...claude_desktop_config.json.bak.20260521-153000
+
+Restart Claude Desktop / Claude Code to pick up the new server.
+```
+
+To undo: `modelrisk-mcp uninstall`. To register a second instance with a different name (e.g. dev and prod side-by-side): `modelrisk-mcp install --name=modelrisk-dev`.
+
+### Zero-install via `uvx` (if you already use `uv`)
+
+If you have [`uv`](https://docs.astral.sh/uv/) installed, you can skip the `pip install` step entirely. Just add to `%APPDATA%\Claude\claude_desktop_config.json` directly:
 
 ```json
 {
   "mcpServers": {
     "modelrisk": {
-      "command": "python",
-      "args": ["-m", "modelrisk_mcp"]
+      "command": "uvx",
+      "args": ["modelrisk-mcp"]
     }
   }
 }
 ```
 
-Or, if you downloaded the `.exe`:
+`uvx` downloads `modelrisk-mcp` into an ephemeral cache on first run and updates automatically when new versions hit PyPI.
+
+### Manual JSON edit (if you must)
+
+Open `%APPDATA%\Claude\claude_desktop_config.json` and add the entry by hand:
 
 ```json
 {
@@ -106,7 +133,11 @@ Or, if you downloaded the `.exe`:
 }
 ```
 
-Restart Claude Desktop. The ModelRisk tools appear under the connections icon. Full guide: [docs/claude-desktop.md](docs/claude-desktop.md). Claude Code setup: [docs/claude-code.md](docs/claude-code.md).
+Use the absolute path to the `.exe` you downloaded from the [latest release](https://github.com/vosesoftware/modelrisk-mcp/releases/latest), or `"command": "python", "args": ["-m", "modelrisk_mcp"]` if you `pip install`ed.
+
+---
+
+After any of the three, **restart Claude Desktop** so it spawns the MCP server subprocess. The ModelRisk tools appear under the connections icon. Full guide: [docs/claude-desktop.md](docs/claude-desktop.md). Claude Code setup: [docs/claude-code.md](docs/claude-code.md).
 
 ---
 
