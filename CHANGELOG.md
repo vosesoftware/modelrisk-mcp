@@ -4,14 +4,31 @@ All notable changes to ModelRisk MCP. Follows [Keep a Changelog](https://keepach
 
 ## [Unreleased]
 
+## [0.3.0-alpha.5] — 2026-05-21
+
+First publish-ready release. Adds the tornado chart writer, fixes a real `discover_inputs` scoring bug, closes the security verification loop on the obfuscated activation key, and refreshes internal docs to match v0.3 architecture.
+
 ### Added
 
-- `scripts/scan_exe_for_key.py` — paranoid scan of a built PyInstaller exe for any encoding of the plain activation key (ASCII decimal, UTF-16 LE, little-endian int64 bytes, big-endian int64 bytes, hex string, composite first4+last4). Exits non-zero on any hit; wired into `release.yml` as a release-blocker before publish so a regression in the obfuscation can't ship.
+- `create_tornado_chart(output_name, workbook_name?, sheet_name?)` — renders a SensitivityRanking as a native Excel BarClustered chart on a new sheet (`Tornado_<output_name>` by default, truncated to Excel's 31-char limit). Sheet has a sorted data table (Input | Spearman correlation | |corr| sort key | Regression coefficient) plus the chart with inverted category axis so the largest-magnitude input is at the top — the tornado convention. Idempotent: existing sheets with the target name are replaced, so it's safe to re-run after each new simulation.
+- `bridge/charts.py::TornadoChartWriter` — first member of the chart-writer family. Future siblings: RiskProfileChartWriter (cumulative + density), HistogramWriter, ScenarioComparisonWriter.
+- `scripts/scan_exe_for_key.py` — paranoid scan of a built PyInstaller exe for every encoding of the plain activation key (ASCII decimal, UTF-16 LE wide string, little-endian int64 bytes, big-endian int64 bytes, 8-byte compact form, hex string both cases, and composite first4+last4 across printable runs). Exits non-zero on any hit; wired into `release.yml` as a release-blocker step before the PyPI upload so a regression in the obfuscation can't ship.
+
+### Fixed
+
+- `discover_inputs` no longer over-scores zero-valued cells. The `value not in (0, 1)` exclusion was guarding only the multiple-of-10 bonus; the multiple-of-100 and multiple-of-1000 bonuses still fired for `value=0` because `0 % n == 0`. Result: a cell holding 0 scored 2.0, identical to a cell holding 100 — flags tied with real scenario assumptions. Also added an explicit `not isinstance(value, bool)` guard so `False` cells don't take the same code path (Python's `isinstance(True, int)` is True).
 
 ### Verified
 
-- v0.3.0-alpha.4 exe (39 MB) builds, boots, answers MCP `initialize` correctly.
-- Scanned every encoding the plain key could theoretically appear in: **zero hits**. Even the obfuscated base85 blobs from `_keymat.py` aren't directly findable in the binary because PyInstaller compresses bundled Python into a PYZ archive — the source-level base85 strings become compiled `.pyc` constants, not preserved as ASCII. A reverse-engineer would need to extract the PYZ, decompress the bytecode, and reimplement the XOR decoder. Casual `strings`-based extraction yields nothing.
+- v0.3.0-alpha.5 builds — wheel (~17 KB), sdist (~140 KB), and PyInstaller exe (~39 MB) — and the exe scan returns clean across every encoding tested. Even the obfuscated base85 blobs from `_keymat.py` aren't directly findable in the binary because PyInstaller compresses bundled Python into a PYZ archive; the source-level base85 strings become compiled `.pyc` bytecode constants. A reverse-engineer would need to extract the PYZ, decompress the bytecode, and reimplement the XOR decoder by hand. Casual `strings`-based extraction yields nothing actionable.
+
+### Docs
+
+- `docs/architecture.md` and `docs/com-surface.md` rewritten to match the v0.3 stack (MRService.dll via ctypes + XLL `Application.Run` for simulation kickoff; no ATL CoClass dispatch).
+
+### Tests
+
+303 unit tests pass (was 290 at alpha.4): +11 chart writer tests + 2 regression tests for the discover_inputs zero-value scoring fix.
 
 ## [0.3.0-alpha.4] — 2026-05-21
 
