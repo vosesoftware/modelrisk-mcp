@@ -217,6 +217,7 @@ More: [docs/architecture.md](docs/architecture.md), [docs/com-surface.md](docs/c
 
 ## Known caveats
 
+- **Launch order: Excel first, MCP server second.** Excel must already be running interactively (started from the Start menu, taskbar, or by double-clicking an `.xlsx`) before the MCP server tries to drive `run_simulation`. When Excel is launched programmatically by an automation client, ModelRisk's XLL skips part of its `xlAutoOpen` initialisation — the XLL functions still register as worksheet UDFs, but the XLL commands (`VoseStartSimulCustom12` etc.) never get added to Excel's `Application.Run` table. The simulation pipeline depends on those commands. If `run_simulation` fails with "macro may not be available", restart Excel by hand and try again.
 - **OneDrive-hosted workbooks**: xlwings can fail to resolve the workbook's full path without `ONEDRIVE_COMMERCIAL_WIN` set. The bridge degrades gracefully — name-based operations still work, and `run_simulation` defaults the `.vmrs` save location to the user's Desktop when the workbook folder can't be resolved.
 - **Active simulation results**: `get_simulation_results` reads from the `.vmrs` file produced by the most recent `run_simulation` call, or the most recent sibling `.vmrs` next to the workbook. Use `set_active_vmrs(path)` or `read_vmrs(path)` to point at a specific file.
 

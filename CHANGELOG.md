@@ -4,6 +4,18 @@ All notable changes to ModelRisk MCP. Follows [Keep a Changelog](https://keepach
 
 ## [Unreleased]
 
+## [0.3.0-alpha.8] — 2026-05-21
+
+End-to-end integration test passed live for the first time, surfacing one operational caveat now documented.
+
+### Verified
+
+- All 7 integration tests in `tests/integration/test_e2e_run_simulation.py` pass against a real Excel + ModelRisk XLL + MRService.dll round-trip (18.85s total). The empirical moments of `Y = 2 * N(0, 1)` over 1000 iterations match the analytic moments inside the documented tolerance bands. All v0.3 read-path tools (`list_vmrs_variables`, `get_samples`, `diagnose_workbook`) work end-to-end.
+
+### Documented
+
+- **Launch order caveat in the README's "Known caveats" section.** Excel must be running interactively (Start menu / taskbar) before the MCP server tries to drive `run_simulation`. When Excel is launched programmatically by an automation client, ModelRisk's XLL skips part of its `xlAutoOpen` initialisation — XLL functions still register as worksheet UDFs (so cell formulas work), but XLL commands (`VoseStartSimulCustom12` etc.) never get added to Excel's `Application.Run` table, and the simulation pipeline depends on those commands. This is a ModelRisk XLL behaviour, not a bug in this server, but the launch-order requirement is now explicit. The integration test discovered this; the earlier real-workbook test by hand worked because Excel had been open interactively.
+
 ## [0.3.0-alpha.7] — 2026-05-21
 
 Hotfix for the MCP Registry publish step that failed in 0.3.0-alpha.6.
