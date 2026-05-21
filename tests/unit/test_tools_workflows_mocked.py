@@ -166,6 +166,64 @@ class TestDiscoverInputs:
         # A2 (=20) outranks A1 (=1) because A2 gets the multiple-of-10 bonus.
         assert out[0]["cell"] == "A2"
 
+    def test_zero_excluded_from_all_round_number_bonuses(
+        self, bridge: MagicMock
+    ) -> None:
+        """Regression: previously `value=0` triggered the % 100 and
+        % 1000 bonuses because 0 % n == 0, so a cell holding 0 scored
+        2.0 — identical to a cell holding 100 or 1000. Flag-shaped
+        values must score lower than real scenario assumptions."""
+        refs = [
+            CellRef(workbook="m.xlsx", sheet="In", cell="A1"),
+            CellRef(workbook="m.xlsx", sheet="In", cell="A2"),
+        ]
+        bridge.find_hard_coded_inputs.return_value = refs
+        bridge.excel.iterate_cells.return_value = iter([
+            CellInfo(
+                ref=CellRef(workbook="m.xlsx", sheet="In", cell="A1"),
+                formula="", value=0, cell_type="number",
+            ),
+            CellInfo(
+                ref=CellRef(workbook="m.xlsx", sheet="In", cell="A2"),
+                formula="", value=100, cell_type="number",
+            ),
+        ])
+        out = workflows.discover_inputs("m.xlsx")
+        # A2 (=100) MUST outrank A1 (=0).
+        a1_entry = next(e for e in out if e["cell"] == "A1")
+        a2_entry = next(e for e in out if e["cell"] == "A2")
+        assert a2_entry["score"] > a1_entry["score"]
+        assert out[0]["cell"] == "A2"
+
+    def test_boolean_values_excluded(
+        self, bridge: MagicMock
+    ) -> None:
+        """`True` / `False` from Excel come through as bools. They're
+        `isinstance(x, int)` true in Python, so without the explicit
+        bool guard a False cell would get the same scoring path as
+        value=0 — wrong by category."""
+        refs = [
+            CellRef(workbook="m.xlsx", sheet="In", cell="A1"),
+            CellRef(workbook="m.xlsx", sheet="In", cell="A2"),
+        ]
+        bridge.find_hard_coded_inputs.return_value = refs
+        bridge.excel.iterate_cells.return_value = iter([
+            CellInfo(
+                ref=CellRef(workbook="m.xlsx", sheet="In", cell="A1"),
+                formula="", value=False, cell_type="boolean",
+            ),
+            CellInfo(
+                ref=CellRef(workbook="m.xlsx", sheet="In", cell="A2"),
+                formula="", value=50, cell_type="number",
+            ),
+        ])
+        out = workflows.discover_inputs("m.xlsx")
+        # Both should be present, A2 should score higher.
+        a1_entry = next(e for e in out if e["cell"] == "A1")
+        a2_entry = next(e for e in out if e["cell"] == "A2")
+        assert a1_entry["score"] == 1.0  # base; no bonuses for booleans
+        assert a2_entry["score"] > a1_entry["score"]
+
 
 # ----------------------------------------------------------------------
 # audit_model — delegates to audit.engine.run_audit

@@ -119,15 +119,20 @@ def discover_inputs(
         info = cells_by_ref.get(f"{ref.sheet}!{ref.cell}")
         value = info.value if info else None
         score = 1.0
-        if isinstance(value, (int, float)):
-            # "Round-ish" numbers (multiples of 10/100/1000) score higher;
-            # exact 0/1 score lower (likely flags).
-            if value not in (0, 1) and value % 10 == 0:
-                score += 0.5
-            if value % 100 == 0:
-                score += 0.5
-            if value % 1000 == 0:
-                score += 0.5
+        if isinstance(value, (int, float)) and not isinstance(value, bool):
+            # "Round-ish" numbers (multiples of 10 / 100 / 1000) score
+            # higher; flag-shaped values (0 / 1) are excluded from ALL
+            # the round-number bonuses, not just multiple-of-10 — the
+            # earlier version checked the exclusion only on the first
+            # bonus, so value=0 still picked up the % 100 == 0 and
+            # % 1000 == 0 bonuses because 0 % n == 0 trivially.
+            if value not in (0, 1):
+                if value % 10 == 0:
+                    score += 0.5
+                if value % 100 == 0:
+                    score += 0.5
+                if value % 1000 == 0:
+                    score += 0.5
         scored.append(
             (
                 score,
