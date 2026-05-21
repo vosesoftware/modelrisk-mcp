@@ -4,6 +4,19 @@ All notable changes to ModelRisk MCP. Follows [Keep a Changelog](https://keepach
 
 ## [Unreleased]
 
+## [0.3.0-alpha.7] — 2026-05-21
+
+Hotfix for the MCP Registry publish step that failed in 0.3.0-alpha.6.
+
+### Fixed
+
+- `server.json::description` now fits the MCP Registry's 100-character limit. 0.3.0-alpha.6 shipped to PyPI cleanly but the registry validator rejected the entry with `expected length <= 100` (the example in the SDK docs happened to be 67 chars so the limit wasn't visible). Trimmed to 94 chars.
+- Adds the v0.3 integration test scaffold (`tests/integration/test_e2e_run_simulation.py`) that landed between the alpha.5 and alpha.6 tags — covered in the changelog now that it's published.
+
+### Added (previously merged on `main`, just not part of an earlier tag)
+
+- `tests/integration/test_e2e_run_simulation.py` — 7 gated tests that exercise the real Excel + ModelRisk XLL + MRService.dll round-trip via a programmatically-created 2-cell workbook. Asserts the empirical moments of `Y = 2 * N(0, 1)` match the analytic ones and that all the v0.3 read-path tools (`list_vmrs_variables`, `get_samples`, `diagnose_workbook`) work end-to-end.
+
 ## [0.3.0-alpha.6] — 2026-05-21
 
 Registers the server with the official [MCP Registry](https://registry.modelcontextprotocol.io/) so users can discover it through the canonical channel (and aggregator clients can index it).

@@ -2,13 +2,13 @@
   "$schema": "https://static.modelcontextprotocol.io/schemas/2025-12-11/server.schema.json",
   "name": "io.github.vosesoftware/modelrisk-mcp",
   "title": "ModelRisk",
-  "description": "Open MCP server for Vose Software's ModelRisk Monte Carlo Excel add-in. Read, build, fit, and run Monte Carlo risk models from a Claude conversation. 35 tools across reading, building, simulation, scenario-sweep, and methodology-audit surfaces.",
-  "version": "0.3.0a6",
+  "description": "Read, build, fit, and run Monte Carlo risk models in Excel through Vose Software's ModelRisk.",
+  "version": "0.3.0a7",
   "packages": [
     {
       "registryType": "pypi",
       "identifier": "modelrisk-mcp",
-      "version": "0.3.0a6",
+      "version": "0.3.0a7",
       "transport": {
         "type": "stdio"
       }
