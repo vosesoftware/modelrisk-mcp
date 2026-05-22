@@ -4,6 +4,16 @@ All notable changes to ModelRisk MCP. Follows [Keep a Changelog](https://keepach
 
 ## [Unreleased]
 
+## [0.3.0-alpha.29] — 2026-05-22
+
+### Polished
+
+- **`generate_executive_summary` markdown formatting.** Previously the per-output stats table used `.3g` format which switches to scientific notation past `1e4` — so a mean of $63,300 came out as `6.33e+04`, unreadable in a corporate context. New `_fmt_num` helper uses thousands-separated decimals with two decimal places for normal-range values (`63,300.00`) and only falls back to `.3g` for extreme magnitudes (≥1e9 or <1e−2 in absolute value) where decimal form would be unreadable. Same treatment for the contingency-vs-deterministic delta columns via `_fmt_signed`, which keeps the explicit +/- sign.
+
+### Tests
+
+404 unit tests pass.
+
 ## [0.3.0-alpha.28] — 2026-05-22
 
 ### Fixed

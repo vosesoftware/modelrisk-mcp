@@ -307,6 +307,38 @@ def diagnose_workbook(
     return out
 
 
+def _fmt_num(value: float) -> str:
+    """Format a number for an executive-audience markdown table.
+
+    Switched from the prior `.3g` (which kicks into scientific
+    notation past 1e4 — e.g. 63300 → '6.33e+04') to a thousands-
+    separated decimal with two decimal places. Falls back to
+    scientific only for extreme magnitudes (>=1e9 or below 1e-2
+    in absolute value) where the decimal form is unreadable.
+
+    Negative values keep their minus sign — this is the unsigned
+    formatter for absolute readouts; `_fmt_signed` is the variant
+    for deltas where a leading +/- is useful."""
+    if value != value:  # NaN
+        return "n/a"
+    abs_v = abs(value)
+    if abs_v >= 1e9 or (0 < abs_v < 1e-2):
+        return f"{value:.3g}"
+    return f"{value:,.2f}"
+
+
+def _fmt_signed(value: float) -> str:
+    """Like `_fmt_num` but always prepends +/-. Used for delta
+    columns (P50-Deterministic etc.) where the sign is the headline
+    information."""
+    if value != value:  # NaN
+        return "n/a"
+    abs_v = abs(value)
+    if abs_v >= 1e9 or (0 < abs_v < 1e-2):
+        return f"{value:+.3g}"
+    return f"{value:+,.2f}"
+
+
 def _format_mtime(path: Path) -> str | None:
     from datetime import datetime
 
@@ -583,13 +615,18 @@ def generate_executive_summary(
     lines.append("")
     lines.append("| Output | Mean | P50 | P5 | P95 | StDev |")
     lines.append("|---|---:|---:|---:|---:|---:|")
+    # alpha.29: switched from `.3g` (scientific notation kicks in
+    # past 1e4) to `_fmt_num` which uses thousands-separated decimal
+    # for normal-range values and only falls back to scientific for
+    # extreme magnitudes. Reads as "63,300" instead of "6.33e+04" —
+    # corporate-summary appropriate.
     for r in results:
         p50 = r.percentiles.get(0.50, r.mean)
         p5 = r.percentiles.get(0.05, r.min)
         p95 = r.percentiles.get(0.95, r.max)
         lines.append(
-            f"| {r.output_name} | {r.mean:.3g} | {p50:.3g} | "
-            f"{p5:.3g} | {p95:.3g} | {r.stdev:.3g} |"
+            f"| {r.output_name} | {_fmt_num(r.mean)} | {_fmt_num(p50)} | "
+            f"{_fmt_num(p5)} | {_fmt_num(p95)} | {_fmt_num(r.stdev)} |"
         )
     if deterministic_values:
         lines.append("")
@@ -606,8 +643,9 @@ def generate_executive_summary(
             p50 = r.percentiles.get(0.50, r.mean)
             p80 = r.percentiles.get(0.80, r.percentiles.get(0.95, r.max))
             lines.append(
-                f"| {r.output_name} | {det:.3g} | {p50:.3g} | "
-                f"{p80:.3g} | {p50 - det:+.3g} | {p80 - det:+.3g} |"
+                f"| {r.output_name} | {_fmt_num(det)} | {_fmt_num(p50)} | "
+                f"{_fmt_num(p80)} | {_fmt_signed(p50 - det)} | "
+                f"{_fmt_signed(p80 - det)} |"
             )
     lines.append("")
     lines.append("## Top sensitivity drivers")
