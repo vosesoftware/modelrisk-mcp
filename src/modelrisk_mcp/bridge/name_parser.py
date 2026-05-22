@@ -55,6 +55,31 @@ class CellRefName:
     cell: str   # A1-style, e.g. "A5" or "AB12"
 
 
+@dataclass(frozen=True)
+class ExpressionName:
+    """The wrapper's first arg was an Excel expression (e.g.
+    `"prefix"&B8&" suffix"` or `CONCAT(B8, B23)` or any arithmetic).
+    The runtime-evaluated name is only knowable after Excel computes
+    the formula — typically only ModelRisk's XLL sees the final
+    string.
+
+    `static_prefix` is whatever literal-string portion we could
+    extract from the start of the expression. Useful for display
+    ("we see the name starts with X"), but MUST NOT be used as the
+    canonical name when comparing against the simulation's .vmrs
+    output registry — the actual name will be longer or different.
+
+    Bug #32 (alpha.31): without this type the parser silently
+    returned a partial-LiteralName for expression-based wrappers
+    like Vose's own sample `VoseOutput("Total net revenue from "
+    &B8&" to "&B23,"$k")`. The bridge then asked MRService to look
+    up the partial name, which never matched the runtime-evaluated
+    name, and `run_simulation`'s post-condition verification
+    false-positively claimed the sim failed."""
+
+    static_prefix: str  # informational only; not a usable lookup key
+
+
 # Matches a cell reference at the start of a string. Captures:
 #   group "sheet"  — sheet name (without quotes), optional
 #   group "col"    — column letters
@@ -81,7 +106,7 @@ _CELL_REF_RE = re.compile(
 
 def extract_vose_first_arg(
     formula: str, wrapper: str,
-) -> LiteralName | CellRefName | None:
+) -> LiteralName | CellRefName | ExpressionName | None:
     """Extract and classify the first argument of a Vose wrapper call.
 
     `wrapper` is the function name without the opening paren, e.g.
@@ -103,7 +128,7 @@ def extract_vose_first_arg(
     if start >= len(formula):
         return None
 
-    # Case 1: string literal
+    # Case 1: string literal (possibly the start of an expression).
     if formula[start] == '"':
         i = start + 1
         buf: list[str] = []
@@ -115,8 +140,20 @@ def extract_vose_first_arg(
                     buf.append('"')
                     i += 2
                     continue
-                # End of string literal
-                return LiteralName(name="".join(buf))
+                # End of string literal at position i. Now check what
+                # follows: a `,` or `)` (possibly after whitespace)
+                # means the literal IS the whole first argument. A
+                # `&`, `+`, or any other operator means the literal
+                # was just the start of an expression — bug #32
+                # surfaced by Vose's own `Inputs Outputs.xlsx` sample
+                # which uses `VoseOutput("prefix "&B8&" suffix",...)`.
+                j = i + 1
+                while j < len(formula) and formula[j] in " \t":
+                    j += 1
+                if j < len(formula) and formula[j] in ",)":
+                    return LiteralName(name="".join(buf))
+                # Expression — return the partial prefix as informational.
+                return ExpressionName(static_prefix="".join(buf))
             buf.append(ch)
             i += 1
         return None  # unterminated string literal
@@ -154,4 +191,9 @@ def extract_vose_first_arg(
     return None
 
 
-__all__ = ["CellRefName", "LiteralName", "extract_vose_first_arg"]
+__all__ = [
+    "CellRefName",
+    "ExpressionName",
+    "LiteralName",
+    "extract_vose_first_arg",
+]

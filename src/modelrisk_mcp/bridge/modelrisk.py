@@ -24,6 +24,7 @@ from modelrisk_mcp.bridge.charts import TornadoChartResult, TornadoChartWriter
 from modelrisk_mcp.bridge.excel import ExcelBridge
 from modelrisk_mcp.bridge.mrservice import MrServiceBridge
 from modelrisk_mcp.bridge.name_parser import (
+    ExpressionName,
     LiteralName,
     extract_vose_first_arg,
 )
@@ -175,17 +176,22 @@ class ModelRiskBridge:
         # Pin the produced file so the existing reader tools find it.
         self._results.set_active_vmrs(result.vmrs_path)
 
-        # Post-condition verification — see _verify_simulation_post_conditions
-        # for the full criteria. If the .vmrs doesn't contain any of the
-        # expected output names, raise. On raise, attempt to restore the
-        # workbook to deterministic state (bug #21) so the user isn't
-        # left with VoseOutput cells stuck on sample values. The restore
-        # is best-effort; if it fails too, the original SimulationFailed
-        # propagates regardless.
-        if expected_output_names:
+        # Post-condition verification. Only check names we can
+        # statically resolve — bug #32 (alpha.31): ExpressionName
+        # outputs like `VoseOutput("prefix "&B8&" suffix")` have
+        # their actual runtime name computed by Excel at simulation
+        # time, so the scanner's partial prefix can't be looked up
+        # in the .vmrs. Including those in the check would
+        # false-positively claim every such workbook failed.
+        verifiable_names = [
+            n for n in expected_output_names
+            if n and not n.endswith("…")  # "…" marker for dynamic
+            and n != "<dynamic name>"
+        ]
+        if verifiable_names:
             try:
                 self._verify_simulation_post_conditions(
-                    result.vmrs_path, expected_output_names,
+                    result.vmrs_path, verifiable_names,
                 )
             except SimulationFailedError:
                 try:
@@ -323,21 +329,29 @@ class ModelRiskBridge:
     ) -> str | None:
         """Extract and resolve a Vose wrapper's name argument.
 
-        Handles both forms:
-          - `VoseInput("WidgetCost")`  → returns "WidgetCost"
-          - `VoseInput(A5)`             → reads A5 and returns its value
-          - `VoseInput(Sheet2!A5)`      → reads Sheet2!A5 and returns its value
+        Handles all three forms:
+          - `VoseInput("WidgetCost")`         → "WidgetCost"
+          - `VoseInput(A5)`                   → reads A5
+          - `VoseInput("prefix "&B8)`         → returns the static
+            prefix (post-alpha.31 ExpressionName). The runtime-
+            computed name is unknown but at least the user sees
+            "Total net revenue from " in `list_outputs` instead of
+            the cell disappearing entirely.
 
         Returns None if the wrapper isn't present, the form is
         unrecognized, or the referenced cell is empty / unreadable.
-        Conservative on purpose — we'd rather skip a cell than
-        confidently mis-attribute a name.
         """
         arg = extract_vose_first_arg(formula, wrapper)
         if arg is None:
             return None
         if isinstance(arg, LiteralName):
             return _unescape_excel_string(arg.name)
+        if isinstance(arg, ExpressionName):
+            # Show the partial prefix so the user knows the cell exists
+            # and roughly what it's called. Marker syntax `prefix…`
+            # makes it obvious this is a dynamic name, not a literal.
+            prefix = _unescape_excel_string(arg.static_prefix).rstrip()
+            return f"{prefix}…" if prefix else "<dynamic name>"
         # CellRefName — read the target cell to get the actual name.
         target_sheet = arg.sheet or same_sheet
         try:

@@ -4,6 +4,29 @@ All notable changes to ModelRisk MCP. Follows [Keep a Changelog](https://keepach
 
 ## [Unreleased]
 
+## [0.3.0-alpha.31] — 2026-05-22
+
+### Fixed
+
+- **Bug #32 — expression-based VoseInput/VoseOutput names false-positive-failed post-condition verification.** Vose's own `Inputs Outputs.xlsx` sample declares its output as `VoseOutput("Total net revenue from "&B8&" to "&B23,"$k")` — the name is an Excel expression, not a static literal. The runtime-evaluated name (e.g. `"Total net revenue from 2020 to 2027"`) is only knowable after Excel computes the formula at simulation time. Our `name_parser` was returning the literal prefix as a `LiteralName` (since it stopped at the closing quote), so:
+  - The bridge's `expected_output_names` contained the partial prefix.
+  - `run_simulation` passed it to the XLL, which couldn't match it against the actual VoseOutput cell.
+  - Post-condition verification looked it up in the produced .vmrs, didn't find it, and raised `SimulationFailedError` — claiming the sim's post-phase had crashed when in fact the only issue was the name-resolution mismatch.
+
+  Fix:
+  - New `ExpressionName` type in `name_parser.py` for first-args that turn out to be expressions (literal followed by `&`, `+`, etc., rather than a closing `,` or `)`).
+  - The parser detects this by checking what follows the closing quote.
+  - `_resolve_vose_name` returns the partial prefix marked with a `…` ellipsis so `list_modelrisk_outputs` still surfaces the cell with an informational name (`"Total net revenue from …"`) instead of dropping it.
+  - Post-condition verification filters out `…`-marked names — we can't statically verify them, so we don't try, rather than failing loudly.
+
+### Why this matters
+
+Workbooks that build output names from cell content are a real pattern (year-range labels, scenario-specific outputs, anything dynamic). Before alpha.31 every one of those workbooks looked broken to the bridge. The deeper fix — actually evaluating the Excel expression to get the runtime name and registering THAT with the XLL — is a separate larger investigation; this release is the honesty improvement: don't claim failure when the sim ran fine.
+
+### Tests
+
+408 unit tests pass (+4 in `test_name_parser.py::TestExpressionForm` covering the Vose-sample literal-concat-cellref case, simple `"prefix"&A1`, two-arg literal-with-units, and whitespace tolerance around the closing quote).
+
 ## [0.3.0-alpha.30] — 2026-05-22
 
 ### Fixed

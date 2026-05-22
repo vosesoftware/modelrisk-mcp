@@ -13,6 +13,7 @@ import pytest
 
 from modelrisk_mcp.bridge.name_parser import (
     CellRefName,
+    ExpressionName,
     LiteralName,
     extract_vose_first_arg,
 )
@@ -176,6 +177,53 @@ class TestWrapperMatching:
         )
         assert isinstance(result, LiteralName)
         assert result.name == "X"
+
+
+# ----------------------------------------------------------------------
+# Expression form — bug #32, surfaced by Vose's own Inputs Outputs sample
+# ----------------------------------------------------------------------
+
+
+class TestExpressionForm:
+    """Vose's `Inputs Outputs.xlsx` has outputs declared as expressions:
+    `VoseOutput("Total net revenue from "&B8&" to "&B23,"$k")`. The
+    parser must recognise these as expression-form (not literal) so
+    downstream code knows not to use the partial prefix as a lookup
+    key against the .vmrs's runtime-evaluated name."""
+
+    def test_literal_concat_cellref_is_expression(self) -> None:
+        result = extract_vose_first_arg(
+            '=VoseOutput("Total net revenue from "&B8&" to "&B23,"$k")',
+            "VoseOutput",
+        )
+        assert isinstance(result, ExpressionName)
+        assert result.static_prefix == "Total net revenue from "
+
+    def test_literal_concat_simple(self) -> None:
+        result = extract_vose_first_arg(
+            '=VoseInput("prefix"&A1)', "VoseInput",
+        )
+        assert isinstance(result, ExpressionName)
+        assert result.static_prefix == "prefix"
+
+    def test_literal_with_units_arg_is_still_literal(self) -> None:
+        """`VoseOutput("name", "$k")` is two args, first is a clean
+        literal — NOT an expression. Make sure the comma-vs-ampersand
+        distinction is sharp."""
+        result = extract_vose_first_arg(
+            '=VoseOutput("RealName","$k")', "VoseOutput",
+        )
+        assert isinstance(result, LiteralName)
+        assert result.name == "RealName"
+
+    def test_literal_with_trailing_whitespace_before_close(self) -> None:
+        """Whitespace between the closing quote and the comma/paren
+        must still classify as literal."""
+        result = extract_vose_first_arg(
+            '=VoseOutput("OK"   , "$k")', "VoseOutput",
+        )
+        assert isinstance(result, LiteralName)
+        assert result.name == "OK"
 
 
 _ = pytest
