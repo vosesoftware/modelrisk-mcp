@@ -4,6 +4,25 @@ All notable changes to ModelRisk MCP. Follows [Keep a Changelog](https://keepach
 
 ## [Unreleased]
 
+## [0.3.0-alpha.30] — 2026-05-22
+
+### Fixed
+
+- **Bug #31 — `samples<=0` passed to `bridge.run_simulation` reached the XLL and triggered an opaque C++ exception** (`OLE error 0xe06d7363`). The MCP tool layer's Pydantic validation enforces `ge=1`, but direct callers (integration tests, automation scripts, future Python clients) bypassed that. Surfaced by the round-3 input-validation probe. Fix: defensive sanity check at the bridge boundary (`samples >= 1` and a 10M soft cap) so every code path produces a clear actionable error before invoking ModelRisk's XLL. The message names the offending value and explains why we're rejecting it.
+
+### Verified end-to-end (no fixes needed)
+
+Round 3 confirmed:
+- **MCP tool envelope shapes**: all `list_*` and `find_*` tools return the alpha.17 `{noun: [...], count: N}` envelope correctly. Brand prefix on all 40 tool descriptions.
+- **Distribution catalogue breadth**: 9 of 11 sampled families (Lognormal, Uniform, Triangle, Beta, Gamma, Weibull, Poisson, Binomial, Bernoulli) round-trip through `insert_distribution`. The other two failures were test-script errors (`VoseExpon`'s param is `beta` not `mean`; the discrete uniform is `VoseDiscreteU`, not `VoseDiscreteUniform`).
+- **MCP resources**: 5 resources registered (`modelrisk://audit-rules`, `/distributions`, `/functions`, `/methodology`, `/workbook/current`) and readable.
+- **50K-iteration stress**: simulation completes in 18.4s wall-clock; all 50K samples readable in 0.13s.
+- **End-to-end convert workflow** (separate run): non-MR workbook → `discover_inputs` → `propose_distributions_for_inputs` → `replace_constant_with_distribution` → `wrap_with_output` → `run_simulation` → `get_simulation_results` → `build_executive_report`. Produced real randomness (mean $34.9M, stdev $537) on a fully-converted noMR model.
+
+### Tests
+
+404 unit tests pass.
+
 ## [0.3.0-alpha.29] — 2026-05-22
 
 ### Polished

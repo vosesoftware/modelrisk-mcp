@@ -165,6 +165,16 @@ class SimulationController:
         The call blocks until the simulation completes — that's how
         `VoseStartSimulCustom12` is implemented (synchronous Application.Run).
 
+        Bug #31 (alpha.30): defensive sanity check on `samples`.
+        When a non-MCP caller (a direct script, an integration test,
+        future Python clients) passes `samples <= 0`, the value used
+        to flow straight through to the XLL which would throw a
+        C++ exception (OLE error 0xe06d7363). The user saw
+        "Application.Run failed" — opaque. The MCP tool layer's
+        Pydantic field validates `ge=1` but the bridge had no such
+        guard. Adding it here ensures every caller path produces a
+        clear message before hitting the XLL.
+
         `output_names`, when supplied, is threaded into the XLL command's
         options payload as `[CntNames]:N` + `[name0]:...` etc. The
         original C++ header comment claims "empty → all outputs" but
@@ -180,6 +190,22 @@ class SimulationController:
         Raises SimulationFailedError if the file doesn't appear after
         the save call returns.
         """
+        if samples < 1:
+            raise SimulationFailedError(
+                f"samples must be >= 1; got {samples}. ModelRisk's "
+                f"XLL command would throw an opaque C++ exception "
+                f"otherwise."
+            )
+        if samples > 10_000_000:
+            # Soft cap: nothing in the bridge enforces this, but
+            # production users rarely want more than a few million
+            # iterations and the .vmrs file gets huge. Reject with
+            # a clear message rather than letting MRService thrash.
+            raise SimulationFailedError(
+                f"samples={samples} exceeds the 10M soft cap. "
+                f"If you genuinely need more, run multiple sims and "
+                f"aggregate."
+            )
         wb_info = self._resolve_workbook(workbook_name)
         opts = SimulationOptions(
             samples=samples,
