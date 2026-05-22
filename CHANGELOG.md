@@ -4,6 +4,22 @@ All notable changes to ModelRisk MCP. Follows [Keep a Changelog](https://keepach
 
 ## [Unreleased]
 
+## [0.3.0-alpha.32] — 2026-05-22
+
+### Fixed
+
+- **Bug #33 — drop the alpha.18 `output_names` pre-populate.** Round-7 testing revealed the alpha.18 hypothesis was wrong. The `output_names` payload to `VoseStartSimulCustom12` is a **filter**, not an enable list — pass empty and the XLL auto-scans the workbook and registers every VoseOutput; pass a list and only matching outputs get registered. So alpha.18, which pre-populated names from the workbook scanner, was strictly worse for any workbook with expression-named outputs (like Vose's own `Inputs Outputs.xlsx` sample): the scanner-extracted prefix never matched the runtime-evaluated name, and NOTHING got registered.
+
+  The alpha.17-era symptom that motivated alpha.18 ("sims completing without registering outputs") was almost certainly bug #29 — XLL commands not callable when Excel was started programmatically — which we fixed properly in alpha.27 via `Application.RegisterXLL`. With #29 fixed, the XLL's auto-scan works correctly. Removing alpha.18's pre-populate makes expression-named outputs register too.
+
+### Verified
+
+Live test on the Vose `Inputs Outputs.xlsx` sample: with empty `output_names`, the .vmrs registered `Period 1` (var_id=1) — variables now register where they didn't before. On the NPV workbook: `NPV (10%)`, `Market growth`, `Sales Price`, and `Conservatives get in? (1=yes)` all resolved as before. Both styles of workbook keep working; the expression-named case is now fixed.
+
+### Tests
+
+408 unit tests pass. Renamed `test_run_simulation_passes_voseoutput_names_to_xll` → `test_run_simulation_does_not_filter_xll_outputs` (sentinel: the bridge MUST NOT pre-filter the XLL).
+
 ## [0.3.0-alpha.31] — 2026-05-22
 
 ### Fixed

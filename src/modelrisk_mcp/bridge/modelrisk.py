@@ -158,31 +158,47 @@ class ModelRiskBridge:
             # check downstream is still in force.
             pass
 
-        # alpha.18 experiment: pre-populate output_names into the XLL
-        # command's options payload. The C++ header comment says
-        # "empty → all outputs" but real-world testing showed sims
-        # completing without registering any outputs in the .vmrs
-        # unless the ribbon path was used. Working hypothesis: the
-        # ribbon populates this list and the XLL command actually
-        # requires it. Re-using `expected_output_names` (already
-        # gathered for post-condition verification above) is free.
+        # Bug #33 (alpha.32): pass empty `output_names` to the XLL
+        # command and let it scan the workbook itself.
+        #
+        # The alpha.18 fix had pre-populated this list from
+        # `list_outputs()` based on the hypothesis that the XLL
+        # needed names to register outputs. Round-7 testing on the
+        # `Inputs Outputs.xlsx` Vose sample revealed that hypothesis
+        # was wrong: the XLL uses `output_names` as a *filter* — pass
+        # empty → register every VoseOutput; pass a list → register
+        # only those that match the list. So when alpha.18 passed
+        # the scanner's partial prefix for an expression-based name
+        # like `VoseOutput("prefix "&B8&" suffix")`, the runtime-
+        # evaluated name didn't match the prefix and NOTHING got
+        # registered — strictly worse than the empty-filter
+        # behaviour.
+        #
+        # What we believed broke originally (alpha.17 era) was almost
+        # certainly bug #29 (XLL commands not registered), which
+        # we fixed properly in alpha.27 via `Application.RegisterXLL`.
+        # With #29 fixed, the XLL's auto-scan behaviour works
+        # correctly. Dropping the alpha.18 pre-populate makes
+        # expression-named outputs register too.
         result = self._simulation.run_simulation(
             workbook_name=workbook,
             samples=samples,
             seed=seed,
             save_to=save_to,
-            output_names=tuple(expected_output_names),
         )
         # Pin the produced file so the existing reader tools find it.
         self._results.set_active_vmrs(result.vmrs_path)
 
         # Post-condition verification. Only check names we can
-        # statically resolve — bug #32 (alpha.31): ExpressionName
-        # outputs like `VoseOutput("prefix "&B8&" suffix")` have
-        # their actual runtime name computed by Excel at simulation
-        # time, so the scanner's partial prefix can't be looked up
-        # in the .vmrs. Including those in the check would
-        # false-positively claim every such workbook failed.
+        # statically resolve — ExpressionName outputs (alpha.31)
+        # have a runtime-computed name we can't predict, so we
+        # filter them out of the check. With the alpha.32 XLL-scan
+        # change above, expression outputs DO register in the
+        # .vmrs — but we still can't look them up by name from the
+        # workbook side, so we trust the bridge-side absence of
+        # post-condition error to mean "expression outputs are
+        # there too, the user just needs to use list_vmrs_variables
+        # to discover their runtime names".
         verifiable_names = [
             n for n in expected_output_names
             if n and not n.endswith("…")  # "…" marker for dynamic
