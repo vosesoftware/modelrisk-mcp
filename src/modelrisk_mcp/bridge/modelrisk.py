@@ -393,7 +393,15 @@ class ModelRiskBridge:
         formula_cell_count = 0
         numeric_cell_count = 0
         for cell in self._excel.iterate_cells(workbook):
-            if cell.formula:
+            # Bug #27: only count cells whose .Formula starts with `=`
+            # as actual formulas. xlwings returns the text content in
+            # .Formula for text cells, which would otherwise count as
+            # formulas (and shadow the numeric_cell_count for the
+            # cells that hold numbers).
+            is_real_formula = (
+                bool(cell.formula) and cell.formula.lstrip().startswith("=")
+            )
+            if is_real_formula:
                 formula_cell_count += 1
                 # Use the parser so cell-ref name forms count too.
                 if extract_vose_first_arg(cell.formula, "VoseInput") is not None:
@@ -418,10 +426,23 @@ class ModelRiskBridge:
         )
 
     def find_hard_coded_inputs(self, workbook: str) -> list[CellRef]:
+        """Locate numeric cells referenced by at least one formula.
+
+        Bug #27 (alpha.25): xlwings returns the cell's text content
+        in `.Formula` even for non-formula cells — so a cell holding
+        the label "Total Revenue" comes back as formula="Total
+        Revenue", which the previous `if cell.formula:` check
+        misclassified as a formula. On models with text labels every
+        cell got bucketed as formula, no numeric inputs were
+        candidates, and the function returned [] — silently broken
+        on exactly the workbooks where it's most useful (the
+        "convert this Excel model" workflow). Fix: a cell counts as
+        a formula only when its `.Formula` starts with `=`.
+        """
         numeric_cells: dict[str, CellInfo] = {}
         formula_cells: list[CellInfo] = []
         for cell in self._excel.iterate_cells(workbook):
-            if cell.formula:
+            if cell.formula and cell.formula.lstrip().startswith("="):
                 formula_cells.append(cell)
             elif isinstance(cell.value, (int, float)) and not isinstance(
                 cell.value, bool

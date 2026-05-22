@@ -4,6 +4,19 @@ All notable changes to ModelRisk MCP. Follows [Keep a Changelog](https://keepach
 
 ## [Unreleased]
 
+## [0.3.0-alpha.25] — 2026-05-22
+
+Two bugs surfaced by the autonomous end-to-end test pass against a model with extensive text labels.
+
+### Fixed
+
+- **Bug #26 — audit's VOSE-002 / VOSE-005 / VOSE-004 / VOSE-010 detectors false-positive on cell-ref-form VoseInput / VoseOutput wrappers.** The detectors used a regex (`_VOSE_INPUT_RE`) that only matched the string-literal form `VoseInput("Name")`. Workbooks using the cell-reference form `VoseInput(B20)` — which is what most real ModelRisk models use — triggered "not wrapped" warnings on every distribution cell. Same root cause as bug #13 (alpha.14), but the audit didn't get the parser-based check at the time. Fix: detectors now use `extract_vose_first_arg()` (the same function the scanner uses), so cell-ref-form wrappers are recognised consistently. Live test against the NPV workbook: audit findings dropped from 34 (all false-positive VOSE-002/005) to 0 on the same model.
+- **Bug #27 — `_classify_cell` and downstream tools misclassified text cells as formulas.** xlwings' `Range.Formula` accessor returns the cell's text content even for non-formula cells — so a cell holding the label `"Total Revenue"` came back with `formula="Total Revenue"`, which the prior check `if formula:` flagged as a formula. Two consequences: `formula_cell_count` was inflated, and `find_hard_coded_inputs` returned `[]` on any model with text labels (every cell got bucketed as "formula", no numeric inputs were candidates). The "convert this Excel model to ModelRisk" workflow was silently broken on exactly the workbooks where it's most useful. Fix: a cell counts as a formula only when its `.Formula` starts with `=`. Applied at three sites: `_classify_cell`, `ModelRiskBridge.get_workbook_summary`, `ModelRiskBridge.find_hard_coded_inputs`.
+
+### Tests
+
+402 unit tests pass. The bug-#26 regression is covered by the live E2E pass (the broken audit was the symptom — same workbook now reports 0 false positives). Bug-#27 likewise: `find_hard_coded_inputs` against the non-MR workbook now returns candidate numeric cells instead of empty.
+
 ## [0.3.0-alpha.24] — 2026-05-22
 
 Bug surfaced by the autonomous end-to-end test pass: `save_workbook_as` was renaming the open workbook in place instead of saving a copy.

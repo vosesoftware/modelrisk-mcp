@@ -16,11 +16,36 @@ import re
 from collections.abc import Callable, Iterable
 
 from modelrisk_mcp.audit.engine import RuleContext
+from modelrisk_mcp.bridge.name_parser import extract_vose_first_arg
 from modelrisk_mcp.safety import extract_call_heads
 from modelrisk_mcp.schemas.results import AuditFinding
 from modelrisk_mcp.schemas.workbook import CellRef
 
 _VOSE_NAME_RE = re.compile(r"\bVose[A-Za-z0-9_]+")
+
+# Bug #26 (alpha.25): replaced regex-only matchers with calls to
+# `extract_vose_first_arg`. The old `_VOSE_INPUT_RE` only matched the
+# string-literal form `VoseInput("Name")` — false-positive warnings
+# fired on every distribution cell in workbooks using the cell-ref
+# form `VoseInput(Cell)`, which is what most real ModelRisk models
+# use. Same root cause as bug #13; the audit just didn't get updated
+# when the scanner did.
+
+
+def _has_input_wrapper(formula: str) -> bool:
+    """True if the formula contains a VoseInput(...) wrapper in any
+    form (string-literal name OR cell-reference name)."""
+    return extract_vose_first_arg(formula, "VoseInput") is not None
+
+
+def _has_output_wrapper(formula: str) -> bool:
+    """True if the formula contains a VoseOutput(...) wrapper in any
+    form. Mirror of `_has_input_wrapper`."""
+    return extract_vose_first_arg(formula, "VoseOutput") is not None
+
+
+# Legacy regexes kept around for the rules that genuinely want the
+# string-literal form (e.g. VOSE-007 checking for `VoseOutput("")`).
 _VOSE_INPUT_RE = re.compile(r'VoseInput\(\s*"[^"]*"\s*\)')
 _VOSE_OUTPUT_RE = re.compile(r'VoseOutput\(\s*"[^"]*"\s*\)')
 
@@ -85,7 +110,8 @@ def detect_distribution_without_input_wrapper(
     for cell in ctx.cells:
         if not cell.formula:
             continue
-        if _VOSE_INPUT_RE.search(cell.formula):
+        # Bug #26 (alpha.25): also detect cell-ref-form VoseInput.
+        if _has_input_wrapper(cell.formula):
             continue
         # Skip object-category functions: they're meant to be passed to
         # VoseAggregateMC / VoseRiskEvent etc., not wrapped directly.
@@ -142,8 +168,9 @@ def detect_output_no_distribution_reference(
     distribution-bearing cell transitively (best-effort, no full graph
     walk; we just look for any other Vose* call in the workbook that the
     output formula could plausibly reach via a cell reference)."""
+    # Bug #26: also recognise cell-ref-form VoseOutput wrappers.
     output_cells = [
-        c for c in ctx.cells if c.formula and _VOSE_OUTPUT_RE.search(c.formula)
+        c for c in ctx.cells if c.formula and _has_output_wrapper(c.formula)
     ]
     if not output_cells:
         return
@@ -199,7 +226,8 @@ def detect_arithmetic_before_input_wrapper(
     for cell in ctx.cells:
         if not cell.formula:
             continue
-        if _VOSE_INPUT_RE.search(cell.formula):
+        # Bug #26 (alpha.25): also detect cell-ref-form VoseInput.
+        if _has_input_wrapper(cell.formula):
             continue
         body = cell.formula.lstrip("=").lstrip()
         # Heuristic: contains arithmetic operator AND a Vose distribution call.
@@ -345,7 +373,8 @@ def detect_input_wrapper_without_distribution(
     for cell in ctx.cells:
         if not cell.formula or "VoseInput" not in cell.formula:
             continue
-        if not _VOSE_INPUT_RE.search(cell.formula):
+        # Bug #26: cell-ref form counts too.
+        if not _has_input_wrapper(cell.formula):
             continue
         head = _first_distribution_head(cell.formula, ctx)
         if head is not None:

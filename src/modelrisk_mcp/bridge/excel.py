@@ -574,7 +574,21 @@ class ExcelBridge:
 
 
 def _classify_cell(formula: str, value: Any) -> str:
-    if formula:
+    """Classify a cell by what it actually contains.
+
+    Bug #27 (alpha.25): xlwings' `Range.Formula` accessor returns the
+    cell's text content even for non-formula cells (e.g. a cell
+    containing the label "Total Revenue" comes back with
+    formula="Total Revenue"). The prior check `if formula:` then
+    flagged every text and numeric cell as a formula. That inflated
+    `formula_cell_count` and silently broke `find_hard_coded_inputs`
+    on any workbook with text labels — including the typical
+    "convert this Excel model to ModelRisk" use case.
+
+    Fix: a cell only counts as a formula if its `.Formula` actually
+    starts with `=`. Everything else gets classified by value type.
+    """
+    if formula and formula.lstrip().startswith("="):
         return "formula"
     if value is None or value == "":
         return "empty"
