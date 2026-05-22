@@ -12,7 +12,7 @@ COM.
 
 from __future__ import annotations
 
-from typing import Annotated
+from typing import Annotated, Any
 
 from pydantic import Field
 
@@ -254,8 +254,19 @@ def get_samples(
         str | None,
         Field(description="Workbook name. Omit for the active workbook."),
     ] = None,
-) -> list[float]:
-    return get_bridge().get_samples(output_name, workbook_name, max_n=max_n)
+) -> dict[str, Any]:
+    # NOTE: wrapping in a dict (vs returning the bare list) is deliberate.
+    # FastMCP serializes a bare `list[float]` return type as one MCP text
+    # content-block per element, which for 10 000 samples produced
+    # ~30x the JSON size and forced every consumer to unwrap
+    # `[{"type":"text","text":"<float>"}, ...]`. Returning a dict gives
+    # FastMCP one structured payload to JSON-encode in a single block.
+    samples = get_bridge().get_samples(output_name, workbook_name, max_n=max_n)
+    return {
+        "output_name": output_name,
+        "sample_count": len(samples),
+        "samples": list(samples),
+    }
 
 
 @mcp.tool(

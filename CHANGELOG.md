@@ -4,6 +4,23 @@ All notable changes to ModelRisk MCP. Follows [Keep a Changelog](https://keepach
 
 ## [Unreleased]
 
+## [0.3.0-alpha.14] — 2026-05-22
+
+Two real bridge bugs found in a Claude Desktop end-user testing session. The first one is the critical fix — it unblocks roughly half of the read-side tool surface for workbooks that use the cell-reference name form (the most common pattern in production ModelRisk models).
+
+### Fixed
+
+- **CRITICAL: workbook scanner now recognises `VoseInput(Cell!Ref)` and `VoseOutput(Cell!Ref)` name forms.** Previous versions only matched the string-literal form `VoseInput("WidgetCost")`. But ModelRisk documents and most real workbooks use the cell-reference form — labels live in column headers and `VoseInput(A5)` / `VoseInput(Sheet1!A5)` pulls the name from there. The scanner missed every one of these, so `list_modelrisk_inputs`, `list_modelrisk_outputs`, `list_distributions`, and `get_workbook_summary` returned empty lists on these workbooks. That empty list then cascaded: `get_sensitivity_ranking`, `build_drivers_report`, `diagnose_workbook`, `audit_model` — all empty too.
+  - New `bridge/name_parser.py` exposes `extract_vose_first_arg(formula, wrapper)` which classifies the first argument as `LiteralName` (string literal) or `CellRefName(sheet, cell)` (cell reference, with optional sheet qualifier). Supports same-sheet refs (`A5`), absolute refs (`$A$5`), sheet-qualified (`Sheet1!A5`), and quoted-sheet (`'Sheet with spaces'!B12`).
+  - New `_resolve_vose_name` helper on `ModelRiskBridge` resolves a `CellRefName` to its actual name by reading the target cell via `ExcelBridge.get_cell`.
+  - Wired through all four affected methods. 18 new tests in `test_name_parser.py` cover literal/cell-ref/unrecognised forms plus exact-wrapper-name matching.
+  - Regression sentinel: `AB123` no longer parses as `sheet="A", col="B", row="123"` — the sheet-prefix branch of the regex now requires the `!` separator, so multi-letter columns are unambiguous.
+- **`get_samples` no longer returns each sample wrapped in an MCP content-block dict.** FastMCP serialises bare `list[T]` returns by expanding each element into its own `{"type":"text","text":"<value>"}` content block, which made the response unusable to LLMs (they saw N opaque text blobs instead of one array of floats). Return type changed to a single dict envelope `{"output_name": ..., "sample_count": N, "samples": [...]}` so FastMCP sees one structured payload and serialises it once.
+
+### Where it slots in
+
+These two fixes together restore most of the read-side tool surface against real workbooks. Before alpha.14, a user with a typical cell-ref-named ModelRisk model would see "no inputs found" everywhere; after alpha.14 the scanner finds them, the sensitivity tools can rank them, and the report builders can describe them.
+
 ## [0.3.0-alpha.13] — 2026-05-22
 
 A single-sheet uncertainty-drivers report — narrower than the executive dashboard, but with auto-generated narrative that explains what the tornado chart actually means.

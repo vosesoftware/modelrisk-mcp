@@ -373,12 +373,18 @@ class TestGetSamples:
             "profit", "m.xlsx", max_n=500
         )
 
-    def test_get_samples_returns_list_of_floats(
+    def test_get_samples_returns_structured_envelope(
         self, bridge: MagicMock
     ) -> None:
+        """As of alpha.14 the tool wraps the sample list in a dict so
+        FastMCP serializes it as a single JSON object rather than
+        exploding each float into its own MCP content block."""
         bridge.get_samples.return_value = [1.5, 2.5, 3.5]
         result = reading.get_samples("profit")
-        assert result == [1.5, 2.5, 3.5]
+        assert isinstance(result, dict)
+        assert result["output_name"] == "profit"
+        assert result["sample_count"] == 3
+        assert result["samples"] == [1.5, 2.5, 3.5]
 
 
 # Quieten unused-imports for types referenced via fixtures only.

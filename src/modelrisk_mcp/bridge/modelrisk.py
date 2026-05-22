@@ -23,6 +23,10 @@ from modelrisk_mcp.bridge.catalogue import FunctionCatalogue, load_catalogue
 from modelrisk_mcp.bridge.charts import TornadoChartResult, TornadoChartWriter
 from modelrisk_mcp.bridge.excel import ExcelBridge
 from modelrisk_mcp.bridge.mrservice import MrServiceBridge
+from modelrisk_mcp.bridge.name_parser import (
+    LiteralName,
+    extract_vose_first_arg,
+)
 from modelrisk_mcp.bridge.reports import (
     DriversReportBuilder,
     DriversReportResult,
@@ -165,13 +169,15 @@ class ModelRiskBridge:
         for cell in self._excel.iterate_cells(workbook):
             if not cell.formula:
                 continue
-            m = _VOSE_INPUT_RE.search(cell.formula)
-            if not m:
+            name = self._resolve_vose_name(
+                cell.formula, "VoseInput", workbook, cell.ref.sheet,
+            )
+            if name is None:
                 continue
             result.append(
                 ModelRiskInput(
                     ref=cell.ref,
-                    name=_unescape_excel_string(m.group(1)),
+                    name=name,
                     formula=cell.formula,
                     current_value=_coerce_displayable(cell.value),
                 )
@@ -183,18 +189,56 @@ class ModelRiskBridge:
         for cell in self._excel.iterate_cells(workbook):
             if not cell.formula:
                 continue
-            m = _VOSE_OUTPUT_RE.search(cell.formula)
-            if not m:
+            name = self._resolve_vose_name(
+                cell.formula, "VoseOutput", workbook, cell.ref.sheet,
+            )
+            if name is None:
                 continue
             result.append(
                 ModelRiskOutput(
                     ref=cell.ref,
-                    name=_unescape_excel_string(m.group(1)),
+                    name=name,
                     formula=cell.formula,
                     current_value=_coerce_displayable(cell.value),
                 )
             )
         return result
+
+    def _resolve_vose_name(
+        self,
+        formula: str,
+        wrapper: str,
+        workbook: str,
+        same_sheet: str,
+    ) -> str | None:
+        """Extract and resolve a Vose wrapper's name argument.
+
+        Handles both forms:
+          - `VoseInput("WidgetCost")`  → returns "WidgetCost"
+          - `VoseInput(A5)`             → reads A5 and returns its value
+          - `VoseInput(Sheet2!A5)`      → reads Sheet2!A5 and returns its value
+
+        Returns None if the wrapper isn't present, the form is
+        unrecognized, or the referenced cell is empty / unreadable.
+        Conservative on purpose — we'd rather skip a cell than
+        confidently mis-attribute a name.
+        """
+        arg = extract_vose_first_arg(formula, wrapper)
+        if arg is None:
+            return None
+        if isinstance(arg, LiteralName):
+            return _unescape_excel_string(arg.name)
+        # CellRefName — read the target cell to get the actual name.
+        target_sheet = arg.sheet or same_sheet
+        try:
+            target = self._excel.get_cell(workbook, target_sheet, arg.cell)
+        except Exception:
+            return None
+        value = target.value
+        if value is None:
+            return None
+        text = str(value).strip()
+        return text or None
 
     def list_distributions(
         self, workbook: str, *, sheet: str | None = None
@@ -206,13 +250,22 @@ class ModelRiskBridge:
             dist_head = self._first_distribution_head(cell.formula)
             if dist_head is None:
                 continue
+            # Wrapper-presence flags now cover both literal AND cell-ref
+            # name forms — we don't need to resolve the name here, just
+            # know whether the wrapper exists in the formula.
+            has_input = (
+                extract_vose_first_arg(cell.formula, "VoseInput") is not None
+            )
+            has_output = (
+                extract_vose_first_arg(cell.formula, "VoseOutput") is not None
+            )
             result.append(
                 DistributionCell(
                     ref=cell.ref,
                     function_name=dist_head,
                     parameters=self._extract_top_level_args(cell.formula, dist_head),
-                    has_input_wrapper=bool(_VOSE_INPUT_RE.search(cell.formula)),
-                    has_output_wrapper=bool(_VOSE_OUTPUT_RE.search(cell.formula)),
+                    has_input_wrapper=has_input,
+                    has_output_wrapper=has_output,
                     formula=cell.formula,
                 )
             )
@@ -232,9 +285,10 @@ class ModelRiskBridge:
         for cell in self._excel.iterate_cells(workbook):
             if cell.formula:
                 formula_cell_count += 1
-                if _VOSE_INPUT_RE.search(cell.formula):
+                # Use the parser so cell-ref name forms count too.
+                if extract_vose_first_arg(cell.formula, "VoseInput") is not None:
                     input_count += 1
-                if _VOSE_OUTPUT_RE.search(cell.formula):
+                if extract_vose_first_arg(cell.formula, "VoseOutput") is not None:
                     output_count += 1
                 if self._first_distribution_head(cell.formula) is not None:
                     distribution_count += 1
