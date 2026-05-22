@@ -4,6 +4,16 @@ All notable changes to ModelRisk MCP. Follows [Keep a Changelog](https://keepach
 
 ## [Unreleased]
 
+## [0.3.0-alpha.28] — 2026-05-22
+
+### Fixed
+
+- **Bug #30 — `diagnose_workbook` mixed data sources when called with an explicit `workbook_name`.** Prior versions always assigned `active_workbook = <Excel-active book's name>` and `workbook_path = <active book's path>`, regardless of which workbook the caller asked to diagnose. Result: calling `diagnose_workbook("foo.xlsx")` while `bar.xlsx` was active in Excel reported `active_workbook="bar.xlsx"` and `workbook_path=<bar's path>` alongside foo's input/output counts — misleading. Worse, the downstream `.vmrs` lookup used `workbook_path` (bar's) and would silently find bar's sibling vmrs instead of foo's. Fix: when an explicit `workbook_name` is supplied, look up that book's path from `list_workbooks` and report it in `workbook_path`. The `active_workbook` field still reflects Excel's active book (useful informationally), but `workbook_path` now consistently describes the workbook being diagnosed.
+
+### Tests
+
+404 unit tests pass. Live verification via the round-2 test pass.
+
 ## [0.3.0-alpha.27] — 2026-05-22
 
 ### Fixed

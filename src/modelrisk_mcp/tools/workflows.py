@@ -205,13 +205,50 @@ def diagnose_workbook(
     }
     issues: list[str] = []
 
-    # 1. Excel reachability + active workbook
+    # 1. Excel reachability + workbook resolution.
+    #
+    # Bug #30 (alpha.28): prior versions assigned
+    # `active_workbook = active.name` and `workbook_path = active.path`
+    # regardless of whether the caller passed an explicit
+    # `workbook_name`. Result: calling `diagnose_workbook("foo.xlsx")`
+    # while "bar.xlsx" was active in Excel would report
+    # active_workbook="bar.xlsx" and workbook_path=<bar's path>
+    # alongside foo's input/output counts — misleading by
+    # construction. The downstream `.vmrs` lookup also used the wrong
+    # path and would silently find bar's vmrs instead of foo's.
+    #
+    # Fix: when `workbook_name` is supplied, look up THAT book's path
+    # from `list_workbooks` and report it. The `active_workbook` field
+    # always reflects Excel's actually-active book (informational),
+    # while `workbook_path` describes the diagnosed workbook.
     try:
         active = bridge.excel.get_active_workbook()
         out["excel_connected"] = True
         wb_name = workbook_name or active.name
         out["active_workbook"] = active.name
+        # Default to active.path; override below if a specific
+        # workbook was named.
         out["workbook_path"] = active.path
+        if workbook_name and workbook_name != active.name:
+            try:
+                target = next(
+                    (b for b in bridge.excel.list_workbooks()
+                     if b.name == workbook_name),
+                    None,
+                )
+                if target is None:
+                    issues.append(
+                        f"Workbook {workbook_name!r} is not currently "
+                        f"open. The diagnose result will reflect the "
+                        f"empty fallback values."
+                    )
+                else:
+                    out["workbook_path"] = target.path
+            except Exception:
+                # If list_workbooks fails, keep the active.path
+                # default; the input counts below will still
+                # be sourced from the requested workbook name.
+                pass
     except Exception as exc:
         issues.append(f"Excel not reachable: {exc!s}")
         out["issues"] = issues
