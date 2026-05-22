@@ -409,14 +409,27 @@ class ExcelBridge:
     def save_workbook_as(
         self, workbook: str, path: str, *, overwrite: bool = False,
     ) -> str:
-        """Save `workbook` to `path` (absolute). Returns the resolved
-        path that was actually written.
+        """Save a COPY of `workbook` to `path` (absolute). Returns the
+        resolved path that was actually written.
 
-        Distinct from `Workbook.Save()` (which we never call implicitly
-        per the §11 safety policy). This is the *explicit* save: the
-        caller named a path; we honour it. The user-controls-Ctrl+S
-        invariant is preserved because nothing here triggers without
-        the caller explicitly asking."""
+        Bug #25 (alpha.24): prior versions used `book.save(target)`
+        which xlwings translates to `Workbook.SaveAs(target)`. That
+        call doesn't "save a copy" — it renames the OPEN workbook to
+        the new path and rebinds it in Excel's books collection.
+        Subsequent tool calls referencing the original workbook name
+        then fail with "Workbook 'X.xlsx' is not open" because Excel
+        only knows the new name. Not the contract callers expect
+        from a `save_as` operation in an MCP context.
+
+        Fix: use the COM `SaveCopyAs` method, which writes the file
+        without touching the open workbook's identity. The original
+        stays open under its original name; the saved copy is an
+        independent file on disk.
+
+        Distinct from `Workbook.Save()` (which we never call
+        implicitly per the §11 safety policy). This is the *explicit*
+        save-a-copy: caller named a path; we honour it without
+        changing the live workbook."""
         from pathlib import Path
 
         from modelrisk_mcp.errors import WorkbookNotFoundError
@@ -433,8 +446,18 @@ class ExcelBridge:
                 "Use .xlsx, .xlsm, .xlsb, or .xls."
             )
         book = self._get_book(workbook)
+        # If overwrite is true and the target exists, SaveCopyAs will
+        # refuse — clear the file first.
+        if overwrite and target.exists():
+            try:
+                target.unlink()
+            except OSError as exc:
+                raise CellReferenceError(
+                    f"Could not remove existing {target!r} prior to "
+                    f"overwrite: {exc}"
+                ) from exc
         try:
-            book.save(str(target))
+            book.api.SaveCopyAs(str(target))
         except Exception as exc:
             raise WorkbookNotFoundError(
                 f"Excel refused to save {workbook!r} to {target!r}: {exc}"

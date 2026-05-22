@@ -4,6 +4,20 @@ All notable changes to ModelRisk MCP. Follows [Keep a Changelog](https://keepach
 
 ## [Unreleased]
 
+## [0.3.0-alpha.24] — 2026-05-22
+
+Bug surfaced by the autonomous end-to-end test pass: `save_workbook_as` was renaming the open workbook in place instead of saving a copy.
+
+### Fixed
+
+- **Bug #25 — `save_workbook_as` renamed the live workbook.** Prior versions used `book.save(path)`, which xlwings translates to `Workbook.SaveAs(path)`. `SaveAs` doesn't save a copy — it renames the open workbook to the new path and rebinds it in Excel's books collection. Subsequent tool calls referencing the original workbook name then failed with "Workbook 'X.xlsx' is not open" because Excel only knew the new name. Not the contract callers expect from a "save as" operation in an MCP context where downstream tools chain after a save.
+- Fix: use `book.api.SaveCopyAs(path)` directly via COM. SaveCopyAs writes the file without touching the open workbook's identity — the original stays open under its original name; the saved copy is an independent file on disk.
+- `overwrite=True` now also `unlink()`s any pre-existing target first, since `SaveCopyAs` refuses to overwrite (whereas the old `SaveAs` happily clobbered).
+
+### Tests
+
+402 unit tests pass (+3 in `test_excel_bridge.py::TestSaveWorkbookAsUsesSaveCopyAs`): the API actually called is `SaveCopyAs` (regression sentinel asserting `book.save` was NOT called), overwrite=True clears the target first, overwrite=False refuses with `CellReferenceError`.
+
 ## [0.3.0-alpha.23] — 2026-05-22
 
 Corporate-grade polish pass on the report charts. Live screenshot review showed the data was correct but the visual default-Excel-blue, unformatted axis numbers ("-156508.3276"), single-series legends floating off to the side, and stats-table overlap looked unfinished. This release moves the reports closer to "screenshot-and-paste-into-a-deck" quality.

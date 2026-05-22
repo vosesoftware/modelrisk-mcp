@@ -244,3 +244,100 @@ class TestAs2dTupleHandling:
         assert len(out) == 1
         assert len(out[0]) == 3
         assert all('VoseInput("' in cell for cell in out[0])
+
+
+# ----------------------------------------------------------------------
+# save_workbook_as — must use SaveCopyAs, not SaveAs (bug #25)
+# ----------------------------------------------------------------------
+
+
+class _RecordingApi:
+    """Stand-in for `book.api`: records which COM method was called
+    on it. The whole point of the alpha.24 fix is that we must call
+    `SaveCopyAs` (which leaves the open workbook's name untouched)
+    not the implicit `SaveAs` from `book.save(path)` (which renames
+    the open workbook in place)."""
+
+    def __init__(self) -> None:
+        self.calls: list[tuple[str, tuple[Any, ...]]] = []
+
+    def SaveCopyAs(self, *args: Any) -> None:  # noqa: N802
+        self.calls.append(("SaveCopyAs", args))
+
+    def SaveAs(self, *args: Any) -> None:  # noqa: N802
+        self.calls.append(("SaveAs", args))
+
+
+class _RecordingBook:
+    def __init__(self) -> None:
+        self.api = _RecordingApi()
+
+    def save(self, path: str) -> None:
+        # If anyone calls this, the bug is back. Fail loudly.
+        raise AssertionError(
+            f"book.save({path!r}) called — alpha.24 fix requires "
+            f"book.api.SaveCopyAs instead. SaveAs (which book.save uses) "
+            f"renames the open workbook in place; SaveCopyAs writes a "
+            f"copy without touching it."
+        )
+
+
+class TestSaveWorkbookAsUsesSaveCopyAs:
+    """Regression for bug #25 — save_workbook_as renamed the open
+    workbook because it used `book.save(path)` (→ SaveAs). The fix
+    routes through `book.api.SaveCopyAs(path)` which leaves the open
+    workbook untouched."""
+
+    def _make_bridge(self, book: _RecordingBook) -> ExcelBridge:
+        bridge = ExcelBridge.__new__(ExcelBridge)  # bypass __init__
+        bridge._app = None  # type: ignore[attr-defined]
+        bridge._get_book = lambda _name: book  # type: ignore[method-assign]
+        return bridge
+
+    def test_uses_save_copy_as(self, tmp_path: Any) -> None:
+        book = _RecordingBook()
+        bridge = self._make_bridge(book)
+        target = tmp_path / "saved.xlsx"
+        result = bridge.save_workbook_as(
+            "src.xlsx", str(target), overwrite=False,
+        )
+        # Resolves to absolute string.
+        assert result == str(target.resolve())
+        # SaveCopyAs was called, SaveAs was NOT.
+        method_names = [name for name, _args in book.api.calls]
+        assert method_names == ["SaveCopyAs"], (
+            f"Expected SaveCopyAs only, got {method_names}. "
+            f"The bug-#25 regression is back if SaveAs shows up here."
+        )
+
+    def test_overwrite_true_clears_existing_target_first(
+        self, tmp_path: Any,
+    ) -> None:
+        """SaveCopyAs refuses to overwrite an existing file, so when
+        overwrite=True the bridge must `unlink` first."""
+        book = _RecordingBook()
+        bridge = self._make_bridge(book)
+        target = tmp_path / "saved.xlsx"
+        target.write_bytes(b"stub")  # pre-existing
+        bridge.save_workbook_as("src.xlsx", str(target), overwrite=True)
+        # The pre-existing file was removed before SaveCopyAs (our
+        # `_RecordingApi.SaveCopyAs` is a no-op so the target stays
+        # absent — but the pre-write `target.exists()` is False after
+        # the unlink).
+        assert not target.exists()
+
+    def test_overwrite_false_refuses_existing_target(
+        self, tmp_path: Any,
+    ) -> None:
+        from modelrisk_mcp.errors import CellReferenceError
+
+        book = _RecordingBook()
+        bridge = self._make_bridge(book)
+        target = tmp_path / "saved.xlsx"
+        target.write_bytes(b"stub")
+        with pytest.raises(CellReferenceError, match="Refusing to overwrite"):
+            bridge.save_workbook_as(
+                "src.xlsx", str(target), overwrite=False,
+            )
+        # No COM call should have happened.
+        assert book.api.calls == []
