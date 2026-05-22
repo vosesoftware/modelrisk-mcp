@@ -20,8 +20,6 @@ from __future__ import annotations
 
 import math
 from collections.abc import Iterable
-from ctypes import POINTER, byref, c_int, c_longlong, c_wchar
-from typing import Any
 
 import numpy as np
 
@@ -298,27 +296,12 @@ class ResultsReader:
 
     def _lookup_var_id(self, handle: VmrsHandle, name: str) -> int | None:
         """Resolve a variable name to its ID via MRLIB_GetModelVarID.
-        Returns None if the function reports failure."""
-        lib = self._mrservice._lib  # bridge-internal access
-        if lib is None:
-            return None
-        # Configure the signature lazily — we don't put it in the bridge's
-        # setup because it's only needed by the read path.
-        if not hasattr(lib, "_modelrisk_mcp_var_id_configured"):
-            lib.MRLIB_GetModelVarID.restype = bool
-            lib.MRLIB_GetModelVarID.argtypes = [
-                c_longlong, POINTER(c_wchar), POINTER(c_int),
-            ]
-            lib._modelrisk_mcp_var_id_configured = True  # type: ignore[attr-defined]
-        var_id = c_int(-1)
-        ok = bool(
-            lib.MRLIB_GetModelVarID(
-                c_longlong(handle.model_ptr), name, byref(var_id)
-            )
-        )
-        if not ok or var_id.value < 0:
-            return None
-        return int(var_id.value)
+        Returns None if the function reports failure. The underlying
+        call is wrapped in a wall-clock timeout (default 8 s) so a
+        pathological name doesn't hang the entire MCP request — see
+        `VmrsHandle.lookup_var_id`. On timeout, the underlying
+        SimulationFailedError propagates with a clear message."""
+        return handle.lookup_var_id(name)
 
 
 # ----------------------------------------------------------------------
@@ -389,10 +372,3 @@ def _matrix_to_optional_list(matrix: np.ndarray) -> list[list[float | None]]:
 
 
 __all__ = ["ResultsReader"]
-
-
-# Type alias for backward compat with code that referenced this type.
-def _unused_ctypes_imports() -> None:  # pragma: no cover
-    """Anchor the ctypes imports so isort doesn't drop them — they're
-    used inside _lookup_var_id which mypy can't statically prove."""
-    _ = (POINTER, byref, c_int, c_longlong, c_wchar, Any)

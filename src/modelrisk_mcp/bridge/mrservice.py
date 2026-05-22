@@ -21,6 +21,8 @@ from __future__ import annotations
 
 import ctypes
 import os
+import threading
+from collections.abc import Callable
 from ctypes import (
     POINTER,
     byref,
@@ -34,7 +36,7 @@ from ctypes import (
 )
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any
+from typing import Any, TypeVar
 
 from modelrisk_mcp.bridge._keymat import decode_bundled_key
 from modelrisk_mcp.errors import (
@@ -48,6 +50,67 @@ from modelrisk_mcp.errors import (
 
 
 _DLL_NAME: str = "MRService.dll"
+
+# Default wall-clock budget for MRLIB_GetModelVarID. The normal lookup
+# is nanoseconds; if the DLL doesn't return within this window it's
+# almost certainly hung on a pathological variable name (the SDK has
+# been observed to spin indefinitely on names containing `?`, `(`, or
+# `)`). Configurable via MRSERVICE_VARID_TIMEOUT_S so an integrator can
+# raise it if their environment is unusually slow.
+_VARID_LOOKUP_TIMEOUT_S: float = 8.0
+
+
+_T = TypeVar("_T")
+
+
+def _call_with_timeout(
+    func: Callable[[], _T],
+    timeout: float,
+    label: str,
+) -> _T:
+    """Run `func` in a daemon thread, raising SimulationFailedError if
+    it doesn't return within `timeout` seconds.
+
+    Used to wrap individual MRService.dll calls that have been observed
+    to hang on pathological inputs. The thread is daemonized — we can't
+    forcibly kill it (it's blocked in C), so on timeout it leaks until
+    the process exits. That's acceptable in MCP land where each request
+    runs in a short-lived child process and the number of leaks is
+    bounded by user retries.
+
+    Note: this is NOT thread-safe across concurrent callers sharing the
+    same DLL handle. The MRService surface is single-threaded by
+    contract (one open .vmrs at a time); the timeout wrapper preserves
+    that constraint because we never call the same function twice in
+    parallel — we just wait for one outstanding call with a deadline.
+    """
+    result: list[_T] = []
+    error: list[BaseException] = []
+
+    def _target() -> None:
+        try:
+            result.append(func())
+        except BaseException as exc:  # pragma: no cover - defensive
+            error.append(exc)
+
+    thread = threading.Thread(
+        target=_target, daemon=True, name=f"mrservice-{label}",
+    )
+    thread.start()
+    thread.join(timeout)
+    if thread.is_alive():
+        raise SimulationFailedError(
+            f"MRService.dll call {label!r} did not return within "
+            f"{timeout:.1f}s. The most common cause is a variable name "
+            f"containing characters the SDK can't handle (notably `?`, "
+            f"`(`, or `)`) — rename the offending VoseInput / "
+            f"VoseOutput in the workbook and rerun the simulation. "
+            f"Override the budget with MRSERVICE_VARID_TIMEOUT_S if "
+            f"your environment is unusually slow."
+        )
+    if error:
+        raise error[0]
+    return result[0]
 
 # Bundled offline activation key. ModelRisk requires per-process activation
 # of MRService.dll before it will open .vmrs files; rather than make every
@@ -324,6 +387,54 @@ class VmrsHandle:
     @property
     def model_ptr(self) -> int:
         return self._model_ptr
+
+    def lookup_var_id(
+        self, name: str, *, timeout: float | None = None,
+    ) -> int | None:
+        """Resolve a variable name to its var_id via MRLIB_GetModelVarID.
+
+        Returns None if the SDK reports failure (variable not in the
+        .vmrs). Raises `SimulationFailedError` if the call doesn't
+        return within `timeout` seconds — that's almost always a
+        pathological-name hang, see `_call_with_timeout` for the
+        backstory.
+
+        `timeout` defaults to `_VARID_LOOKUP_TIMEOUT_S` (8 s), overridable
+        via the `MRSERVICE_VARID_TIMEOUT_S` environment variable.
+        """
+        if timeout is None:
+            override = os.environ.get("MRSERVICE_VARID_TIMEOUT_S")
+            if override:
+                try:
+                    timeout = float(override)
+                except ValueError:
+                    timeout = _VARID_LOOKUP_TIMEOUT_S
+            else:
+                timeout = _VARID_LOOKUP_TIMEOUT_S
+        # Lazy-configure the signature — `MRLIB_GetModelVarID` isn't in
+        # the generic setup because the read path is the only caller.
+        if not hasattr(self._lib, "_modelrisk_mcp_var_id_configured"):
+            self._lib.MRLIB_GetModelVarID.restype = c_bool
+            self._lib.MRLIB_GetModelVarID.argtypes = [
+                c_longlong, POINTER(c_wchar), POINTER(c_int),
+            ]
+            self._lib._modelrisk_mcp_var_id_configured = True  # type: ignore[attr-defined]
+        var_id = c_int(-1)
+        model_ptr = self._model_ptr
+
+        def _invoke() -> bool:
+            return bool(
+                self._lib.MRLIB_GetModelVarID(
+                    c_longlong(model_ptr), name, byref(var_id),
+                )
+            )
+
+        ok = _call_with_timeout(
+            _invoke, timeout=timeout, label=f"GetModelVarID({name!r})",
+        )
+        if not ok or var_id.value < 0:
+            return None
+        return int(var_id.value)
 
     def iteration_count(self, sim_index: int = 0) -> int:
         """Number of iterations recorded for the given simulation."""

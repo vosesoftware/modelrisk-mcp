@@ -18,6 +18,8 @@ import pytest
 from modelrisk_mcp.bridge._keymat import decode_bundled_key
 from modelrisk_mcp.bridge.mrservice import (
     MrServiceBridge,
+    VmrsHandle,
+    _call_with_timeout,
     find_latest_vmrs,
     find_mrservice_dll,
 )
@@ -162,6 +164,145 @@ class TestKeyObfuscation:
             f"Plain activation key found in shipped sources: {offenders}. "
             "Run scripts/encode_activation_key.py and replace the literal."
         )
+
+
+class TestCallWithTimeout:
+    """The timeout wrapper guards individual MRService.dll calls from
+    pathological-input hangs (most notably MRLIB_GetModelVarID stuck
+    on names containing `?`, `(`, or `)`)."""
+
+    def test_returns_result_when_call_completes(self) -> None:
+        assert _call_with_timeout(lambda: 42, timeout=1.0, label="fast") == 42
+
+    def test_propagates_exception_from_call(self) -> None:
+        def boom() -> int:
+            raise RuntimeError("inner failure")
+
+        with pytest.raises(RuntimeError, match="inner failure"):
+            _call_with_timeout(boom, timeout=1.0, label="boom")
+
+    def test_raises_simulation_failed_on_timeout(self) -> None:
+        import time
+
+        def hang() -> int:
+            time.sleep(10)
+            return 0  # pragma: no cover - unreached
+
+        with pytest.raises(SimulationFailedError) as exc:
+            _call_with_timeout(hang, timeout=0.1, label="hang")
+        msg = str(exc.value)
+        # The message must be actionable — name the likely cause and
+        # the workaround (rename the variable).
+        assert "did not return" in msg
+        assert "rename" in msg.lower()
+        assert "?" in msg or "(" in msg
+
+
+class TestVmrsHandleLookupVarId:
+    """`VmrsHandle.lookup_var_id` is the timeout-protected wrapper around
+    MRLIB_GetModelVarID. The tests use a fake lib so we don't need the
+    real DLL — they verify the success path, the not-found path, and
+    the timeout path (the bug #16 fix)."""
+
+    def _make_handle(self, fake_lib: object) -> VmrsHandle:
+        return VmrsHandle(
+            fake_lib,  # type: ignore[arg-type]
+            model_ptr=12345,
+            path="fake.vmrs",
+        )
+
+    def test_returns_var_id_on_success(self) -> None:
+        class _FakeLib:
+            def MRLIB_GetModelVarID(  # noqa: N802
+                self, _model_ptr: object, name: str, var_id_ptr: object
+            ) -> bool:
+                # ctypes byref(c_int) — assign .value via _obj_
+                var_id_ptr._obj.value = 7  # type: ignore[attr-defined]
+                return True
+
+        lib = _FakeLib()
+        lib._modelrisk_mcp_var_id_configured = True  # type: ignore[attr-defined]
+        handle = self._make_handle(lib)
+        assert handle.lookup_var_id("WidgetCost", timeout=1.0) == 7
+
+    def test_returns_none_when_lib_reports_failure(self) -> None:
+        class _FakeLib:
+            def MRLIB_GetModelVarID(  # noqa: N802
+                self, _model_ptr: object, _name: str, _var_id_ptr: object
+            ) -> bool:
+                return False
+
+        lib = _FakeLib()
+        lib._modelrisk_mcp_var_id_configured = True  # type: ignore[attr-defined]
+        handle = self._make_handle(lib)
+        assert handle.lookup_var_id("Missing", timeout=1.0) is None
+
+    def test_returns_none_when_var_id_negative(self) -> None:
+        class _FakeLib:
+            def MRLIB_GetModelVarID(  # noqa: N802
+                self, _model_ptr: object, _name: str, var_id_ptr: object
+            ) -> bool:
+                # SDK occasionally returns True but leaves var_id at -1.
+                # Treat that as not-found, same as ok=False.
+                var_id_ptr._obj.value = -1  # type: ignore[attr-defined]
+                return True
+
+        lib = _FakeLib()
+        lib._modelrisk_mcp_var_id_configured = True  # type: ignore[attr-defined]
+        handle = self._make_handle(lib)
+        assert handle.lookup_var_id("EdgeCase", timeout=1.0) is None
+
+    def test_raises_on_pathological_name_timeout(self) -> None:
+        """Regression for bug #16: names with `?`, `(`, or `)` caused
+        MRService.dll to hang for the full 4-minute Claude Desktop
+        timeout. With the wrapper, lookup_var_id raises a clear
+        SimulationFailedError within the configured budget."""
+        import time
+
+        class _HangingLib:
+            def MRLIB_GetModelVarID(  # noqa: N802
+                self, _model_ptr: object, _name: str, _var_id_ptr: object
+            ) -> bool:
+                time.sleep(10)
+                return False  # pragma: no cover
+
+        lib = _HangingLib()
+        lib._modelrisk_mcp_var_id_configured = True  # type: ignore[attr-defined]
+        handle = self._make_handle(lib)
+        with pytest.raises(SimulationFailedError) as exc:
+            handle.lookup_var_id("Conservatives get in? (1=yes)", timeout=0.1)
+        msg = str(exc.value)
+        assert "GetModelVarID" in msg
+        assert "Conservatives get in? (1=yes)" in msg
+        assert "rename" in msg.lower()
+
+    def test_timeout_env_override(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """MRSERVICE_VARID_TIMEOUT_S overrides the default budget for
+        environments where the SDK is unusually slow."""
+        import time
+
+        class _SlowLib:
+            def __init__(self) -> None:
+                self.delay = 0.3
+
+            def MRLIB_GetModelVarID(  # noqa: N802
+                self, _model_ptr: object, _name: str, var_id_ptr: object
+            ) -> bool:
+                time.sleep(self.delay)
+                var_id_ptr._obj.value = 3  # type: ignore[attr-defined]
+                return True
+
+        lib = _SlowLib()
+        lib._modelrisk_mcp_var_id_configured = True  # type: ignore[attr-defined]
+        handle = self._make_handle(lib)
+
+        # Default budget (8 s) would let this through, but the env
+        # override clamps the budget below the delay → expect timeout.
+        monkeypatch.setenv("MRSERVICE_VARID_TIMEOUT_S", "0.05")
+        with pytest.raises(SimulationFailedError, match="did not return"):
+            handle.lookup_var_id("Slow")
 
 
 class TestVmrsDiscovery:

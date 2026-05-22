@@ -4,6 +4,23 @@ All notable changes to ModelRisk MCP. Follows [Keep a Changelog](https://keepach
 
 ## [Unreleased]
 
+## [0.3.0-alpha.15] — 2026-05-22
+
+Fixes the second bug from yesterday's Claude Desktop testing session: `get_samples` (and every other read tool that resolves a variable name) no longer hangs forever when the workbook contains a VoseInput / VoseOutput name with characters that confuse MRService.dll's name lookup.
+
+### Fixed
+
+- **`get_samples` hang on names containing `?`, `(`, or `)` (bug #16).** `MRLIB_GetModelVarID` has been observed to spin indefinitely on names with those characters — looks like a wildcard/glob matcher that misinterprets them. Without a timeout, Claude Desktop's 4-minute hard limit was the only thing that stopped the request, and the user never got a useful error.
+  - New `_call_with_timeout` helper in `bridge/mrservice.py` runs an individual ctypes call in a daemon thread with a wall-clock deadline. On expiry it raises `SimulationFailedError` with an actionable message that names the likely cause (`?` / `(` / `)` in the variable name) and the workaround (rename the input/output in the workbook).
+  - New `VmrsHandle.lookup_var_id(name, *, timeout=None)` method moves the name-resolution logic from `ResultsReader._lookup_var_id` onto the handle where it belongs, and applies the timeout wrapper. Default budget is **8 seconds**; overridable via the `MRSERVICE_VARID_TIMEOUT_S` environment variable for environments where the SDK is unusually slow.
+  - `ResultsReader._lookup_var_id` now delegates to `handle.lookup_var_id`. Every read tool that touches a variable by name benefits: `get_samples`, `get_simulation_results`, `get_correlation_matrix`, `get_sensitivity_ranking`, `list_vmrs_variables`, `read_vmrs`, `build_drivers_report`, `build_executive_report`.
+
+### Why this matters
+
+A workbook with a name like `"Conservatives get in? (1=yes)"` used to lock up every read tool against it. Post-fix, the user gets a clear error in ~8 seconds telling them which variable is the problem and what to do about it.
+
+5 new tests cover the timeout wrapper itself plus the lookup-via-handle success / not-found / timeout / env-override paths.
+
 ## [0.3.0-alpha.14] — 2026-05-22
 
 Two real bridge bugs found in a Claude Desktop end-user testing session. The first one is the critical fix — it unblocks roughly half of the read-side tool surface for workbooks that use the cell-reference name form (the most common pattern in production ModelRisk models).
