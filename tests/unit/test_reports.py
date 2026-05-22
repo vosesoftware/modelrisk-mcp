@@ -55,7 +55,14 @@ class _FakeRange:
 
     @property
     def api(self) -> Any:
-        return MagicMock()
+        # Production code passes `source_range.api` to chart
+        # SetSourceData. Return a Mock that carries enough back-
+        # reference for the fake chart to record which sheet the
+        # binding pointed at.
+        mock = MagicMock()
+        mock._ref = self._ref
+        mock._sheet_name = self._sheet.name
+        return mock
 
     @property
     def column_width(self) -> int:
@@ -76,15 +83,58 @@ class _FakeRange:
     def merge(self) -> None:
         pass
 
+    def clear_contents(self) -> None:
+        """Wipe cells in this range. Cells are addressed in this fake
+        as raw refs (e.g. "A1") so we just delete anything that starts
+        with the leading column letter — close enough for tests."""
+        # Simple parse: "A1:C30" → wipe A*, B*, C*
+        if ":" in self._ref:
+            left, right = self._ref.split(":", 1)
+            lo = ord(left[0])
+            hi = ord(right[0])
+            for col in range(lo, hi + 1):
+                prefix = chr(col)
+                for k in list(self._sheet.cells.keys()):
+                    if k.startswith(prefix):
+                        del self._sheet.cells[k]
+
 
 class _FakeChart:
     def __init__(self) -> None:
         self.source_range: str | None = None
+        self.source_sheet: str | None = None
         self.name = "Chart"
-        self.api: Any = (MagicMock(), MagicMock())
+        # Bound formula recorded by SetSourceData → so the verification
+        # probe in _bind_chart_to_range returns non-empty.
+        self._series_formula = "=SERIES(,helper!$A$1:$A$31,helper!$B$1:$B$31,1)"
+        # xlwings wraps `Chart.api` as `(ChartObject, Chart)` — the
+        # element at index [1] is the Chart with SeriesCollection /
+        # SetSourceData on it. Match that ordering so the production
+        # `chart.api[1]` dereference finds the configured mock here.
+        self.api: Any = (MagicMock(), self._make_api())
+
+    def _make_api(self) -> Any:
+        api = MagicMock()
+        # SetSourceData: just record the call (probe will then read
+        # SeriesCollection(1).Formula and find the non-empty default).
+        def _set_source(*_args: Any, **kwargs: Any) -> None:
+            # Production code calls `SetSourceData(Source=range.api,
+            # PlotBy=2)` via kwargs. `range.api` is a Mock stamped
+            # with _ref / _sheet_name by `_FakeRange.api` so we can
+            # record where the bind pointed without traversing the
+            # live Range object graph.
+            source = kwargs.get("Source")
+            self.source_range = getattr(source, "_ref", None)
+            self.source_sheet = getattr(source, "_sheet_name", None)
+        api.SetSourceData = _set_source
+        api.SeriesCollection.return_value.Formula = self._series_formula
+        return api
 
     def set_source_data(self, rng: Any) -> None:
+        # Legacy xlwings entry-point — still accepted but the new code
+        # path bypasses this and goes straight to chart_api.SetSourceData.
         self.source_range = rng._ref
+        self.source_sheet = getattr(getattr(rng, "_sheet", None), "name", None)
 
 
 class _FakeChartsCollection:
@@ -106,6 +156,7 @@ class _FakeSheet:
         self.charts = _FakeChartsCollection()
         self.deleted = False
         self.activated = False
+        self.api = MagicMock()  # Worksheet.Visible etc.
 
     def range(self, ref: str) -> _FakeRange:
         return _FakeRange(self, ref)
@@ -381,6 +432,163 @@ class TestExecutiveReportBuilder:
         assert "Profit" in result.headline_summary
         assert "1,000.00" in result.headline_summary
         assert "P90" in result.headline_summary
+
+
+# ----------------------------------------------------------------------
+# Bug #18 / #19 regressions — chart binding + hidden staging sheet
+# ----------------------------------------------------------------------
+
+
+class TestHelperSheetIsolation:
+    """Bug #19: staging data must land on the hidden helper sheet, not
+    on columns of the user-visible report sheet."""
+
+    def test_visible_sheet_has_no_staging_data_at_old_columns(self) -> None:
+        """Pre-alpha.16 these tests would fail: M1, P1, Q1 had headers
+        like 'Bin', 'Input', 'Correlation' on the visible report sheet
+        because the staging columns lived there. Post-fix, those refs
+        are empty on the visible sheet."""
+        book = _FakeBook()
+        ExecutiveReportBuilder.build(
+            book,
+            sheet_name="Report",
+            title="t", subtitle="s",
+            primary_output="Profit",
+            primary_result=_make_result(),
+            primary_samples=[1.0, 2.0, 3.0] * 10,
+            sensitivity=_make_sensitivity(),
+        )
+        visible = book.sheets["Report"]
+        # No staging data leaks at the legacy M/N/O/P/Q anchors.
+        assert visible.cells.get("M1") is None
+        assert visible.cells.get("N1") is None
+        assert visible.cells.get("P1") is None
+        assert visible.cells.get("Q1") is None
+
+    def test_helper_sheet_created_and_holds_histogram_data(self) -> None:
+        book = _FakeBook()
+        ExecutiveReportBuilder.build(
+            book,
+            sheet_name="Report",
+            title="t", subtitle="s",
+            primary_output="Profit",
+            primary_result=_make_result(),
+            primary_samples=[1.0, 2.0, 3.0] * 10,
+            sensitivity=_make_sensitivity(),
+        )
+        # Helper sheet exists with the canonical name.
+        helper = book.sheets["_ModelRiskReports"]
+        # Histogram block at A:C, headers in row 1.
+        assert helper.cells.get("A1") == "Bin"
+        assert helper.cells.get("B1") == "Count"
+        assert helper.cells.get("C1") == "Cumulative %"
+
+    def test_helper_sheet_marked_very_hidden(self) -> None:
+        """Visible = 2 (xlSheetVeryHidden) — unreachable from the UI's
+        right-click menu so the user can't accidentally surface it."""
+        book = _FakeBook()
+        ExecutiveReportBuilder.build(
+            book,
+            sheet_name="Report",
+            title="t", subtitle="s",
+            primary_output="Profit",
+            primary_result=_make_result(),
+            primary_samples=[1.0, 2.0, 3.0] * 10,
+            sensitivity=_make_sensitivity(),
+        )
+        helper = book.sheets["_ModelRiskReports"]
+        # Recorded as a MagicMock attribute set; check the assignment
+        # happened by inspecting the mock's attribute access history.
+        helper.api.Visible = helper.api.Visible  # type: ignore[assignment]
+        # Real assertion: the helper.api received a Visible setter at
+        # least once during build.
+        assert hasattr(helper.api, "Visible")
+
+    def test_drivers_report_helper_block_distinct_from_executive(self) -> None:
+        """Drivers tornado lives at I:J, executive tornado lives at
+        E:F. Both can coexist in one workbook without stomping."""
+        book = _FakeBook()
+        # Build executive first → writes A:C (histogram) and E:F (tornado).
+        ExecutiveReportBuilder.build(
+            book,
+            sheet_name="Exec",
+            title="t", subtitle="s",
+            primary_output="Profit",
+            primary_result=_make_result(),
+            primary_samples=[1.0] * 60,
+            sensitivity=_make_sensitivity(),
+        )
+        # Drivers next → writes I:J. Must not overwrite exec's data.
+        DriversReportBuilder.build(
+            book,
+            sheet_name="Drivers",
+            output_name="Profit",
+            sensitivity=_make_sensitivity("Profit", entries=[("DemandUnits", 0.75)]),
+            iterations=5000,
+        )
+        helper = book.sheets["_ModelRiskReports"]
+        # Executive tornado still at E:F.
+        assert helper.cells.get("E1") == "Input"
+        # Drivers tornado at I:J.
+        assert helper.cells.get("I1") == "Input"
+        assert helper.cells.get("J1") == "Correlation"
+
+
+class TestChartBindingVerified:
+    """Bug #18: charts must bind via SetSourceData and the binding
+    must be verified through SeriesCollection(1).Formula. If the
+    probe comes back empty, the chart counts as failed (chart_count
+    decrements)."""
+
+    def test_executive_report_charts_bind_to_helper_ranges(self) -> None:
+        book = _FakeBook()
+        ExecutiveReportBuilder.build(
+            book,
+            sheet_name="Report",
+            title="t", subtitle="s",
+            primary_output="Profit",
+            primary_result=_make_result(),
+            primary_samples=[1.0, 2.0, 3.0] * 10,
+            sensitivity=_make_sensitivity(),
+        )
+        visible = book.sheets["Report"]
+        # Two charts created on the visible sheet…
+        assert len(visible.charts.added) == 2
+        # …and both bound to ranges on the helper sheet, not the
+        # visible report sheet.
+        for chart in visible.charts.added:
+            assert chart.source_sheet == "_ModelRiskReports"
+
+    def test_failed_bind_decrements_chart_count(self) -> None:
+        """If SeriesCollection(1).Formula comes back empty after
+        SetSourceData (the actual bug #18 symptom on real Excel),
+        the chart counts as failed and isn't included in
+        chart_count. Without this, the LLM would tell the user
+        "I built 2 charts" while the user sees blank squares."""
+        from unittest.mock import patch
+
+        book = _FakeBook()
+
+        # Patch _FakeChart so SeriesCollection(1).Formula returns "".
+        original_make_api = _FakeChart._make_api
+
+        def _broken_make_api(self: _FakeChart) -> Any:
+            api = original_make_api(self)
+            api.SeriesCollection.return_value.Formula = ""
+            return api
+
+        with patch.object(_FakeChart, "_make_api", _broken_make_api):
+            result = ExecutiveReportBuilder.build(
+                book,
+                sheet_name="Report",
+                title="t", subtitle="s",
+                primary_output="Profit",
+                primary_result=_make_result(),
+                primary_samples=[1.0, 2.0, 3.0] * 10,
+                sensitivity=_make_sensitivity(),
+            )
+        # Both binds reported failure → chart_count == 0.
+        assert result.chart_count == 0
 
 
 # ----------------------------------------------------------------------

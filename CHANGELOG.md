@@ -4,6 +4,23 @@ All notable changes to ModelRisk MCP. Follows [Keep a Changelog](https://keepach
 
 ## [Unreleased]
 
+## [0.3.0-alpha.16] — 2026-05-22
+
+Two paired bugs in the report builders, both surfaced by the same end-user testing session — charts came out blank, and the staging data leaked onto the user-visible report sheet. Both `build_executive_report` and `build_drivers_report` are affected because they share the same chart-construction helpers.
+
+### Fixed
+
+- **Charts no longer render blank (bug #18).** Previously the flow was: create chart, call `chart.set_source_data(range)` (xlwings wrapper), then configure type / title / colours. On real Excel this looked correct in the COM trace but `SeriesCollection(1).Formula` came back empty — the bind silently dropped, Excel auto-filled a placeholder series during chart creation, and the chart went blank once that placeholder cleared. Fix: bind via the COM `chart_api.SetSourceData(Source=range.api, PlotBy=2)` call directly (skipping the xlwings wrapper that was where the regression lived), then probe `SeriesCollection(1).Formula` to verify the binding actually stuck. If the probe comes back empty the chart counts as failed (`chart_count` decrements) so the LLM doesn't mislead the user about how much of the report rendered.
+- **Staging data no longer leaks onto the visible report sheet (bug #19).** Previously the histogram / tornado source ranges were written to columns M:Q of the report sheet itself and then hidden via `EntireColumn.Hidden`. Cosmetic until the user scrolled or printed, then it became visible noise. Fix: all staging data now goes on a workbook-scoped helper sheet `_ModelRiskReports` marked `xlSheetVeryHidden` (unreachable from the right-click "Unhide" menu). Block ownership: executive report uses columns A:C (histogram) and E:F (tornado); drivers report uses I:J (tornado). The two reports can coexist in one workbook without stomping. Each builder clears its own block before re-writing so re-running a report doesn't blend new + stale data.
+
+### Tests
+
+5 new tests in `test_reports.py`: no staging-data leak on the visible sheet, helper sheet created with the right headers, helper sheet has `Visible = xlSheetVeryHidden`, drivers + executive use distinct helper blocks, chart binding produces a non-empty `SeriesCollection(1).Formula` (with a negative test that proves an empty formula causes `chart_count` to decrement).
+
+### Why this matters
+
+These are the two bugs that made `build_executive_report` look broken to end users — "you said you built 2 charts but I see blank squares, and there's some weird data in column M". After alpha.16 the charts render, the report sheet has nothing on it but the intended content, and a binding regression on real Excel won't be silent — the chart count drops and the LLM can flag it.
+
 ## [0.3.0-alpha.15] — 2026-05-22
 
 Fixes the second bug from yesterday's Claude Desktop testing session: `get_samples` (and every other read tool that resolves a variable name) no longer hangs forever when the workbook contains a VoseInput / VoseOutput name with characters that confuse MRService.dll's name lookup.

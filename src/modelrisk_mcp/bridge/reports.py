@@ -46,6 +46,18 @@ if TYPE_CHECKING:
 # Excel constants used via raw COM.
 _XL_BAR_CLUSTERED = 57
 _XL_COLUMN_CLUSTERED = 51
+_XL_COLUMNS = 2          # PlotBy argument for SetSourceData (series are columns)
+_XL_SHEET_VERY_HIDDEN = 2  # Worksheet.Visible value — unreachable from UI
+
+
+# Single workbook-scoped sheet that holds the staging data for every
+# chart in every report. xlSheetVeryHidden so the user can't see it
+# from the tab strip and can't unhide it via right-click — only
+# `Visible = -1` from VBA or another build_*_report call will surface
+# it again. Each builder owns a distinct column block (see the
+# `_HELPER_LAYOUT_*` constants on each class) to avoid stomping on its
+# sibling's data when both reports coexist in the same workbook.
+_HELPER_SHEET_NAME = "_ModelRiskReports"
 
 
 # Color palette (RGB-as-integer for xlwings api.Interior.Color).
@@ -136,6 +148,7 @@ class ExecutiveReportBuilder:
             sheet, primary_output, primary_result, contingency_percentile,
         )
         chart_count = ExecutiveReportBuilder._add_charts(
+            book,
             sheet,
             primary_output=primary_output,
             primary_samples=primary_samples,
@@ -288,8 +301,16 @@ class ExecutiveReportBuilder:
         except Exception:
             pass
 
+    # Helper-sheet block ownership: the executive report parks histogram
+    # data in A:C and tornado data in E:F. The drivers report uses a
+    # separate block (I:J) so the two can coexist without stomping on
+    # each other.
+    _HELPER_HISTOGRAM_COL = "A"
+    _HELPER_TORNADO_COL = "E"
+
     @staticmethod
     def _add_charts(
+        book: Any,
         sheet: Any,
         *,
         primary_output: str,
@@ -298,20 +319,29 @@ class ExecutiveReportBuilder:
         top_drivers: int,
     ) -> int:
         """Histogram + cumulative on the left, tornado on the right.
-        Returns count of charts actually created (0-2)."""
+        Returns count of charts actually created (0-2). Staging data
+        for each chart goes on the hidden helper sheet — see
+        `_get_or_create_helper_sheet`."""
         chart_count = 0
-        # The hidden-data approach: write histogram bin/count pairs and
-        # tornado driver/correlation pairs into rows far to the right,
-        # then reference those ranges for chart source data.
-        top = ExecutiveReportBuilder.CHART_BAND_TOP
-        height = ExecutiveReportBuilder.CHART_BAND_HEIGHT
+        helper = _get_or_create_helper_sheet(book)
+        if helper is None:
+            return 0
 
         # 1. Histogram of the primary output's samples.
+        hist_col = ExecutiveReportBuilder._HELPER_HISTOGRAM_COL
         if primary_samples:
             try:
-                _write_histogram_data(sheet, primary_samples, anchor_col="M", anchor_row=1)
+                _clear_helper_block(
+                    helper, hist_col, columns=3, rows=_HISTOGRAM_BINS + 2,
+                )
+                _write_histogram_data(
+                    helper, primary_samples,
+                    anchor_col=hist_col, anchor_row=1,
+                )
                 chart_count += _add_histogram_chart(
                     sheet,
+                    helper=helper,
+                    helper_anchor_col=hist_col,
                     bin_count=_HISTOGRAM_BINS,
                     title=f"Distribution — {primary_output}",
                     left=10, top=180,  # rough point coords; xlwings uses raw points
@@ -321,14 +351,23 @@ class ExecutiveReportBuilder:
                 pass
 
         # 2. Tornado of the top N drivers.
+        tornado_col = ExecutiveReportBuilder._HELPER_TORNADO_COL
         entries = sorted(
             sensitivity.entries, key=lambda e: abs(e.correlation), reverse=True
         )[:top_drivers]
         if entries:
             try:
-                _write_tornado_data(sheet, entries, anchor_col="P", anchor_row=1)
+                _clear_helper_block(
+                    helper, tornado_col, columns=2, rows=top_drivers + 2,
+                )
+                _write_tornado_data(
+                    helper, entries,
+                    anchor_col=tornado_col, anchor_row=1,
+                )
                 chart_count += _add_tornado_chart(
                     sheet,
+                    helper=helper,
+                    helper_anchor_col=tornado_col,
                     driver_count=len(entries),
                     title=f"Top drivers — {primary_output}",
                     left=420, top=180,
@@ -337,17 +376,6 @@ class ExecutiveReportBuilder:
             except Exception:
                 pass
 
-        # Hide the helper data columns so the user sees only the charts.
-        try:
-            sheet.range("M:Q").api.EntireColumn.Hidden = True
-        except Exception:
-            pass
-
-        # Reserve vertical space so the stats table doesn't overlap the
-        # chart band. (The charts are anchored by point coords, not
-        # cells, but we still bump the rows so the print layout stays
-        # clean.)
-        _ = top, height
         return chart_count
 
     @staticmethod
@@ -501,11 +529,97 @@ class ExecutiveReportBuilder:
 _HISTOGRAM_BINS = 30
 
 
+# ---------------------------------------------------------------------------
+# Hidden helper sheet + chart binding
+# ---------------------------------------------------------------------------
+
+
+def _get_or_create_helper_sheet(book: Any) -> Any:
+    """Return the workbook-scoped hidden helper sheet, creating it (and
+    marking it `xlSheetVeryHidden`) on first use.
+
+    Why a hidden helper sheet at all: the histogram / tornado charts
+    need a tabular source range. Putting that data on the visible
+    report sheet (the previous design's M:Q columns) bled into the
+    user's print/scroll experience even after `EntireColumn.Hidden`,
+    and broke down further when the binding step itself silently
+    failed (bug #18). The helper sheet hard-isolates the staging data
+    from the user-visible report so the visible sheet contains only
+    title, headline numbers, the rendered charts, the stats table, and
+    callouts. Nothing else."""
+    for sheet in book.sheets:
+        if sheet.name == _HELPER_SHEET_NAME:
+            return sheet
+    helper = book.sheets.add(_HELPER_SHEET_NAME, after=book.sheets[-1])
+    try:
+        helper.api.Visible = _XL_SHEET_VERY_HIDDEN
+    except Exception:
+        # Falls back to a normal sheet (still hidden behind the report
+        # tab order) — the report still renders correctly even if the
+        # helper is visible in the tab strip.
+        pass
+    return helper
+
+
+def _clear_helper_block(
+    helper: Any, anchor_col: str, columns: int, rows: int,
+) -> None:
+    """Wipe a staging block on the helper sheet before re-writing it.
+
+    Without this, a second `build_*_report` call could leave stale
+    rows below the new data, and Excel's chart binding would silently
+    extend to the longer range (mixing fresh + stale)."""
+    last_col = chr(ord(anchor_col) + columns - 1)
+    try:
+        helper.range(f"{anchor_col}1:{last_col}{rows}").clear_contents()
+    except Exception:
+        pass
+
+
+def _bind_chart_to_range(
+    chart: Any,
+    source_range: Any,
+    *,
+    plot_by: int = _XL_COLUMNS,
+) -> bool:
+    """Bind `chart` to `source_range` via the COM SetSourceData call.
+
+    Bug #18 (alpha.15): xlwings' `Chart.set_source_data(range)` was
+    observed to leave the chart's `SeriesCollection(1).Formula` empty
+    on real workbooks even though no exception was raised — the chart
+    rendered briefly while Excel auto-populated a default series, then
+    went blank because the bind step silently failed. Calling
+    `chart_api.SetSourceData(source.api, PlotBy)` directly via COM
+    works around it.
+
+    Returns True iff the binding produces a non-empty
+    SeriesCollection(1).Formula afterwards (our "the bind actually
+    stuck" probe). False signals the caller can attempt a fallback
+    or surface a warning."""
+    chart_api = chart.api[1] if isinstance(chart.api, tuple) else chart.api
+    source_api = source_range.api
+    try:
+        chart_api.SetSourceData(Source=source_api, PlotBy=plot_by)
+    except Exception:
+        return False
+    # Verification probe — read the formula back. If it's empty,
+    # the bind silently dropped (the bug #18 symptom) and we report
+    # failure so the caller knows. If the probe itself errors (some
+    # COM proxies don't expose .Formula cleanly), assume success
+    # rather than reporting a false negative.
+    try:
+        formula = str(chart_api.SeriesCollection(1).Formula or "")
+        return bool(formula.strip())
+    except Exception:
+        return True
+
+
 def _write_histogram_data(
     sheet: Any, samples: list[float], *, anchor_col: str, anchor_row: int,
 ) -> None:
     """Compute histogram counts and write bin centres / counts /
-    cumulative as three columns starting at anchor."""
+    cumulative as three columns starting at anchor on the provided
+    sheet (typically the hidden helper sheet)."""
     if not samples:
         return
     lo, hi = min(samples), max(samples)
@@ -533,16 +647,38 @@ def _write_histogram_data(
 
 
 def _add_histogram_chart(
-    sheet: Any, *, bin_count: int, title: str,
+    sheet: Any,
+    *,
+    helper: Any,
+    helper_anchor_col: str,
+    bin_count: int,
+    title: str,
     left: int, top: int, width: int, height: int,
 ) -> int:
-    """Add a histogram (column) + cumulative (line) chart. Returns 1
-    on success, 0 if the chart object couldn't be created."""
-    chart = sheet.charts.add(left=left, top=top, width=width, height=height)
-    chart.set_source_data(sheet.range(f"M1:O{1 + bin_count}"))
+    """Add a histogram (column) + cumulative (line) chart on `sheet`,
+    bound to the helper-sheet range starting at `helper_anchor_col`.
+    Returns 1 on success (and the binding actually stuck), 0 if the
+    chart object couldn't be created or the COM bind failed."""
+    try:
+        chart = sheet.charts.add(left=left, top=top, width=width, height=height)
+    except Exception:
+        return 0
+    last_col = chr(ord(helper_anchor_col) + 2)
+    source_range = helper.range(
+        f"{helper_anchor_col}1:{last_col}{1 + bin_count}"
+    )
     try:
         chart_api = chart.api[1] if isinstance(chart.api, tuple) else chart.api
+        # Set the type FIRST. Excel sometimes drops the series
+        # configuration if you change the type after binding.
         chart_api.ChartType = _XL_COLUMN_CLUSTERED
+    except Exception:
+        pass
+    bound = _bind_chart_to_range(chart, source_range, plot_by=_XL_COLUMNS)
+    if not bound:
+        return 0
+    try:
+        chart_api = chart.api[1] if isinstance(chart.api, tuple) else chart.api
         chart_api.HasTitle = True
         chart_api.ChartTitle.Text = title
         # Make the cumulative series a line on a secondary axis.
@@ -561,7 +697,8 @@ def _add_histogram_chart(
 def _write_tornado_data(
     sheet: Any, entries: list[Any], *, anchor_col: str, anchor_row: int,
 ) -> None:
-    """Two-column layout: name, correlation. Used by the tornado mini."""
+    """Two-column layout: name, correlation. Written to the helper
+    sheet at the given anchor; the chart binds to this range."""
     sheet.range(f"{anchor_col}{anchor_row}").value = "Input"
     sheet.range(f"{chr(ord(anchor_col) + 1)}{anchor_row}").value = "Correlation"
     for i, e in enumerate(entries, start=anchor_row + 1):
@@ -570,14 +707,35 @@ def _write_tornado_data(
 
 
 def _add_tornado_chart(
-    sheet: Any, *, driver_count: int, title: str,
+    sheet: Any,
+    *,
+    helper: Any,
+    helper_anchor_col: str,
+    driver_count: int,
+    title: str,
     left: int, top: int, width: int, height: int,
 ) -> int:
-    chart = sheet.charts.add(left=left, top=top, width=width, height=height)
-    chart.set_source_data(sheet.range(f"P1:Q{1 + driver_count}"))
+    """Add a horizontal-bar tornado chart on `sheet`, bound to the
+    helper-sheet range starting at `helper_anchor_col`. Returns 1 on
+    success, 0 if either the chart creation or the COM bind failed."""
+    try:
+        chart = sheet.charts.add(left=left, top=top, width=width, height=height)
+    except Exception:
+        return 0
+    last_col = chr(ord(helper_anchor_col) + 1)
+    source_range = helper.range(
+        f"{helper_anchor_col}1:{last_col}{1 + driver_count}"
+    )
     try:
         chart_api = chart.api[1] if isinstance(chart.api, tuple) else chart.api
         chart_api.ChartType = _XL_BAR_CLUSTERED
+    except Exception:
+        pass
+    bound = _bind_chart_to_range(chart, source_range, plot_by=_XL_COLUMNS)
+    if not bound:
+        return 0
+    try:
+        chart_api = chart.api[1] if isinstance(chart.api, tuple) else chart.api
         chart_api.HasTitle = True
         chart_api.ChartTitle.Text = title
         # Reverse plot order so the strongest driver is at the top
@@ -718,7 +876,7 @@ class DriversReportBuilder:
         findings = _compose_findings(output_name, entries)
         DriversReportBuilder._write_findings(sheet, findings)
 
-        DriversReportBuilder._write_tornado_chart(sheet, output_name, entries)
+        DriversReportBuilder._write_tornado_chart(book, sheet, output_name, entries)
         DriversReportBuilder._write_driver_table(sheet, entries)
 
         DriversReportBuilder._write_chart_explanation(sheet)
@@ -798,43 +956,40 @@ class DriversReportBuilder:
             except Exception:
                 pass
 
+    # Helper-sheet block ownership: drivers tornado lives at I:J on the
+    # hidden helper sheet (executive report uses A:C and E:F).
+    _HELPER_TORNADO_COL = "I"
+
     @staticmethod
     def _write_tornado_chart(
-        sheet: Any, output_name: str, entries: list[Any],
+        book: Any, sheet: Any, output_name: str, entries: list[Any],
     ) -> None:
+        """Render the prominent driver tornado on `sheet` with its
+        source data on the hidden helper sheet (bug #19 — staging
+        data must not leak onto the user-visible report). Binding
+        goes through `_bind_chart_to_range` so the connection is
+        verified (bug #18)."""
         if not entries:
             return
-        # Helper data goes far right (hidden later)
-        _write_tornado_data(sheet, entries, anchor_col="P", anchor_row=1)
+        helper = _get_or_create_helper_sheet(book)
+        if helper is None:
+            return
+        anchor = DriversReportBuilder._HELPER_TORNADO_COL
         try:
-            chart = sheet.charts.add(
+            _clear_helper_block(
+                helper, anchor, columns=2, rows=len(entries) + 2,
+            )
+            _write_tornado_data(
+                helper, entries, anchor_col=anchor, anchor_row=1,
+            )
+            _add_tornado_chart(
+                sheet,
+                helper=helper,
+                helper_anchor_col=anchor,
+                driver_count=len(entries),
+                title=f"What moves {output_name}",
                 left=10, top=210, width=420, height=320,
             )
-            chart.set_source_data(
-                sheet.range(f"P1:Q{1 + len(entries)}")
-            )
-            try:
-                chart_api = (
-                    chart.api[1] if isinstance(chart.api, tuple)
-                    else chart.api
-                )
-                chart_api.ChartType = _XL_BAR_CLUSTERED
-                chart_api.HasTitle = True
-                chart_api.ChartTitle.Text = (
-                    f"What moves {output_name}"
-                )
-                category_axis = chart_api.Axes(1)
-                category_axis.ReversePlotOrder = True
-            except Exception:
-                pass
-            try:
-                chart.name = f"DriversTornado_{output_name[:15]}"[:31]
-            except Exception:
-                pass
-        except Exception:
-            pass
-        try:
-            sheet.range("P:Q").api.EntireColumn.Hidden = True
         except Exception:
             pass
 
