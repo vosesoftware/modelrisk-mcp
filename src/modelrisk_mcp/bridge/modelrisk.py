@@ -23,6 +23,11 @@ from modelrisk_mcp.bridge.catalogue import FunctionCatalogue, load_catalogue
 from modelrisk_mcp.bridge.charts import TornadoChartResult, TornadoChartWriter
 from modelrisk_mcp.bridge.excel import ExcelBridge
 from modelrisk_mcp.bridge.mrservice import MrServiceBridge
+from modelrisk_mcp.bridge.reports import (
+    ExecutiveReportBuilder,
+    ExecutiveReportResult,
+    default_subtitle,
+)
 from modelrisk_mcp.bridge.results import ResultsReader
 from modelrisk_mcp.bridge.simulation import (
     SimulationController,
@@ -295,6 +300,80 @@ class ModelRiskBridge:
             workbook, names, include_inputs=True
         )
         return self._results.get_correlation_matrix(wb_path, resolved_names)
+
+    def build_executive_report(
+        self,
+        primary_output: str,
+        *,
+        workbook: str | None = None,
+        title: str | None = None,
+        subtitle: str | None = None,
+        secondary_outputs: list[str] | None = None,
+        contingency_percentile: float = 0.90,
+        top_drivers: int = 5,
+        sheet_name: str = "Executive_Report",
+    ) -> ExecutiveReportResult:
+        """Render a single-sheet decision-maker dashboard for one
+        primary output (with optional secondary outputs in the stats
+        table). Gathers all the data via existing read methods, then
+        hands off to `ExecutiveReportBuilder.build`."""
+        wb_name = workbook or self._excel.get_active_workbook().name
+
+        # Gather: stats for primary + secondary, raw samples for the
+        # histogram, sensitivity ranking for the tornado.
+        all_outputs = [primary_output, *list(secondary_outputs or [])]
+        wb_path, _ = self._resolve_workbook_and_outputs(wb_name, all_outputs)
+        stats = self._results.get_simulation_results(wb_path, all_outputs)
+        results_by_name = {r.output_name: r for r in stats}
+        if primary_output not in results_by_name:
+            from modelrisk_mcp.errors import SimulationFailedError
+            raise SimulationFailedError(
+                f"Primary output {primary_output!r} not found in the "
+                "active simulation results. Run a simulation first or "
+                "check the output name."
+            )
+        primary_result = results_by_name[primary_output]
+        secondary_results = [
+            results_by_name[name] for name in (secondary_outputs or [])
+            if name in results_by_name
+        ]
+
+        # Raw samples for the histogram.
+        primary_samples = list(
+            self._results.get_samples(primary_output, wb_path, max_n=10_000)
+        )
+
+        # Sensitivity — input names from the workbook.
+        input_names = [i.name for i in self.list_inputs(wb_name)]
+        sensitivity = self._results.get_sensitivity_ranking(
+            primary_output, input_names, wb_path,
+        )
+
+        # Default title / subtitle if not provided.
+        effective_title = title or f"Simulation Report — {primary_output}"
+        effective_subtitle = subtitle or default_subtitle(
+            samples=primary_result.iterations,
+        )
+
+        # Render.
+        if not self._excel.is_connected():
+            self._excel.connect()
+        app = self._excel._app
+        assert app is not None
+        book = app.books[wb_name]
+        return ExecutiveReportBuilder.build(
+            book,
+            sheet_name=sheet_name,
+            title=effective_title,
+            subtitle=effective_subtitle,
+            primary_output=primary_output,
+            primary_result=primary_result,
+            primary_samples=primary_samples,
+            sensitivity=sensitivity,
+            secondary_results=secondary_results,
+            contingency_percentile=contingency_percentile,
+            top_drivers=top_drivers,
+        )
 
     def create_tornado_chart(
         self,

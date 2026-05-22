@@ -16,6 +16,7 @@ from pydantic import Field
 
 from modelrisk_mcp.audit.engine import run_audit
 from modelrisk_mcp.bridge.charts import TornadoChartResult
+from modelrisk_mcp.bridge.reports import ExecutiveReportResult
 from modelrisk_mcp.schemas.results import AuditReport, SimulationResult
 from modelrisk_mcp.schemas.workbook import CellRef
 from modelrisk_mcp.server import mcp
@@ -279,6 +280,112 @@ def _format_mtime(path: Path) -> str | None:
 
 @mcp.tool(
     description=(
+        "ModelRisk: Build a single-sheet executive report for a "
+        "decision-maker. Drops a curated dashboard onto a new sheet "
+        "with: title band, headline numbers (mean / P5 / P50 / P95 / "
+        "stdev — colored by volatility), histogram + cumulative chart "
+        "of the primary output, tornado of top N sensitivity drivers, "
+        "a stats table for the primary plus any secondary outputs, and "
+        "auto-generated risk callouts framed in plain English ('90% "
+        "confident X lands between A and B', 'tail risk Y% above mean', "
+        "'primary driver is Z'). Idempotent — re-running replaces the "
+        "sheet. Use this when the user asks for a decision-maker-"
+        "facing summary rather than raw stats."
+    )
+)
+def build_executive_report(
+    primary_output: Annotated[
+        str,
+        Field(
+            description=(
+                "The single output the report focuses on (e.g. 'NPV', "
+                "'TotalCost'). Headline numbers and the histogram + "
+                "tornado are about this output."
+            )
+        ),
+    ],
+    title: Annotated[
+        str | None,
+        Field(
+            description=(
+                "Report title shown in the top band. Default: "
+                "'Simulation Report — <primary_output>'."
+            )
+        ),
+    ] = None,
+    subtitle: Annotated[
+        str | None,
+        Field(
+            description=(
+                "Subtitle shown beneath the title. Default: "
+                "'<N> iterations · <today's date>'."
+            )
+        ),
+    ] = None,
+    secondary_outputs: Annotated[
+        list[str] | None,
+        Field(
+            description=(
+                "Additional outputs to include in the stats table. The "
+                "primary output is always first; these appear below."
+            )
+        ),
+    ] = None,
+    contingency_percentile: Annotated[
+        float,
+        Field(
+            ge=0.5,
+            le=0.99,
+            description=(
+                "The 'high-side' percentile to highlight in the "
+                "headline. Default 0.90 (P90)."
+            ),
+        ),
+    ] = 0.90,
+    top_drivers: Annotated[
+        int,
+        Field(
+            ge=1,
+            le=20,
+            description="How many inputs to show in the tornado mini-chart.",
+        ),
+    ] = 5,
+    sheet_name: Annotated[
+        str,
+        Field(
+            description=(
+                "Target sheet name. Default 'Executive_Report'. "
+                "Replaced if it already exists."
+            )
+        ),
+    ] = "Executive_Report",
+    workbook_name: Annotated[
+        str | None,
+        Field(description="Workbook name. Omit for the active workbook."),
+    ] = None,
+) -> dict[str, Any]:
+    result: ExecutiveReportResult = get_bridge().build_executive_report(
+        primary_output,
+        workbook=workbook_name,
+        title=title,
+        subtitle=subtitle,
+        secondary_outputs=secondary_outputs,
+        contingency_percentile=contingency_percentile,
+        top_drivers=top_drivers,
+        sheet_name=sheet_name,
+    )
+    return {
+        "sheet_name": result.sheet_name,
+        "primary_output": result.primary_output,
+        "secondary_outputs": list(result.secondary_outputs),
+        "chart_count": result.chart_count,
+        "callout_count": result.callout_count,
+        "headline_summary": result.headline_summary,
+    }
+
+
+@mcp.tool(
+    description=(
         "ModelRisk: Render a tornado chart of input sensitivity for a "
         "single output as a new sheet in the workbook. The sheet has "
         "a sorted data table (Spearman rank correlation + regression "
@@ -415,6 +522,7 @@ def generate_executive_summary(
 
 __all__ = [
     "audit_model",
+    "build_executive_report",
     "create_tornado_chart",
     "diagnose_workbook",
     "discover_inputs",

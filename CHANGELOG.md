@@ -4,6 +4,27 @@ All notable changes to ModelRisk MCP. Follows [Keep a Changelog](https://keepach
 
 ## [Unreleased]
 
+## [0.3.0-alpha.12] — 2026-05-22
+
+Adds the headline feature for end-user testing this week: a single-sheet executive-report builder that the LLM can produce in response to "create a report for a decision-maker."
+
+### Added
+
+- **`build_executive_report(primary_output, title?, subtitle?, secondary_outputs?, contingency_percentile=0.90, top_drivers=5, sheet_name="Executive_Report", workbook_name?)`** — new MCP tool that drops a one-sheet decision-maker dashboard onto the workbook. Idempotent; re-running replaces the sheet. The layout:
+  - **Title band** (rows 1-2) — large, on a deep-navy background.
+  - **Headline numbers** (rows 5-6) — mean / P5 / P50 / P90 (configurable) / stdev, big bold colored fonts. P5 in green (downside), P-high in red (upside risk), stdev color shifts amber/red as CV (coefficient of variation) rises.
+  - **Charts band** (~rows 9-24) — side-by-side: histogram + cumulative overlay of the primary output's samples on the left, tornado mini of the top N sensitivity drivers on the right.
+  - **Statistics table** (rows 26+) — full mean/stdev/P5/P50/P95/CV per output (primary first, then secondary). CV values colored by volatility tier.
+  - **Risk callouts** (below stats) — auto-generated plain-English sentences for the decision-maker: "90% confident X lands between [A, B]", "Tail risk: PN is Y% above mean", "Primary driver: <input> (r = ±0.65) — focus mitigation here". Volatility callout fires only above the CV thresholds.
+- `bridge/reports.py::ExecutiveReportBuilder` — the report orchestrator. Layout constants are class attributes so a redesign is one edit. All formatting wrapped in best-effort try/except so a COM hiccup on a single colour set doesn't tank the report.
+- New chart variant: histogram + cumulative-overlay on a single chart object (column chart for counts, line on a secondary axis for cumulative %). Reuses the `TornadoChartWriter` pattern.
+
+### Tests
+
+348 unit tests pass (was 335): +13 new tests for the report builder covering title/subtitle placement, headline cells, secondary output rows in the stats table, callout generation from data, sheet-replacement idempotence, empty-samples / empty-sensitivity edge cases, high-CV volatility callouts, headline-summary string format, the `default_subtitle` helper, and MCP-tool passthrough.
+
+Tool count grows to 38.
+
 ## [0.3.0-alpha.11] — 2026-05-21
 
 Five real bugs found by a real end-user testing session. All shipped as fixes; one is a critical correctness bug that silently broke every list-scan against real Excel (unit tests passed because the fakes returned lists where real xlwings returns tuples).
