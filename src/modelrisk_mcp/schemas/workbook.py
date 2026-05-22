@@ -76,6 +76,14 @@ class CellInfo(BaseModel):
     value: float | str | bool | None = None
     number_format: str = ""
     cell_type: str = "general"  # general | formula | number | text | error | empty
+    # Bug #34 (alpha.33): when a cell evaluates to an Excel error
+    # (`#DIV/0!`, `#REF!`, `#NAME?`, etc.) xlwings reports `value=None`,
+    # which is indistinguishable from an empty cell. That hides real
+    # workbook problems from the LLM (e.g. an audit can't see that a
+    # VosePERT call's `most likely` argument resolved to `#DIV/0!`).
+    # When the cell is errored we now surface the Excel error string
+    # here and set `cell_type="error"`.
+    error: str | None = None
 
 
 class RangeInfo(BaseModel):
@@ -88,6 +96,13 @@ class RangeInfo(BaseModel):
     range_ref: str
     values: list[list[Any]] = Field(default_factory=list)
     formulas: list[list[str]] = Field(default_factory=list)
+    # Bug #34 (alpha.33): parallel 2D array of error strings — same
+    # shape as `values`/`formulas`. Each entry is the Excel error
+    # string (e.g. `"#DIV/0!"`) if that cell evaluates to an error,
+    # otherwise `None`. Lets the LLM tell an empty cell from a
+    # crashed formula. Empty list if no cells errored (kept compact
+    # for the common case).
+    errors: list[list[str | None]] = Field(default_factory=list)
 
     @field_validator("range_ref")
     @classmethod

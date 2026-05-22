@@ -4,6 +4,18 @@ All notable changes to ModelRisk MCP. Follows [Keep a Changelog](https://keepach
 
 ## [Unreleased]
 
+## [0.3.0-alpha.33] — 2026-05-22
+
+### Fixed
+
+- **Bug #34 — error cells (`#DIV/0!`, `#REF!`, `#NAME?`, ...) were indistinguishable from empty cells.** When a cell evaluated to an Excel error, xlwings' `Range.value` returned `None` — the same value an empty cell returns. `get_cell` therefore reported `value=null, cell_type="formula"` for a broken cell and `value=null, cell_type="empty"` for an empty one, with no way for the LLM to tell them apart. Worse: a Vose call with an errored argument (e.g. `VosePERT(10, #DIV/0!, 30)`) showed up as a normal formula in `read_range`, and audit scans missed broken distributions entirely.
+
+  Fix: detect errors via `Range.Text`, which always renders error cells as their literal (`"#DIV/0!"` etc.). `CellInfo` gains a new optional `error: str | None` field and `cell_type="error"` is a recognised classification. `RangeInfo` gains a parallel `errors: list[list[str | None]]` 2D array (empty list when no cells in the range errored, so the common case stays compact). `iterate_cells` (used by `audit_model` and `find_hard_coded_inputs`) does a single bulk Text read per sheet so the per-cell error info costs no extra COM round-trips. All detection paths fail open: if Text isn't available, the read still returns values + formulas as before.
+
+### Tests
+
+`test_excel_bridge.py` gains `TestDetectExcelError` (12 cases covering Excel error literals, normal cells, edge cases like `#hashtag` text, COM failure, non-string Text) and `TestClassifyCellWithError` (error wins over formula classification).
+
 ## [0.3.0-alpha.32] — 2026-05-22
 
 ### Fixed

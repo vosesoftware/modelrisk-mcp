@@ -19,7 +19,12 @@ from typing import Any
 
 import pytest
 
-from modelrisk_mcp.bridge.excel import ExcelBridge, _as_2d
+from modelrisk_mcp.bridge.excel import (
+    ExcelBridge,
+    _as_2d,
+    _classify_cell,
+    _detect_excel_error,
+)
 from modelrisk_mcp.errors import WorkbookNotFoundError
 
 
@@ -341,3 +346,123 @@ class TestSaveWorkbookAsUsesSaveCopyAs:
             )
         # No COM call should have happened.
         assert book.api.calls == []
+
+
+# ----------------------------------------------------------------------
+# Bug #34 (alpha.33): error-cell detection via Range.Text
+# ----------------------------------------------------------------------
+
+
+class _FakeCellApi:
+    """Stand-in for `cell_obj.api` exposing only `.Text` (and optionally
+    `.Value`). xlwings' Range.Text proxies straight through to the COM
+    Range.Text property."""
+
+    def __init__(self, text: Any = "") -> None:
+        self.Text = text  # mirrors COM property name
+
+
+class _FakeCell:
+    def __init__(
+        self,
+        *,
+        formula: str = "",
+        value: Any = None,
+        number_format: str = "",
+        text: Any = "",
+    ) -> None:
+        self.formula = formula
+        self.value = value
+        self.number_format = number_format
+        self.api = _FakeCellApi(text=text)
+
+
+class TestDetectExcelError:
+    """Bug #34: error cells (#DIV/0!, #REF!, etc.) returned value=None
+    indistinguishable from empty cells. We now read Range.Text and
+    match against the known Excel error literals."""
+
+    def test_div_zero_detected(self) -> None:
+        cell = _FakeCell(formula="=1/0", value=None, text="#DIV/0!")
+        assert _detect_excel_error(cell, None) == "#DIV/0!"
+
+    def test_ref_error_detected(self) -> None:
+        cell = _FakeCell(formula="=#REF!", value=None, text="#REF!")
+        assert _detect_excel_error(cell, None) == "#REF!"
+
+    def test_name_error_detected(self) -> None:
+        cell = _FakeCell(formula="=BadFn()", value=None, text="#NAME?")
+        assert _detect_excel_error(cell, None) == "#NAME?"
+
+    def test_na_error_detected(self) -> None:
+        cell = _FakeCell(formula="=NA()", value=None, text="#N/A")
+        assert _detect_excel_error(cell, None) == "#N/A"
+
+    def test_value_error_detected(self) -> None:
+        cell = _FakeCell(formula='=VALUE("nope")', value=None, text="#VALUE!")
+        assert _detect_excel_error(cell, None) == "#VALUE!"
+
+    def test_normal_number_is_not_an_error(self) -> None:
+        cell = _FakeCell(formula="=1+1", value=2.0, text="2")
+        assert _detect_excel_error(cell, 2.0) is None
+
+    def test_text_label_is_not_an_error(self) -> None:
+        cell = _FakeCell(formula="", value="Total", text="Total")
+        assert _detect_excel_error(cell, "Total") is None
+
+    def test_empty_cell_is_not_an_error(self) -> None:
+        cell = _FakeCell(formula="", value=None, text="")
+        assert _detect_excel_error(cell, None) is None
+
+    def test_hash_prefix_string_that_is_not_an_excel_error(self) -> None:
+        """A text cell whose displayed value happens to start with '#'
+        (e.g. a hashtag) must NOT be flagged as an error — only the
+        exact Excel error literals count."""
+        cell = _FakeCell(formula="", value="#hashtag", text="#hashtag")
+        assert _detect_excel_error(cell, "#hashtag") is None
+
+    def test_text_with_surrounding_whitespace_still_matches(self) -> None:
+        """Some custom formats can pad the displayed text; the detector
+        strips before matching."""
+        cell = _FakeCell(formula="=1/0", value=None, text="  #DIV/0!  ")
+        assert _detect_excel_error(cell, None) == "#DIV/0!"
+
+    def test_text_read_failure_returns_none(self) -> None:
+        """If Range.Text raises (some COM versions / OLE-state issues),
+        we should not crash — just return None and let the value/
+        formula path handle the cell normally."""
+
+        class _ExplodingApi:
+            @property
+            def Text(self) -> Any:  # noqa: N802
+                raise RuntimeError("COM unavailable")
+
+        cell = SimpleNamespace(api=_ExplodingApi())
+        assert _detect_excel_error(cell, None) is None
+
+    def test_non_string_text_returns_none(self) -> None:
+        """If Text comes back as something other than a string (e.g.
+        a COM Variant that didn't coerce), we don't crash."""
+        cell = _FakeCell(formula="", value=None, text=42)
+        assert _detect_excel_error(cell, None) is None
+
+
+class TestClassifyCellWithError:
+    """Bug #34: a cell with an error must classify as 'error' even if
+    the formula starts with '=' (which would otherwise win)."""
+
+    def test_error_overrides_formula_classification(self) -> None:
+        # Error wins: a `=1/0` formula classifies as error, not formula.
+        assert _classify_cell("=1/0", None, error="#DIV/0!") == "error"
+
+    def test_no_error_classifies_as_formula(self) -> None:
+        assert _classify_cell("=1+1", 2.0, error=None) == "formula"
+
+    def test_no_error_no_formula_empty(self) -> None:
+        assert _classify_cell("", None, error=None) == "empty"
+
+    def test_no_error_no_formula_number(self) -> None:
+        assert _classify_cell("", 3.14, error=None) == "number"
+
+    def test_no_error_no_formula_text(self) -> None:
+        assert _classify_cell("", "Label", error=None) == "text"

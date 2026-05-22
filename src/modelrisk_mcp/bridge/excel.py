@@ -219,6 +219,7 @@ class ExcelBridge:
             ) from exc
         formula = cell_obj.formula or ""
         value = cell_obj.value
+        error = _detect_excel_error(cell_obj, value)
         number_format = ""
         try:
             number_format = cell_obj.number_format or ""
@@ -230,7 +231,8 @@ class ExcelBridge:
             formula=formula,
             value=value,
             number_format=number_format,
-            cell_type=_classify_cell(formula, value),
+            cell_type=_classify_cell(formula, value, error=error),
+            error=error,
         )
 
     def read_range(
@@ -250,12 +252,44 @@ class ExcelBridge:
         raw_formulas = r.formula
         values = _as_2d(raw_values)
         formulas = [[str(f or "") for f in row] for row in _as_2d(raw_formulas)]
+        # Bug #34 (alpha.33): also pull `Range.Text` as a single COM
+        # call so we can flag cells that evaluate to an Excel error
+        # ("#DIV/0!", "#REF!", ...) — the `value` accessor returns
+        # `None` for those, making them indistinguishable from empty
+        # cells. Text returns the *displayed* string, so a cell with
+        # an error always shows the error literal there.
+        errors: list[list[str | None]] = []
+        try:
+            raw_text = r.api.Text
+            text_2d = _as_2d(raw_text)
+            if len(text_2d) == len(values):
+                for text_row in text_2d:
+                    err_row: list[str | None] = []
+                    for cell_text in text_row:
+                        if (
+                            isinstance(cell_text, str)
+                            and cell_text.strip() in _EXCEL_ERROR_STRINGS
+                        ):
+                            err_row.append(cell_text.strip())
+                        else:
+                            err_row.append(None)
+                    errors.append(err_row)
+        except Exception:
+            # Some Excel/COM versions raise on bulk Range.Text. Better
+            # to return values/formulas with no error info than to
+            # fail the whole read.
+            errors = []
+        # Keep `errors` compact when nothing is errored — empty list
+        # signals "no errors detected", same shape as before.
+        if errors and not any(e for row in errors for e in row):
+            errors = []
         return RangeInfo(
             workbook=workbook,
             sheet=sheet,
             range_ref=range_ref,
             values=values,
             formulas=formulas,
+            errors=errors,
         )
 
     def iterate_cells(
@@ -283,20 +317,48 @@ class ExcelBridge:
                 formulas_2d = _as_2d(used.formula)
             except Exception:
                 continue
+            # Bug #34 (alpha.33): bulk-read Range.Text once per sheet
+            # so we can flag error cells inside an audit/scan without
+            # per-cell COM round-trips. Errors show up as their literal
+            # ("#DIV/0!" etc.) in Text. Failure here is non-fatal: the
+            # scan still runs, just without error-cell classification.
+            text_2d: list[list[Any]] = []
+            try:
+                text_2d = _as_2d(used.api.Text)
+                if len(text_2d) != len(values_2d):
+                    text_2d = []
+            except Exception:
+                text_2d = []
             first_row = used.row
             first_col = used.column
             for ri, (vrow, frow) in enumerate(
                 zip(values_2d, formulas_2d, strict=False)
             ):
+                trow = text_2d[ri] if text_2d and ri < len(text_2d) else []
                 for ci, (val, formula_str) in enumerate(
                     zip(vrow, frow, strict=False)
                 ):
                     formula = str(formula_str or "")
                     if not formula and (val is None or val == ""):
-                        continue
+                        # Even a Vose error cell with no formula shows
+                        # an error literal — but if there's no formula
+                        # AND no value, the cell is genuinely empty.
+                        cell_text = trow[ci] if ci < len(trow) else None
+                        if not (
+                            isinstance(cell_text, str)
+                            and cell_text.strip() in _EXCEL_ERROR_STRINGS
+                        ):
+                            continue
                     abs_row = first_row + ri
                     abs_col = first_col + ci
                     cell_ref = _coord_to_a1(abs_row, abs_col)
+                    cell_text = trow[ci] if ci < len(trow) else None
+                    error: str | None = None
+                    if (
+                        isinstance(cell_text, str)
+                        and cell_text.strip() in _EXCEL_ERROR_STRINGS
+                    ):
+                        error = cell_text.strip()
                     info = CellInfo(
                         ref=CellRef(
                             workbook=workbook,
@@ -305,7 +367,8 @@ class ExcelBridge:
                         ),
                         formula=formula,
                         value=val if not isinstance(val, list) else None,
-                        cell_type=_classify_cell(formula, val),
+                        cell_type=_classify_cell(formula, val, error=error),
+                        error=error,
                     )
                     if predicate is None or predicate(info):
                         yield info
@@ -573,7 +636,7 @@ class ExcelBridge:
 # ----------------------------------------------------------------------
 
 
-def _classify_cell(formula: str, value: Any) -> str:
+def _classify_cell(formula: str, value: Any, *, error: str | None = None) -> str:
     """Classify a cell by what it actually contains.
 
     Bug #27 (alpha.25): xlwings' `Range.Formula` accessor returns the
@@ -587,7 +650,13 @@ def _classify_cell(formula: str, value: Any) -> str:
 
     Fix: a cell only counts as a formula if its `.Formula` actually
     starts with `=`. Everything else gets classified by value type.
+
+    Bug #34 (alpha.33): an Excel error (`#DIV/0!`, `#REF!`, ...) is
+    a distinct cell state and gets its own classification. Detected
+    from the caller (it requires a COM Text read we don't have here).
     """
+    if error is not None:
+        return "error"
     if formula and formula.lstrip().startswith("="):
         return "formula"
     if value is None or value == "":
@@ -599,6 +668,55 @@ def _classify_cell(formula: str, value: Any) -> str:
     if isinstance(value, str):
         return "text"
     return "general"
+
+
+# The set of Excel error literals — what Range.Text returns when a
+# cell evaluates to an error. Covers classic errors (#REF!, #DIV/0!,
+# #VALUE!, #NAME?, #NULL!, #NUM!, #N/A) plus the newer dynamic-array
+# / external-data errors introduced from Excel 2019 onwards.
+_EXCEL_ERROR_STRINGS = frozenset({
+    "#DIV/0!",
+    "#N/A",
+    "#NAME?",
+    "#NULL!",
+    "#NUM!",
+    "#REF!",
+    "#VALUE!",
+    "#GETTING_DATA",
+    "#SPILL!",
+    "#CALC!",
+    "#FIELD!",
+    "#UNKNOWN!",
+    "#BLOCKED!",
+    "#BUSY!",
+    "#CONNECT!",
+    "#EXTERNAL!",
+    "#PYTHON!",
+})
+
+
+def _detect_excel_error(cell_obj: Any, value: Any) -> str | None:
+    """Return the Excel error string (`"#DIV/0!"` etc.) if this cell
+    evaluates to an error, else `None`.
+
+    Detection strategy: read `Range.Text`. xlwings' `.value` accessor
+    returns `None` for error cells, which collides with empty cells —
+    we can't disambiguate from `value` alone. But `Range.Text` always
+    returns the *displayed* contents, which is the error literal for
+    error cells regardless of number format. A single COM round-trip
+    extra per `get_cell` call is a fine tax to surface a real category
+    of workbook problem to the LLM (bug #34).
+    """
+    try:
+        text = cell_obj.api.Text
+    except Exception:
+        return None
+    if not isinstance(text, str):
+        return None
+    stripped = text.strip()
+    if stripped in _EXCEL_ERROR_STRINGS:
+        return stripped
+    return None
 
 
 def _as_2d(value: Any) -> list[list[Any]]:
