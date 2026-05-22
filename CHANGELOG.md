@@ -4,6 +4,30 @@ All notable changes to ModelRisk MCP. Follows [Keep a Changelog](https://keepach
 
 ## [Unreleased]
 
+## [0.3.0-alpha.20] — 2026-05-22
+
+Polish pass on `build_executive_report` after a live screenshot review against the `NPV_of_a_capital_investment` workbook. Two real issues found: the histogram chart was rendering with completely wrong semantics, and the layout was visually cramped with column A pulling double duty as label-holder and edge.
+
+### Fixed
+
+- **Histogram chart was inverted (#18b).** Prior versions called `SetSourceData` on the full 3-column block `[Bin, Count, Cumulative %]`, which made Excel turn all three columns into data series — visible result was "Bin" values plotted as random-height blue bars (the user's screenshot showed bars at 50k, 100k, 150k etc.), "Count" plotted as a red line, and Cumulative invisible. Fix: bind to ONLY the Count + Cumulative columns, then explicitly assign `SeriesCollection(i).XValues` on both series to the Bin column. Result: proper frequency-histogram bars with bin centres on the X axis, cumulative-% line overlay on a secondary Y axis. The chart now looks like what the report description says.
+
+### Polished
+
+- **Column A is now a narrow gutter (width 2).** Previously content started flush against the left edge with column A holding both labels AND being the page edge. Now the layout has narrow gutters at A and M, with content in B–L. Same change applied to the title band merge range (B:L instead of A:J), headline numbers (MEAN now at B6 instead of A6), stats table (Output at B26 instead of A26), and callouts (`•  ...` at B instead of A).
+- **Stats-table CV column no longer overflows.** Bumped width to 16 (was 14 implicit) so values like `1.296` render in full instead of `####`.
+- **Alternating row tint** on the stats table for readability when there are multiple outputs.
+- **High-CV cells now bold** in addition to coloured, so they survive print-to-PDF where colour fidelity drops.
+- **Chart sizes bumped** to 400×240 (histogram) and 360×240 (tornado) — the original 380×220 / 340×220 felt small relative to the title band. Charts shifted right by ~16pt to align with the new column-B content start.
+
+### Why this matters
+
+The report is the primary user-facing deliverable. A broken chart isn't "a bug to fix later" — it's the LLM lying to the user about what got built (`chart_count: 2` while the chart was visually wrong). Same goes for the cramped layout: a stakeholder sees the report and forms an opinion about modelrisk-mcp from that single screenshot. Worth getting right.
+
+### Tests
+
+399 unit tests pass. 4 existing tests updated to assert against the new column positions (B-shifted).
+
 ## [0.3.0-alpha.19] — 2026-05-22
 
 Fixes the bug-#23 lookup-after-samples regression discovered while end-to-end testing alpha.18 against a real workbook: `get_sensitivity_ranking` returned empty on the first call after `run_simulation`, then worked on the second identical call. The diagnostic trace was unambiguous — the output looked up fine, its samples loaded, then every input lookup against the same handle returned None.

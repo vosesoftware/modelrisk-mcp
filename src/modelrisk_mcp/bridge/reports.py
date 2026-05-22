@@ -193,15 +193,22 @@ class ExecutiveReportBuilder:
 
     @staticmethod
     def _set_column_widths(sheet: Any) -> None:
-        """Wide enough for monetary numbers + labels. Tuned by hand."""
+        """Layout: narrow gutter at A, content B-G, mid-gutter at H,
+        secondary content I-L, narrow gutter at M. The A and M gutters
+        give the report breathing room when printed or screenshotted —
+        the prior 'labels in column A' layout looked cramped.
+
+        Hand-tuned widths; the stats-table CV cell was overflowing
+        as `####` at width 14, hence the bumps."""
         widths = {
-            "A": 18,  # labels
-            "B": 16, "C": 16, "D": 16, "E": 16,  # headline / stats numbers
-            "F": 4,   # gutter
-            "G": 22,  # callouts / driver labels
-            "H": 14,
-            "I": 14,
-            "J": 14,
+            "A": 2,   # left gutter
+            "B": 18,  # primary labels / Mean
+            "C": 16, "D": 16, "E": 16, "F": 16,  # P5 / P50 / P-hi / StDev
+            "G": 16,  # stats-table CV
+            "H": 4,   # mid gutter
+            "I": 22,  # output name / callouts / driver labels
+            "J": 14, "K": 14, "L": 14,
+            "M": 2,   # right gutter
         }
         for col, w in widths.items():
             try:
@@ -213,22 +220,25 @@ class ExecutiveReportBuilder:
     def _write_title_band(sheet: Any, title: str, subtitle: str) -> None:
         title_row = ExecutiveReportBuilder.TITLE_ROW
         sub_row = ExecutiveReportBuilder.SUBTITLE_ROW
-        sheet.range(f"A{title_row}").value = title
-        sheet.range(f"A{sub_row}").value = subtitle
+        # Title text lives in B (the first content column post-gutter).
+        sheet.range(f"B{title_row}").value = title
+        sheet.range(f"B{sub_row}").value = subtitle
         try:
-            # Merge across A:J for both rows so the band looks unified.
-            sheet.range(f"A{title_row}:J{title_row}").merge()
-            sheet.range(f"A{sub_row}:J{sub_row}").merge()
-            band = sheet.range(f"A{title_row}:J{sub_row}")
+            # Merge across B:L for both rows so the band looks unified.
+            # The A and M columns stay as narrow gutters so the band
+            # gets visual breathing room on both sides.
+            sheet.range(f"B{title_row}:L{title_row}").merge()
+            sheet.range(f"B{sub_row}:L{sub_row}").merge()
+            band = sheet.range(f"B{title_row}:L{sub_row}")
             band.api.Interior.Color = _COLOR_TITLE_BG
             band.api.Font.Color = _COLOR_TITLE_FG
-            sheet.range(f"A{title_row}").api.Font.Size = 18
-            sheet.range(f"A{title_row}").api.Font.Bold = True
-            sheet.range(f"A{sub_row}").api.Font.Size = 11
-            sheet.range(f"A{title_row}").api.HorizontalAlignment = -4108  # xlCenter
-            sheet.range(f"A{sub_row}").api.HorizontalAlignment = -4108
-            sheet.range(f"A{title_row}").row_height = 28
-            sheet.range(f"A{sub_row}").row_height = 18
+            sheet.range(f"B{title_row}").api.Font.Size = 18
+            sheet.range(f"B{title_row}").api.Font.Bold = True
+            sheet.range(f"B{sub_row}").api.Font.Size = 11
+            sheet.range(f"B{title_row}").api.HorizontalAlignment = -4108  # xlCenter
+            sheet.range(f"B{sub_row}").api.HorizontalAlignment = -4108
+            sheet.range(f"B{title_row}").row_height = 28
+            sheet.range(f"B{sub_row}").row_height = 18
         except Exception:
             pass  # formatting is best-effort
 
@@ -250,23 +260,24 @@ class ExecutiveReportBuilder:
         )
         p_high_label = f"P{int(contingency_percentile * 100)}"
 
-        # Labels in row `label_row`
+        # Labels in row `label_row` — shifted one column right post-
+        # alpha.20 so A stays as a narrow gutter.
         labels = [
-            ("A", "MEAN"),
-            ("B", "P5 (low)"),
-            ("C", "P50 (median)"),
-            ("D", f"{p_high_label} (high)"),
-            ("E", "STDEV"),
+            ("B", "MEAN"),
+            ("C", "P5 (low)"),
+            ("D", "P50 (median)"),
+            ("E", f"{p_high_label} (high)"),
+            ("F", "STDEV"),
         ]
         for col, text in labels:
             sheet.range(f"{col}{label_row}").value = text
         # Values in row `value_row`
         values = [
-            ("A", result.mean, _COLOR_HEADLINE_NEUTRAL),
-            ("B", p5, _COLOR_HEADLINE_GOOD),
-            ("C", p50, _COLOR_HEADLINE_NEUTRAL),
-            ("D", p_high, _COLOR_HEADLINE_RISK),
-            ("E", result.stdev, _color_for_cv(result.mean, result.stdev)),
+            ("B", result.mean, _COLOR_HEADLINE_NEUTRAL),
+            ("C", p5, _COLOR_HEADLINE_GOOD),
+            ("D", p50, _COLOR_HEADLINE_NEUTRAL),
+            ("E", p_high, _COLOR_HEADLINE_RISK),
+            ("F", result.stdev, _color_for_cv(result.mean, result.stdev)),
         ]
         for col, val, color in values:
             sheet.range(f"{col}{value_row}").value = val
@@ -276,28 +287,31 @@ class ExecutiveReportBuilder:
                 pass
 
         try:
-            sheet.range(f"A{label_row}:E{label_row}").api.Font.Bold = True
-            sheet.range(f"A{label_row}:E{label_row}").api.Font.Size = 10
-            sheet.range(f"A{label_row}:E{label_row}").api.Font.Color = _rgb(100, 100, 100)
-            sheet.range(f"A{value_row}:E{value_row}").api.Font.Size = 16
-            sheet.range(f"A{value_row}:E{value_row}").api.Font.Bold = True
-            sheet.range(f"A{value_row}:E{value_row}").api.NumberFormat = "#,##0.00"
-            sheet.range(f"A{value_row}").row_height = 24
-            # Light divider band underneath
+            sheet.range(f"B{label_row}:F{label_row}").api.Font.Bold = True
+            sheet.range(f"B{label_row}:F{label_row}").api.Font.Size = 10
+            sheet.range(f"B{label_row}:F{label_row}").api.Font.Color = _rgb(100, 100, 100)
+            sheet.range(f"B{value_row}:F{value_row}").api.Font.Size = 16
+            sheet.range(f"B{value_row}:F{value_row}").api.Font.Bold = True
+            sheet.range(f"B{value_row}:F{value_row}").api.NumberFormat = "#,##0.00"
+            sheet.range(f"B{value_row}").row_height = 24
+            # Light divider band underneath, spanning the content
+            # area (B..L) but not the gutters.
             sheet.range(
-                f"A{value_row + 1}:J{value_row + 1}"
+                f"B{value_row + 1}:L{value_row + 1}"
             ).api.Interior.Color = _COLOR_BAND_LIGHT
         except Exception:
             pass
 
-        # Output name in column G so it's visible without crowding.
-        sheet.range(f"G{label_row}").value = "OUTPUT"
-        sheet.range(f"G{value_row}").value = primary_output
+        # Output name in column I so it's visible across the gutter
+        # without crowding the headline numbers.
+        sheet.range(f"I{label_row}").value = "OUTPUT"
+        sheet.range(f"I{value_row}").value = primary_output
         try:
-            sheet.range(f"G{label_row}").api.Font.Bold = True
-            sheet.range(f"G{label_row}").api.Font.Color = _rgb(100, 100, 100)
-            sheet.range(f"G{value_row}").api.Font.Bold = True
-            sheet.range(f"G{value_row}").api.Font.Size = 14
+            sheet.range(f"I{label_row}").api.Font.Bold = True
+            sheet.range(f"I{label_row}").api.Font.Size = 10
+            sheet.range(f"I{label_row}").api.Font.Color = _rgb(100, 100, 100)
+            sheet.range(f"I{value_row}").api.Font.Bold = True
+            sheet.range(f"I{value_row}").api.Font.Size = 14
         except Exception:
             pass
 
@@ -344,8 +358,10 @@ class ExecutiveReportBuilder:
                     helper_anchor_col=hist_col,
                     bin_count=_HISTOGRAM_BINS,
                     title=f"Distribution — {primary_output}",
-                    left=10, top=180,  # rough point coords; xlwings uses raw points
-                    width=380, height=220,
+                    # Shifted right by ~16pt post-alpha.20 to align
+                    # with column B (content starts after gutter A).
+                    left=26, top=180,
+                    width=400, height=240,
                 )
             except Exception:
                 pass
@@ -370,8 +386,8 @@ class ExecutiveReportBuilder:
                     helper_anchor_col=tornado_col,
                     driver_count=len(entries),
                     title=f"Top drivers — {primary_output}",
-                    left=420, top=180,
-                    width=340, height=220,
+                    left=440, top=180,
+                    width=360, height=240,
                 )
             except Exception:
                 pass
@@ -385,38 +401,46 @@ class ExecutiveReportBuilder:
         primary_result: SimulationResult,
         secondary_results: list[SimulationResult],
     ) -> int:
-        """Returns the last-used row so callouts can be positioned below."""
+        """Returns the last-used row so callouts can be positioned below.
+
+        Columns post-alpha.20: B (Output) C (Mean) D (StDev) E (P5)
+        F (P50) G (P95) H (CV). Column A stays as the narrow gutter."""
         top = ExecutiveReportBuilder.STATS_TABLE_TOP
         header = ["Output", "Mean", "StDev", "P5", "P50", "P95", "CV"]
         for i, label in enumerate(header):
-            col = chr(ord("A") + i)
+            col = chr(ord("B") + i)  # B..H
             sheet.range(f"{col}{top}").value = label
         try:
-            sheet.range(f"A{top}:G{top}").api.Font.Bold = True
-            sheet.range(f"A{top}:G{top}").api.Interior.Color = _COLOR_BAND_LIGHT
-            sheet.range(f"A{top}:G{top}").api.Borders(9).LineStyle = 1  # bottom border
+            sheet.range(f"B{top}:H{top}").api.Font.Bold = True
+            sheet.range(f"B{top}:H{top}").api.Interior.Color = _COLOR_BAND_LIGHT
+            sheet.range(f"B{top}:H{top}").api.Borders(9).LineStyle = 1  # bottom border
         except Exception:
             pass
 
         all_results = [primary_result, *secondary_results]
         for i, r in enumerate(all_results, start=top + 1):
             cv = r.stdev / r.mean if r.mean != 0 else float("nan")
-            sheet.range(f"A{i}").value = r.output_name
-            sheet.range(f"B{i}").value = r.mean
-            sheet.range(f"C{i}").value = r.stdev
-            sheet.range(f"D{i}").value = r.percentiles.get(0.05, r.min)
-            sheet.range(f"E{i}").value = r.percentiles.get(0.50, r.mean)
-            sheet.range(f"F{i}").value = r.percentiles.get(0.95, r.max)
-            sheet.range(f"G{i}").value = cv if math.isfinite(cv) else None
+            sheet.range(f"B{i}").value = r.output_name
+            sheet.range(f"C{i}").value = r.mean
+            sheet.range(f"D{i}").value = r.stdev
+            sheet.range(f"E{i}").value = r.percentiles.get(0.05, r.min)
+            sheet.range(f"F{i}").value = r.percentiles.get(0.50, r.mean)
+            sheet.range(f"G{i}").value = r.percentiles.get(0.95, r.max)
+            sheet.range(f"H{i}").value = cv if math.isfinite(cv) else None
             try:
-                sheet.range(f"B{i}:F{i}").api.NumberFormat = "#,##0.00"
-                sheet.range(f"G{i}").api.NumberFormat = "0.000"
+                sheet.range(f"C{i}:G{i}").api.NumberFormat = "#,##0.00"
+                sheet.range(f"H{i}").api.NumberFormat = "0.000"
+                # Subtle alternating-row tint for readability.
+                if (i - top) % 2 == 0:
+                    sheet.range(f"B{i}:H{i}").api.Interior.Color = _COLOR_BAND_LIGHT
                 # Highlight high-CV rows in amber/red.
                 if math.isfinite(cv):
                     if cv > 0.5:
-                        sheet.range(f"G{i}").api.Font.Color = _COLOR_HEADLINE_RISK
+                        sheet.range(f"H{i}").api.Font.Color = _COLOR_HEADLINE_RISK
+                        sheet.range(f"H{i}").api.Font.Bold = True
                     elif cv > 0.2:
-                        sheet.range(f"G{i}").api.Font.Color = _COLOR_HEADLINE_WARN
+                        sheet.range(f"H{i}").api.Font.Color = _COLOR_HEADLINE_WARN
+                        sheet.range(f"H{i}").api.Font.Bold = True
             except Exception:
                 pass
         return top + len(all_results)
@@ -491,22 +515,24 @@ class ExecutiveReportBuilder:
     def _write_callouts(
         sheet: Any, callouts: list[str], *, top_row: int,
     ) -> None:
+        """Callouts live in column B onwards; column A is the gutter."""
         if not callouts:
             return
-        sheet.range(f"A{top_row}").value = "RISK CALLOUTS"
+        sheet.range(f"B{top_row}").value = "RISK CALLOUTS"
         try:
-            sheet.range(f"A{top_row}").api.Font.Bold = True
-            sheet.range(f"A{top_row}").api.Font.Size = 11
-            sheet.range(f"A{top_row}").api.Font.Color = _rgb(100, 100, 100)
+            sheet.range(f"B{top_row}").api.Font.Bold = True
+            sheet.range(f"B{top_row}").api.Font.Size = 11
+            sheet.range(f"B{top_row}").api.Font.Color = _rgb(100, 100, 100)
         except Exception:
             pass
         for i, callout in enumerate(callouts, start=top_row + 1):
-            sheet.range(f"A{i}").value = f"•  {callout}"
+            sheet.range(f"B{i}").value = f"•  {callout}"
             try:
-                # Merge across the row so long callouts wrap nicely.
-                sheet.range(f"A{i}:J{i}").merge()
-                sheet.range(f"A{i}").api.WrapText = True
-                sheet.range(f"A{i}").row_height = 24
+                # Merge across the content band (B..L) so long callouts
+                # wrap nicely. A and M stay as gutters.
+                sheet.range(f"B{i}:L{i}").merge()
+                sheet.range(f"B{i}").api.WrapText = True
+                sheet.range(f"B{i}").row_height = 24
             except Exception:
                 pass
 
@@ -658,32 +684,57 @@ def _add_histogram_chart(
     """Add a histogram (column) + cumulative (line) chart on `sheet`,
     bound to the helper-sheet range starting at `helper_anchor_col`.
     Returns 1 on success (and the binding actually stuck), 0 if the
-    chart object couldn't be created or the COM bind failed."""
+    chart object couldn't be created or the COM bind failed.
+
+    Layout assumption: helper sheet has a 3-column block at
+    `helper_anchor_col` — bin centres in col[0], counts in col[1],
+    cumulative % in col[2], all with a header row at row 1. The chart
+    plots Count + Cumulative as data series and uses Bin as the
+    X-axis categories.
+
+    Bug #18b (alpha.20) — prior versions used `SetSourceData` against
+    the whole 3-column range, which made Excel turn EVERY column into
+    a data series. The visible result was a chart with three labelled
+    series ("Bin", "Count", "Cumulative %") where Bin's numeric values
+    were being plotted as bars instead of forming the X-axis. Fix:
+    bind only the Count + Cumulative columns, then explicitly assign
+    XValues on both series to point at the Bin column."""
     try:
         chart = sheet.charts.add(left=left, top=top, width=width, height=height)
     except Exception:
         return 0
-    last_col = chr(ord(helper_anchor_col) + 2)
-    source_range = helper.range(
-        f"{helper_anchor_col}1:{last_col}{1 + bin_count}"
+    bin_col = helper_anchor_col
+    count_col = chr(ord(helper_anchor_col) + 1)
+    cum_col = chr(ord(helper_anchor_col) + 2)
+    # Bind to ONLY the Count + Cumulative columns. The Bin column
+    # becomes the category axis below, not a data series.
+    data_range = helper.range(
+        f"{count_col}1:{cum_col}{1 + bin_count}"
     )
     try:
         chart_api = chart.api[1] if isinstance(chart.api, tuple) else chart.api
-        # Set the type FIRST. Excel sometimes drops the series
-        # configuration if you change the type after binding.
         chart_api.ChartType = _XL_COLUMN_CLUSTERED
     except Exception:
         pass
-    bound = _bind_chart_to_range(chart, source_range, plot_by=_XL_COLUMNS)
+    bound = _bind_chart_to_range(chart, data_range, plot_by=_XL_COLUMNS)
     if not bound:
         return 0
+    # Assign bin centres as the X-axis for both series. Without this
+    # the chart's X-axis labels would be 1..N (the row index) instead
+    # of the bin midpoints — which is what the prior version showed.
+    x_range = helper.range(f"{bin_col}2:{bin_col}{1 + bin_count}")
     try:
         chart_api = chart.api[1] if isinstance(chart.api, tuple) else chart.api
         chart_api.HasTitle = True
         chart_api.ChartTitle.Text = title
+        for i in (1, 2):  # series 1 = Count, series 2 = Cumulative %
+            try:
+                chart_api.SeriesCollection(i).XValues = x_range.api
+            except Exception:
+                pass
         # Make the cumulative series a line on a secondary axis.
         try:
-            series = chart_api.SeriesCollection(2)  # second series = Cumulative %
+            series = chart_api.SeriesCollection(2)
             series.ChartType = 4  # xlLine
             series.AxisGroup = 2  # secondary axis
         except Exception:

@@ -267,8 +267,9 @@ class TestExecutiveReportBuilder:
         )
         assert isinstance(result, ExecutiveReportResult)
         sheet = book.sheets["Report"]
-        assert sheet.cells.get("A1") == "NPV under uncertainty"
-        assert sheet.cells.get("A2") == "5,000 iterations · seed 1 · 2026-05-22"
+        # alpha.20 layout shift: content starts at column B (A is gutter).
+        assert sheet.cells.get("B1") == "NPV under uncertainty"
+        assert sheet.cells.get("B2") == "5,000 iterations · seed 1 · 2026-05-22"
         assert sheet.activated is True
 
     def test_headline_numbers_in_expected_cells(self) -> None:
@@ -284,12 +285,13 @@ class TestExecutiveReportBuilder:
             sensitivity=_make_sensitivity(),
         )
         sheet = book.sheets["Report"]
-        assert sheet.cells.get("A6") == 1000.0  # Mean
-        assert sheet.cells.get("C6") == 1000.0  # P50 = mean for symmetric
-        assert sheet.cells.get("E6") == 200.0   # Stdev
+        # alpha.20 layout: B=Mean, C=P5, D=P50, E=P-hi, F=Stdev
+        assert sheet.cells.get("B6") == 1000.0  # Mean
+        assert sheet.cells.get("D6") == 1000.0  # P50 = mean for symmetric
+        assert sheet.cells.get("F6") == 200.0   # Stdev
         # Headline label row
-        assert sheet.cells.get("A5") == "MEAN"
-        assert sheet.cells.get("E5") == "STDEV"
+        assert sheet.cells.get("B5") == "MEAN"
+        assert sheet.cells.get("F5") == "STDEV"
 
     def test_stats_table_includes_secondary_outputs(self) -> None:
         book = _FakeBook()
@@ -309,11 +311,11 @@ class TestExecutiveReportBuilder:
             secondary_results=secondary,
         )
         sheet = book.sheets["Report"]
-        # Stats table starts at row 26 (header), data at 27+
-        assert sheet.cells.get("A26") == "Output"
-        assert sheet.cells.get("A27") == "Profit"      # primary first
-        assert sheet.cells.get("A28") == "Cost"
-        assert sheet.cells.get("A29") == "Revenue"
+        # alpha.20 layout: stats table shifted to columns B..H.
+        assert sheet.cells.get("B26") == "Output"
+        assert sheet.cells.get("B27") == "Profit"      # primary first
+        assert sheet.cells.get("B28") == "Cost"
+        assert sheet.cells.get("B29") == "Revenue"
 
     def test_callouts_generated_from_data(self) -> None:
         book = _FakeBook()
@@ -334,7 +336,7 @@ class TestExecutiveReportBuilder:
         # CALLOUTS header on first callout row.
         callout_cells = [
             v for k, v in sheet.cells.items()
-            if k.startswith("A") and isinstance(v, str)
+            if k.startswith("B") and isinstance(v, str)
             and v.startswith("•")
         ]
         assert len(callout_cells) >= 2
@@ -363,7 +365,8 @@ class TestExecutiveReportBuilder:
         # New sheet has the fresh content.
         new_sheet = book.sheets["Report"]
         assert new_sheet is not existing
-        assert new_sheet.cells.get("A1") == "fresh"
+        # alpha.20: title shifted from A1 to B1.
+        assert new_sheet.cells.get("B1") == "fresh"
 
     def test_empty_samples_doesnt_crash(self) -> None:
         """If get_samples returned [] (no .vmrs / empty result), the
