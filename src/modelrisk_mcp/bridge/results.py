@@ -124,10 +124,18 @@ class ResultsReader:
                 # this fallback just won't return anything sensible here.
                 # Use the read_vmrs tool with explicit output_names for now.
                 return []
+            # Bug #23 (alpha.19): MRLIB_GetModelData appears to put the
+            # handle into a state where subsequent MRLIB_GetModelVarID
+            # calls return None — so we resolve EVERY name to a var_id
+            # before pulling any samples. Without this, a fresh-from-
+            # simulation .vmrs would silently lose all but the first
+            # output (lookup → samples → lookup → fails → continue → ...).
+            resolved: list[tuple[str, int]] = []
             for name in wanted:
                 var_id = self._lookup_var_id(handle, name)
-                if var_id is None:
-                    continue
+                if var_id is not None:
+                    resolved.append((name, var_id))
+            for name, var_id in resolved:
                 samples = handle.get_samples(var_id)
                 if not samples:
                     continue
@@ -159,12 +167,18 @@ class ResultsReader:
             return CorrelationMatrix()
         name_list = list(names)
         with self._mrservice.open_vmrs(vmrs) as handle:
-            arrays: list[np.ndarray] = []
-            ordered: list[str] = []
+            # Bug #23 (alpha.19): resolve every name to a var_id BEFORE
+            # touching get_samples. See get_simulation_results for the
+            # full backstory — MRLIB_GetModelData poisons subsequent
+            # MRLIB_GetModelVarID lookups on the same handle.
+            resolved: list[tuple[str, int]] = []
             for name in name_list:
                 var_id = self._lookup_var_id(handle, name)
-                if var_id is None:
-                    continue
+                if var_id is not None:
+                    resolved.append((name, var_id))
+            arrays: list[np.ndarray] = []
+            ordered: list[str] = []
+            for name, var_id in resolved:
                 samples = handle.get_samples(var_id)
                 if not samples:
                     continue
@@ -250,17 +264,28 @@ class ResultsReader:
         if vmrs is None:
             raise SimulationFailedError("No .vmrs available.")
         with self._mrservice.open_vmrs(vmrs) as handle:
+            # Bug #23 (alpha.19): resolve EVERY name to a var_id before
+            # touching get_samples. MRLIB_GetModelData appears to leave
+            # the handle in a state where subsequent
+            # MRLIB_GetModelVarID calls return None — first observed
+            # on a fresh-from-simulation .vmrs where the output looked
+            # up fine, its samples loaded, then every input lookup
+            # returned None and the sensitivity ranking came back
+            # empty. Resolving all IDs first sidesteps the issue.
             out_id = self._lookup_var_id(handle, output_name)
             if out_id is None:
                 raise SimulationFailedError(
                     f"Output {output_name!r} not found in .vmrs."
                 )
-            out_samples = np.asarray(handle.get_samples(out_id), dtype=float)
-            entries: list[SensitivityEntry] = []
+            resolved_inputs: list[tuple[str, int]] = []
             for in_name in input_names:
                 in_id = self._lookup_var_id(handle, in_name)
-                if in_id is None:
-                    continue
+                if in_id is not None:
+                    resolved_inputs.append((in_name, in_id))
+
+            out_samples = np.asarray(handle.get_samples(out_id), dtype=float)
+            entries: list[SensitivityEntry] = []
+            for in_name, in_id in resolved_inputs:
                 in_samples = np.asarray(handle.get_samples(in_id), dtype=float)
                 n = min(in_samples.size, out_samples.size)
                 if n < 2:

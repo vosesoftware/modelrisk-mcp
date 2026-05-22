@@ -4,6 +4,28 @@ All notable changes to ModelRisk MCP. Follows [Keep a Changelog](https://keepach
 
 ## [Unreleased]
 
+## [0.3.0-alpha.19] — 2026-05-22
+
+Fixes the bug-#23 lookup-after-samples regression discovered while end-to-end testing alpha.18 against a real workbook: `get_sensitivity_ranking` returned empty on the first call after `run_simulation`, then worked on the second identical call. The diagnostic trace was unambiguous — the output looked up fine, its samples loaded, then every input lookup against the same handle returned None.
+
+### Fixed
+
+- **MRLIB_GetModelData poisons subsequent MRLIB_GetModelVarID calls on the same handle.** Resolution: every reader that interleaves name lookups with sample fetches now resolves ALL var_ids first, THEN pulls samples. Applies to:
+  - `ResultsReader.get_sensitivity_ranking` — was failing on the first call after a fresh simulation (output looked up, output samples loaded, all inputs then refused to resolve). Now: output lookup → all input lookups → all sample fetches → ranking.
+  - `ResultsReader.get_simulation_results` — same risk on multi-output calls. Same fix.
+  - `ResultsReader.get_correlation_matrix` — same risk on multi-name correlation requests. Same fix.
+  - `ResultsReader.get_samples` (single name, single fetch — no change needed).
+
+This is a *contract* finding about MRService.dll: the call sequence within one open handle must be all `GetModelVarID` calls first, then all `GetModelData` calls. Inverting them or interleaving is unsafe. Worth flagging upstream to the ModelRisk SDK team — and worth knowing for any future readers that touch the same surface.
+
+### Why this matters end-to-end
+
+Without alpha.19, the user's first sensitivity-ranking call after a sim returned silently empty. The LLM would tell them "no drivers detected" — completely wrong on a model that clearly has Spearman correlations up to +0.72. After alpha.19 the first call works correctly. Verified live against the `NPV_of_a_capital_investment complete.xlsx` workbook: 6 driver entries returned, top driver Market growth (r = +0.72), bottom three in noise territory.
+
+### Tests
+
+399 unit tests still pass — the bug only manifests against the real DLL, so the regression test is the integration smoke run.
+
 ## [0.3.0-alpha.18] — 2026-05-22
 
 Targeted experiment for the empty-`.vmrs` blocker surfaced by alpha.17's post-condition verification. The bridge correctly detected that `VoseStartSimulCustom12 + VoseGetDataSZ12` was producing `.vmrs` files with zero registered outputs — sim ran, file existed, but no variable metadata. Ribbon-driven simulations on the same workbook worked fine, suggesting the ribbon path threads an option the headless XLL path skipped.
