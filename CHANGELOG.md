@@ -4,6 +4,19 @@ All notable changes to ModelRisk MCP. Follows [Keep a Changelog](https://keepach
 
 ## [Unreleased]
 
+## [0.3.0-alpha.21] — 2026-05-22
+
+Hotfix for a regression introduced by alpha.16's `_ModelRiskReports` helper sheet: the second run of `build_executive_report` (and `build_drivers_report`) failed with `Move method of Worksheet class failed` on real Excel.
+
+### Fixed
+
+- **Bug #24 — adding a sheet after a very-hidden sheet fails.** Both report builders anchored the new sheet via `book.sheets.add(name, after=book.sheets[-1])`. The trailing sheet became `_ModelRiskReports` (xlSheetVeryHidden) after the first report build, and Excel refuses to position a new sheet "after" a very-hidden anchor — COM raises `Move method of Worksheet class failed`. Manifested only on the second `build_*_report` call within a session.
+- Fix: new `_last_visible_sheet(book)` helper walks `book.sheets` and picks the last sheet whose `Visible = -1` (xlSheetVisible). Both report builders + the helper-sheet creator now anchor against that.
+
+### Tests
+
+399 unit tests pass. The fake-Excel sheet class doesn't model the `Visible` attribute precisely, but the production fix is small and the call-site change is purely about which sheet object gets passed to `after=`. Integration test against real Excel is the regression sentinel.
+
 ## [0.3.0-alpha.20] — 2026-05-22
 
 Polish pass on `build_executive_report` after a live screenshot review against the `NPV_of_a_capital_investment` workbook. Two real issues found: the histogram chart was rendering with completely wrong semantics, and the layout was visually cramped with column A pulling double duty as label-holder and edge.

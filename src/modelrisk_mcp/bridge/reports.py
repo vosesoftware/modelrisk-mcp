@@ -60,6 +60,31 @@ _XL_SHEET_VERY_HIDDEN = 2  # Worksheet.Visible value — unreachable from UI
 _HELPER_SHEET_NAME = "_ModelRiskReports"
 
 
+def _last_visible_sheet(book: Any) -> Any:
+    """Return the last sheet that the user can see in the tab strip.
+
+    Bug #24 (alpha.21): `book.sheets[-1]` includes very-hidden
+    sheets like `_ModelRiskReports`. Trying to add a new sheet
+    `after=` a very-hidden one fails with "Move method of Worksheet
+    class failed" — Excel refuses. We need a visible anchor."""
+    last_visible: Any = None
+    for sheet in book.sheets:
+        try:
+            api = sheet.api
+            # xlSheetVisible = -1. Both xlSheetHidden (0) and
+            # xlSheetVeryHidden (2) count as "not visible" for the
+            # purpose of being a valid Move anchor.
+            visible = int(getattr(api, "Visible", -1))
+        except Exception:
+            visible = -1
+        if visible == -1:
+            last_visible = sheet
+    # Fallback to the first sheet if literally every sheet is hidden
+    # (shouldn't happen — Excel requires at least one visible sheet —
+    # but defensive code that never asserts is the rule here).
+    return last_visible if last_visible is not None else book.sheets[0]
+
+
 # Color palette (RGB-as-integer for xlwings api.Interior.Color).
 # Using BGR encoding — Excel COM convention.
 def _rgb(r: int, g: int, b: int) -> int:
@@ -137,7 +162,11 @@ class ExecutiveReportBuilder:
         """Render the report. Idempotent — if `sheet_name` already
         exists it's replaced."""
         ExecutiveReportBuilder._remove_existing_sheet(book, sheet_name)
-        sheet = book.sheets.add(sheet_name, after=book.sheets[-1])
+        # Anchor after the last VISIBLE sheet — `book.sheets[-1]` would
+        # be `_ModelRiskReports` (xlSheetVeryHidden) once that helper
+        # exists, and Excel refuses to move new sheets after very-
+        # hidden ones (bug #24).
+        sheet = book.sheets.add(sheet_name, after=_last_visible_sheet(book))
 
         # Adapt column widths once, before writing — the user shouldn't
         # need to manually resize anything.
@@ -576,7 +605,9 @@ def _get_or_create_helper_sheet(book: Any) -> Any:
     for sheet in book.sheets:
         if sheet.name == _HELPER_SHEET_NAME:
             return sheet
-    helper = book.sheets.add(_HELPER_SHEET_NAME, after=book.sheets[-1])
+    helper = book.sheets.add(
+        _HELPER_SHEET_NAME, after=_last_visible_sheet(book),
+    )
     try:
         helper.api.Visible = _XL_SHEET_VERY_HIDDEN
     except Exception:
@@ -903,7 +934,7 @@ class DriversReportBuilder:
         """Render the drivers report. Idempotent — replaces an
         existing sheet of the same name."""
         ExecutiveReportBuilder._remove_existing_sheet(book, sheet_name)
-        sheet = book.sheets.add(sheet_name, after=book.sheets[-1])
+        sheet = book.sheets.add(sheet_name, after=_last_visible_sheet(book))
 
         DriversReportBuilder._set_column_widths(sheet)
 
