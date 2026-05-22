@@ -4,6 +4,26 @@ All notable changes to ModelRisk MCP. Follows [Keep a Changelog](https://keepach
 
 ## [Unreleased]
 
+## [0.3.0-alpha.18] — 2026-05-22
+
+Targeted experiment for the empty-`.vmrs` blocker surfaced by alpha.17's post-condition verification. The bridge correctly detected that `VoseStartSimulCustom12 + VoseGetDataSZ12` was producing `.vmrs` files with zero registered outputs — sim ran, file existed, but no variable metadata. Ribbon-driven simulations on the same workbook worked fine, suggesting the ribbon path threads an option the headless XLL path skipped.
+
+### Changed
+
+- **Pre-populate `output_names` into the XLL command payload.** Previously `SimulationOptions.output_names` defaulted to `()` based on a C++ header comment that said "empty → all outputs". Real-world testing showed that interpretation was wrong — sims completed but the `.vmrs` didn't register any outputs unless the names were enumerated explicitly. alpha.18 changes the bridge to populate this list from `list_outputs(workbook)` before invoking the XLL command, threading the result through `SimulationController.run_simulation(output_names=...)` into the payload's `[CntNames]:N` + `[name0]:Profit` + … entries. The ribbon path presumably does this implicitly during its setup phase; we now mimic that explicitly.
+
+### If this works
+
+The empty-`.vmrs` symptom goes away and downstream readers find the outputs. Post-condition verification (added in alpha.17) becomes the test: if it stops firing on workbooks where it fired before, the hypothesis is confirmed.
+
+### If it doesn't
+
+The asymmetry is elsewhere (variable-registration timing, session handle threading, save-finalisation phase). Next step would be to compare what the ribbon does on the C++ side that this codepath skips — likely needs a diff against ModelRiskAtl's `IModelRiskSimulation::StartSimulation` entry vs. the XLL command handler.
+
+### Tests
+
+399 unit tests pass (+1: `test_run_simulation_passes_voseoutput_names_to_xll` confirms the bridge populates the names from the workbook scan).
+
 ## [0.3.0-alpha.17] — 2026-05-22
 
 Full sweep against the running bug list — the biggest correctness release since the v0.3 pivot. Tackles every still-broken item: the response-envelope cross-cutting fix (#1, #2, validates #15), `run_simulation` false-positive reliability (#20), and the workbook-recovery tool (#21), plus a CI guard so the envelope category can't regress.

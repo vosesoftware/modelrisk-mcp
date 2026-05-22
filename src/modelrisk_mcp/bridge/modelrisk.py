@@ -157,11 +157,20 @@ class ModelRiskBridge:
             # check downstream is still in force.
             pass
 
+        # alpha.18 experiment: pre-populate output_names into the XLL
+        # command's options payload. The C++ header comment says
+        # "empty → all outputs" but real-world testing showed sims
+        # completing without registering any outputs in the .vmrs
+        # unless the ribbon path was used. Working hypothesis: the
+        # ribbon populates this list and the XLL command actually
+        # requires it. Re-using `expected_output_names` (already
+        # gathered for post-condition verification above) is free.
         result = self._simulation.run_simulation(
             workbook_name=workbook,
             samples=samples,
             seed=seed,
             save_to=save_to,
+            output_names=tuple(expected_output_names),
         )
         # Pin the produced file so the existing reader tools find it.
         self._results.set_active_vmrs(result.vmrs_path)

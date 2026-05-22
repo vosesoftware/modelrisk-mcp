@@ -239,8 +239,11 @@ class _FakeSimulationController:
         samples: int,
         seed: int,
         save_to: str | None,
+        output_names: tuple[str, ...] = (),
     ) -> Any:
         from modelrisk_mcp.bridge.simulation import SimulationRunResult
+        # Stash for tests that want to assert the bridge populated this.
+        self.last_output_names = output_names
         return SimulationRunResult(
             workbook_name=workbook_name or "book.xlsx",
             vmrs_path=self._vmrs_path,
@@ -307,6 +310,23 @@ def test_restore_deterministic_state_calls_recalc() -> None:
     out = bridge.restore_deterministic_state("book.xlsx")
     assert out == {"workbook_name": "book.xlsx", "recalculated": True}
     assert excel.recalculate_calls == ["book.xlsx"]
+
+
+def test_run_simulation_passes_voseoutput_names_to_xll() -> None:
+    """alpha.18 experiment: the bridge populates the XLL command's
+    `output_names` payload from the workbook scan so ModelRisk
+    actually registers outputs in the .vmrs. Without this, sims
+    complete but the .vmrs has no output metadata (the ribbon path
+    works because the ribbon populates this list; the headless XLL
+    path skipped it until alpha.18)."""
+    excel = _PostCondFakeExcel(_voseoutput_cells())
+    bridge = ModelRiskBridge(excel)  # type: ignore[arg-type]
+    sim = _FakeSimulationController()
+    bridge._simulation = sim  # type: ignore[assignment]
+    bridge._mrservice = _FakeMrService({"Profit": 7})  # type: ignore[assignment]
+    bridge.run_simulation(workbook="book.xlsx", samples=1000)
+    # The single VoseOutput in _voseoutput_cells() is named "Profit".
+    assert sim.last_output_names == ("Profit",)
 
 
 def test_restore_deterministic_state_defaults_to_active_workbook() -> None:

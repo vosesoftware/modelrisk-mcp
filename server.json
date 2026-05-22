@@ -3,12 +3,12 @@
   "name": "io.github.vosesoftware/modelrisk-mcp",
   "title": "ModelRisk",
   "description": "Read, build, fit, and run Monte Carlo risk models in Excel through Vose Software's ModelRisk.",
-  "version": "0.3.0a17",
+  "version": "0.3.0a18",
   "packages": [
     {
       "registryType": "pypi",
       "identifier": "modelrisk-mcp",
-      "version": "0.3.0a17",
+      "version": "0.3.0a18",
       "transport": {
         "type": "stdio"
       }

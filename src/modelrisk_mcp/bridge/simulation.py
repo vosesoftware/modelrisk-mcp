@@ -153,6 +153,7 @@ class SimulationController:
         seed_fixed: bool = True,
         hide_dialogs: bool = True,
         save_to: str | None = None,
+        output_names: tuple[str, ...] = (),
     ) -> SimulationRunResult:
         """Run a simulation on `workbook_name` (defaults to the active
         workbook) and save the resulting `.vmrs` to `save_to` (defaults
@@ -160,6 +161,17 @@ class SimulationController:
 
         The call blocks until the simulation completes — that's how
         `VoseStartSimulCustom12` is implemented (synchronous Application.Run).
+
+        `output_names`, when supplied, is threaded into the XLL command's
+        options payload as `[CntNames]:N` + `[name0]:...` etc. The
+        original C++ header comment claims "empty → all outputs" but
+        end-user testing against alpha.17 showed sims completing
+        without registering ANY outputs in the .vmrs unless the
+        ribbon path was used. The working hypothesis: the ribbon
+        populates this list from the discovered VoseOutput cells, and
+        the XLL command actually requires it. Defaulted to `()` here
+        so the controller stays general-purpose; the bridge layer
+        populates it from `list_outputs(workbook)`.
 
         Returns a SimulationRunResult with the resolved vmrs path.
         Raises SimulationFailedError if the file doesn't appear after
@@ -173,6 +185,7 @@ class SimulationController:
             hide_progress_window=hide_dialogs,
             show_results_at_end=False,
             refresh_excel=False,
+            output_names=output_names,
         )
         target = self._resolve_save_path(wb_info, save_to)
 
