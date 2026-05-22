@@ -17,6 +17,7 @@ import pytest
 
 from modelrisk_mcp.audit.engine import RuleContext, RuleSpec
 from modelrisk_mcp.audit.rules import (
+    detect_cell_evaluates_to_error,
     detect_duplicate_output_names,
     detect_high_volatility_normal_positive_mean,
     detect_input_wrapper_without_distribution,
@@ -226,3 +227,111 @@ class TestHighVolatilityNormalPositiveMean:
             "high_volatility_normal_positive_mean",
         )
         assert list(detect_high_volatility_normal_positive_mean(ctx)) == []
+
+
+# ----------------------------------------------------------------------
+# VOSE-012 — cell evaluates to an Excel error (alpha.33)
+# ----------------------------------------------------------------------
+
+
+def _errored_cell(
+    workbook: str, sheet: str, ref: str, formula: str, error: str,
+) -> CellInfo:
+    """Helper: a cell whose formula evaluated to `error` (e.g. '#DIV/0!')."""
+    return CellInfo(
+        ref=CellRef(workbook=workbook, sheet=sheet, cell=ref),
+        formula=formula,
+        value=None,
+        cell_type="error",
+        error=error,
+    )
+
+
+class TestCellEvaluatesToError:
+    """VOSE-012 (alpha.33): error cells (`#DIV/0!` etc.) get flagged
+    after bug-#34's CellInfo.error field is populated by the bridge.
+    Vose calls inside errored cells get a sharper diagnostic message."""
+
+    def test_fires_on_vose_call_evaluating_to_error(self) -> None:
+        """The high-value case: a distribution call whose argument
+        resolved to #DIV/0!. Without alpha.33 this was invisible."""
+        ctx = _make_ctx(
+            [
+                _errored_cell(
+                    "m.xlsx", "S1", "A1",
+                    "=VosePERT(10, #DIV/0!, 30)",
+                    "#DIV/0!",
+                ),
+            ],
+            "cell_evaluates_to_error",
+            severity="error",
+        )
+        findings = list(detect_cell_evaluates_to_error(ctx))
+        assert len(findings) == 1
+        assert findings[0].cell.cell == "A1"
+        # The message must mention VosePERT and the error literal.
+        assert "VosePERT" in findings[0].message
+        assert "#DIV/0!" in findings[0].message
+        # Distribution-specific phrasing should be present.
+        assert "simulation" in findings[0].message.lower()
+
+    def test_fires_on_non_vose_error_with_generic_message(self) -> None:
+        """A vanilla errored cell (no Vose call) still fires, but the
+        message uses the generic 'trace the formula' phrasing instead
+        of the simulation-specific text."""
+        ctx = _make_ctx(
+            [
+                _errored_cell(
+                    "m.xlsx", "S1", "B5",
+                    "=B4/B3",
+                    "#DIV/0!",
+                ),
+            ],
+            "cell_evaluates_to_error",
+            severity="error",
+        )
+        findings = list(detect_cell_evaluates_to_error(ctx))
+        assert len(findings) == 1
+        assert "trace" in findings[0].message.lower()
+        assert "#DIV/0!" in findings[0].message
+        # No Vose call mentioned.
+        assert "Vose" not in findings[0].message
+
+    def test_silent_on_clean_cells(self) -> None:
+        """Healthy cells (value present, no error) must not fire."""
+        ctx = _make_ctx(
+            [
+                _cell("m.xlsx", "S1", "A1", "=1+1"),
+                _cell("m.xlsx", "S1", "A2", "=VoseNormal(0, 1)"),
+            ],
+            "cell_evaluates_to_error",
+            severity="error",
+        )
+        assert list(detect_cell_evaluates_to_error(ctx)) == []
+
+    def test_fires_once_per_errored_cell(self) -> None:
+        """One finding per errored cell — no duplicates."""
+        ctx = _make_ctx(
+            [
+                _errored_cell("m.xlsx", "S1", "A1", "=1/0", "#DIV/0!"),
+                _errored_cell("m.xlsx", "S1", "A2", "=BogusFn()", "#NAME?"),
+                _errored_cell("m.xlsx", "S1", "A3", "=#REF!+1", "#REF!"),
+            ],
+            "cell_evaluates_to_error",
+            severity="error",
+        )
+        findings = list(detect_cell_evaluates_to_error(ctx))
+        assert len(findings) == 3
+        # Each error literal should appear once.
+        refs = {f.cell.cell for f in findings}
+        assert refs == {"A1", "A2", "A3"}
+
+    def test_severity_inherits_from_rule_spec(self) -> None:
+        """The severity is read from the rule spec, not hard-coded."""
+        ctx = _make_ctx(
+            [_errored_cell("m.xlsx", "S1", "A1", "=1/0", "#DIV/0!")],
+            "cell_evaluates_to_error",
+            severity="warning",
+        )
+        findings = list(detect_cell_evaluates_to_error(ctx))
+        assert findings[0].severity == "warning"

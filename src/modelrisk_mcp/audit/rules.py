@@ -444,6 +444,53 @@ def _first_distribution_head(
     return None
 
 
+def detect_cell_evaluates_to_error(ctx: RuleContext) -> Iterable[AuditFinding]:
+    """VOSE-012 — a cell evaluates to an Excel error (`#DIV/0!`, etc.).
+
+    Powered by the bug-#34 fix (alpha.33) which surfaces error cells via
+    `CellInfo.error`. Before that, error cells looked identical to empty
+    cells through the audit and this rule couldn't fire. With the fix:
+
+    - All errored cells get flagged (severity: error).
+    - The message is sharper when the cell's formula contains a Vose
+      call — that's the high-value case (a broken distribution will
+      poison every simulation iteration).
+    """
+    for cell in ctx.cells:
+        if cell.error is None:
+            continue
+        # Detect whether the formula contains a Vose call so we can
+        # produce a sharper message. `extract_call_heads` is the
+        # canonical "what functions does this formula call?" helper.
+        vose_calls = [
+            head for head in extract_call_heads(cell.formula or "")
+            if head.startswith("Vose")
+        ]
+        if vose_calls:
+            head = vose_calls[0]
+            message = (
+                f"Cell {cell.ref.a1} contains {head}(...) but evaluates "
+                f"to {cell.error}. The distribution call is broken — "
+                f"the simulation will produce error samples from this "
+                f"cell on every iteration."
+            )
+        else:
+            message = (
+                f"Cell {cell.ref.a1} evaluates to {cell.error}. Trace "
+                f"the formula back to find the root cause."
+            )
+        yield AuditFinding(
+            severity=ctx.rule.severity,  # type: ignore[arg-type]
+            cell=cell.ref,
+            rule_id=ctx.rule.id,
+            message=message,
+            suggested_fix=_format_fix(
+                ctx.rule.suggested_fix_template,
+                error=cell.error,
+            ),
+        )
+
+
 Detector = Callable[[RuleContext], Iterable[AuditFinding]]
 
 RULES_BY_NAME: dict[str, Detector] = {
@@ -468,4 +515,5 @@ RULES_BY_NAME: dict[str, Detector] = {
     "high_volatility_normal_positive_mean": (
         detect_high_volatility_normal_positive_mean
     ),
+    "cell_evaluates_to_error": detect_cell_evaluates_to_error,
 }

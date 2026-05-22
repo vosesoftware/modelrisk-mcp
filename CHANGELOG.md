@@ -4,6 +4,16 @@ All notable changes to ModelRisk MCP. Follows [Keep a Changelog](https://keepach
 
 ## [Unreleased]
 
+## [0.3.0-alpha.34] — 2026-05-22
+
+### Added
+
+- **VOSE-012 audit rule — `cell_evaluates_to_error`** (severity: `error`). The natural pairing with bug #34: now that `iterate_cells` surfaces Excel error literals via `CellInfo.error`, the audit can flag them. The message is sharper when the errored cell's formula contains a Vose call (e.g. `VosePERT(10, #DIV/0!, 30)` → "the distribution call is broken — the simulation will produce error samples from this cell on every iteration") versus a vanilla broken formula ("trace the formula back to find the root cause"). 12 audit rules now ship; all 12 wired up in `RULES_BY_NAME`.
+
+### Tests
+
+5 new cases in `TestCellEvaluatesToError`: Vose-call diagnostic, generic-formula diagnostic, silent on clean cells, one-finding-per-errored-cell, severity inherits from rule spec.
+
 ## [0.3.0-alpha.33] — 2026-05-22
 
 ### Fixed

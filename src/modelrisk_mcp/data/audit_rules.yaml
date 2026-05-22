@@ -148,6 +148,23 @@ rules:
       VoseNormal / VoseLognormal / etc. as appropriate) or remove the
       VoseInput wrapper.
 
+  - id: VOSE-012
+    name: cell_evaluates_to_error
+    severity: error
+    enabled: true
+    description: >
+      A cell evaluates to an Excel error (`#DIV/0!`, `#REF!`, `#NAME?`,
+      `#VALUE!`, etc.). The simulation will sample broken values from
+      this cell on every iteration. If the cell contains a ModelRisk
+      distribution or wrapper call, the error propagates into the
+      Results Viewer and the run is unusable.
+    suggested_fix_template: >
+      Trace the cell's formula back to the broken reference and fix it.
+      For `#REF!` errors, restore the deleted cell or rewrite the
+      formula. For `#DIV/0!`, guard with `IFERROR(..., 0)` or
+      conditional logic. For `#NAME?`, check whether a function name
+      (often ModelRisk's `VoseXxx`) was misspelled.
+
   - id: VOSE-011
     name: high_volatility_normal_positive_mean
     severity: warning
