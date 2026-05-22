@@ -102,6 +102,99 @@ _COLOR_DRIVER_STRONG = _rgb(160, 30, 30)
 _COLOR_DRIVER_MEDIUM = _rgb(220, 130, 40)
 _COLOR_DRIVER_WEAK = _rgb(140, 140, 140)
 
+# Chart palette (alpha.23): one accent colour matched to the title
+# band's deep-navy plus complementary positive / negative tones for
+# directional bars. Used consistently across both report builders so
+# the visual identity is unified.
+_COLOR_CHART_PRIMARY = _rgb(45, 85, 135)    # steel blue — histogram bars
+_COLOR_CHART_LINE = _rgb(190, 90, 40)       # burnt orange — cumulative line
+_COLOR_BAR_POSITIVE = _rgb(40, 110, 60)     # forest green — driver lifts output
+_COLOR_BAR_NEGATIVE = _rgb(170, 50, 50)     # brick red — driver lowers output
+_COLOR_AXIS_TEXT = _rgb(80, 80, 80)
+_COLOR_CHART_BORDER = _rgb(200, 205, 215)   # very soft gray
+_COLOR_GRIDLINE = _rgb(225, 228, 235)
+
+
+# Excel COM enum values used by chart styling helpers (alpha.23).
+_XL_LEGEND_NONE = -4142          # xlNone — wraps as "no legend"
+_XL_LINE_STYLE_NONE = -4142      # also xlNone
+_XL_TICK_LABEL_LOW = -4134       # xlLow — push tick labels to one end
+
+
+def _style_chart_axes(
+    chart_api: Any,
+    *,
+    x_number_format: str | None = None,
+    y_number_format: str | None = None,
+    y2_number_format: str | None = None,
+    hide_major_gridlines: bool = True,
+) -> None:
+    """Apply consistent axis styling. Each step wrapped in try/except
+    because some chart types omit some axes (e.g. a bar chart has its
+    category axis transposed) and we'd rather skip a tweak than tank
+    the whole report on a missing-axis error."""
+    # Axes(1) = category (X), Axes(2) = value (Y), Axes(2, 2) = secondary Y.
+    try:
+        x_axis = chart_api.Axes(1)
+        if x_number_format:
+            x_axis.TickLabels.NumberFormat = x_number_format
+        x_axis.TickLabels.Font.Color = _COLOR_AXIS_TEXT
+        x_axis.TickLabels.Font.Size = 9
+        if hide_major_gridlines:
+            try:
+                x_axis.HasMajorGridlines = False
+            except Exception:
+                pass
+    except Exception:
+        pass
+    try:
+        y_axis = chart_api.Axes(2)
+        if y_number_format:
+            y_axis.TickLabels.NumberFormat = y_number_format
+        y_axis.TickLabels.Font.Color = _COLOR_AXIS_TEXT
+        y_axis.TickLabels.Font.Size = 9
+        if hide_major_gridlines:
+            try:
+                y_axis.HasMajorGridlines = True
+                y_axis.MajorGridlines.Format.Line.ForeColor.RGB = _COLOR_GRIDLINE
+            except Exception:
+                pass
+    except Exception:
+        pass
+    try:
+        y2_axis = chart_api.Axes(2, 2)  # secondary value axis
+        if y2_number_format:
+            y2_axis.TickLabels.NumberFormat = y2_number_format
+        y2_axis.TickLabels.Font.Color = _COLOR_AXIS_TEXT
+        y2_axis.TickLabels.Font.Size = 9
+        if hide_major_gridlines:
+            try:
+                y2_axis.HasMajorGridlines = False
+            except Exception:
+                pass
+    except Exception:
+        pass
+
+
+def _style_chart_frame(chart_api: Any, title_size: int = 13) -> None:
+    """Frame the chart: soft border, no legend by default, sized title."""
+    try:
+        chart_api.HasLegend = False
+    except Exception:
+        pass
+    try:
+        chart_api.ChartArea.Format.Line.ForeColor.RGB = _COLOR_CHART_BORDER
+        chart_api.ChartArea.Format.Line.Weight = 0.75
+    except Exception:
+        pass
+    try:
+        if chart_api.HasTitle:
+            chart_api.ChartTitle.Format.TextFrame2.TextRange.Font.Size = title_size
+            chart_api.ChartTitle.Format.TextFrame2.TextRange.Font.Bold = True
+            chart_api.ChartTitle.Format.TextFrame2.TextRange.Font.Fill.ForeColor.RGB = _COLOR_TITLE_BG
+    except Exception:
+        pass
+
 
 # ---------------------------------------------------------------------------
 # Result type
@@ -141,7 +234,11 @@ class ExecutiveReportBuilder:
     HEADLINE_VALUE_ROW = 6
     CHART_BAND_TOP = 9
     CHART_BAND_HEIGHT = 16  # rows
-    STATS_TABLE_TOP = 26    # bumped if charts grow
+    # alpha.23: pushed down from 26 → 32. With taller charts (240pt vs
+    # 220) the bottom of the chart band landed at ~row 30, which was
+    # overlapping the previous stats-table position. Row 32 leaves a
+    # full blank row of margin between chart bottom and table header.
+    STATS_TABLE_TOP = 32
     CALLOUT_TOP_PADDING = 2  # rows below stats table
 
     @staticmethod
@@ -763,13 +860,41 @@ def _add_histogram_chart(
                 chart_api.SeriesCollection(i).XValues = x_range.api
             except Exception:
                 pass
+        # alpha.23 polish: brand the histogram bars (steel blue) and
+        # make the cumulative line a thinner, complementary burnt-
+        # orange. Default Excel colours look generic.
+        try:
+            bars = chart_api.SeriesCollection(1)
+            bars.Format.Fill.ForeColor.RGB = _COLOR_CHART_PRIMARY
+            bars.Format.Line.Visible = False  # no per-bar outline
+        except Exception:
+            pass
         # Make the cumulative series a line on a secondary axis.
         try:
             series = chart_api.SeriesCollection(2)
             series.ChartType = 4  # xlLine
             series.AxisGroup = 2  # secondary axis
+            series.Format.Line.ForeColor.RGB = _COLOR_CHART_LINE
+            series.Format.Line.Weight = 2.25
+            try:
+                # Hide line markers — they add visual noise on a
+                # 30-point monotonic CDF.
+                series.MarkerStyle = _XL_LINE_STYLE_NONE
+            except Exception:
+                pass
         except Exception:
             pass
+        # Hide the legend (small chart, two series with self-evident
+        # roles via title + colour) and frame the chart.
+        _style_chart_frame(chart_api)
+        # Number formats: bin axis as thousands-separated currency-ish,
+        # primary Y as integers (counts), secondary Y as percent.
+        _style_chart_axes(
+            chart_api,
+            x_number_format='#,##0;(#,##0);-',
+            y_number_format='#,##0',
+            y2_number_format='0%',
+        )
         chart.name = f"Histogram_{title[:20]}"[:31]
     except Exception:
         pass
@@ -827,6 +952,38 @@ def _add_tornado_chart(
             category_axis.ReversePlotOrder = True
         except Exception:
             pass
+        # alpha.23 polish: colour each bar by the sign of its
+        # correlation — positive (driver lifts the output) in green,
+        # negative (driver lowers it) in red. Drives at-a-glance
+        # comprehension on the tornado.
+        try:
+            series = chart_api.SeriesCollection(1)
+            values = list(series.Values)
+            for idx, value in enumerate(values, start=1):
+                try:
+                    point = series.Points(idx)
+                    if value is None:
+                        continue
+                    color = (
+                        _COLOR_BAR_POSITIVE if float(value) >= 0
+                        else _COLOR_BAR_NEGATIVE
+                    )
+                    point.Format.Fill.ForeColor.RGB = color
+                    point.Format.Line.Visible = False
+                except Exception:
+                    continue
+        except Exception:
+            pass
+        # Frame + hide legend (single series, colour-coded directly).
+        _style_chart_frame(chart_api)
+        # X-axis for a bar chart is the value axis — format as 3-dec
+        # correlation. Y (categories) is the driver-name axis; leave
+        # number format as default (text).
+        _style_chart_axes(
+            chart_api,
+            x_number_format='0.00',
+            y_number_format=None,
+        )
         chart.name = f"Tornado_{title[:20]}"[:31]
     except Exception:
         pass

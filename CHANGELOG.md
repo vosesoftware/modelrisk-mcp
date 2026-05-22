@@ -4,6 +4,37 @@ All notable changes to ModelRisk MCP. Follows [Keep a Changelog](https://keepach
 
 ## [Unreleased]
 
+## [0.3.0-alpha.23] — 2026-05-22
+
+Corporate-grade polish pass on the report charts. Live screenshot review showed the data was correct but the visual default-Excel-blue, unformatted axis numbers ("-156508.3276"), single-series legends floating off to the side, and stats-table overlap looked unfinished. This release moves the reports closer to "screenshot-and-paste-into-a-deck" quality.
+
+### Polished
+
+- **Centralised chart palette.** New module-level constants `_COLOR_CHART_PRIMARY` (steel blue, matched to the title band), `_COLOR_CHART_LINE` (burnt orange), `_COLOR_BAR_POSITIVE` (forest green), `_COLOR_BAR_NEGATIVE` (brick red), plus axis text + gridline tones. Both report builders now share one identity.
+- **Histogram chart**:
+  - Bars: steel-blue, no outlines (`Format.Line.Visible = False`).
+  - Cumulative line: burnt-orange, 2.25pt weight, no markers (clean monotonic curve).
+  - X-axis: tick labels now thousands-separated via `'#,##0;(#,##0);-'` — bin centres render as `-156,508` instead of `-156508.3276`. Smaller font, gray colour.
+  - Primary Y-axis: integer counts; subtle gridlines.
+  - Secondary Y-axis: 0% format on the cumulative line.
+  - No legend (two-series chart with self-evident roles via title + colour).
+  - Soft gray border around the chart area.
+- **Tornado chart**:
+  - Bars colour-coded by sign: positive correlations green, negative red — at-a-glance signal of "this driver helps" vs "this driver hurts".
+  - No legend (single series, colour-coded directly per point).
+  - X-axis: `0.00` format on the correlation values.
+  - No major gridlines on the category axis; subtle ones on the value axis.
+  - Soft gray border.
+- **Layout fix**: `STATS_TABLE_TOP` bumped from 26 → 32. Taller charts (240pt) in alpha.20 had pushed the chart band to end around row 30, which overlapped the stats table. Row 32 leaves a full row of margin between chart bottom and table header.
+
+### Tests
+
+399 unit tests pass. 1 stats-table position test updated (B26 → B32).
+
+### Why corporate styling, not just default
+
+Decision-maker reports get screenshotted into decks, pasted into emails, printed for board meetings. Default Excel colours and unformatted axis labels read as "generated, not designed" — which lowers trust in the analysis sitting next to them. The cost of styling here is a one-time write of helper functions (`_style_chart_axes`, `_style_chart_frame`); the value carries across every report the LLM ever builds.
+
 ## [0.3.0-alpha.22] — 2026-05-22
 
 Layout consistency fix: alpha.20 polished `build_executive_report`'s layout (narrow gutters at A/M, content in B–L) but I missed applying the same change to `build_drivers_report`. Live screenshot review caught the asymmetry — exec sheet had the polished gutter pattern, drivers sheet still had labels and tornado flush against column A.

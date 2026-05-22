@@ -312,10 +312,11 @@ class TestExecutiveReportBuilder:
         )
         sheet = book.sheets["Report"]
         # alpha.20 layout: stats table shifted to columns B..H.
-        assert sheet.cells.get("B26") == "Output"
-        assert sheet.cells.get("B27") == "Profit"      # primary first
-        assert sheet.cells.get("B28") == "Cost"
-        assert sheet.cells.get("B29") == "Revenue"
+        # alpha.23 pushed STATS_TABLE_TOP from 26 → 32 to clear taller charts.
+        assert sheet.cells.get("B32") == "Output"
+        assert sheet.cells.get("B33") == "Profit"      # primary first
+        assert sheet.cells.get("B34") == "Cost"
+        assert sheet.cells.get("B35") == "Revenue"
 
     def test_callouts_generated_from_data(self) -> None:
         book = _FakeBook()
