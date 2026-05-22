@@ -305,6 +305,43 @@ class TestVmrsHandleLookupVarId:
             handle.lookup_var_id("Slow")
 
 
+class TestCorrcoefHelper:
+    """Regression for bug #28 — `_corrcoef` returned a 0-d array
+    when handed a 1×N matrix (single variable), and the downstream
+    `_matrix_to_optional_list` then crashed with "iteration over a
+    0-d array". Surfaces in real use when `get_correlation_matrix`
+    is called with one name (or only one resolves)."""
+
+    def test_single_row_returns_1x1_matrix(self) -> None:
+        import numpy as np
+
+        from modelrisk_mcp.bridge.results import _corrcoef
+
+        # One variable with 1000 samples.
+        matrix = np.arange(1000, dtype=float).reshape(1, 1000)
+        result = _corrcoef(matrix)
+        # Must be 2-d, shape (1, 1), value approximately 1.0.
+        assert result.ndim == 2
+        assert result.shape == (1, 1)
+        assert abs(float(result[0, 0]) - 1.0) < 1e-9
+
+    def test_two_row_returns_2x2_matrix(self) -> None:
+        """Sanity check: normal 2+ variable case still works."""
+        import numpy as np
+
+        from modelrisk_mcp.bridge.results import _corrcoef
+
+        a = np.arange(100, dtype=float)
+        b = a * 2.0  # perfectly correlated
+        matrix = np.stack([a, b])
+        result = _corrcoef(matrix)
+        assert result.shape == (2, 2)
+        # Self-correlation = 1, cross-correlation = 1 (perfect linear).
+        assert abs(result[0, 0] - 1.0) < 1e-9
+        assert abs(result[1, 1] - 1.0) < 1e-9
+        assert abs(result[0, 1] - 1.0) < 1e-9
+
+
 class TestVmrsDiscovery:
     def test_returns_sibling_vmrs(self, tmp_path: Path) -> None:
         workbook = tmp_path / "model.xlsx"

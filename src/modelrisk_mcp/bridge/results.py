@@ -335,9 +335,27 @@ class ResultsReader:
 
 
 def _corrcoef(matrix: np.ndarray) -> np.ndarray:
+    """Wrap numpy.corrcoef so the result is always a 2-d array.
+
+    Bug #28 (alpha.26): for a single-row input (1xN matrix —
+    one variable), `np.corrcoef` returns a 0-d scalar of value 1.0
+    (the correlation of one variable with itself). Downstream
+    `_matrix_to_optional_list` then crashed with "iteration over
+    a 0-d array" because it iterates over rows.
+
+    Surfaces in real use: `get_correlation_matrix` called with a
+    single name (or where only one of several names resolves) was
+    crashing instead of returning a trivial [[1.0]] matrix."""
     if matrix.size == 0 or matrix.shape[1] < 2:
         return np.full((matrix.shape[0], matrix.shape[0]), np.nan)
-    return np.asarray(np.corrcoef(matrix))
+    result = np.asarray(np.corrcoef(matrix))
+    if result.ndim == 0:
+        # Single-variable case — promote to a 1x1 matrix containing
+        # the scalar (which numpy.corrcoef computed as 1.0 by
+        # construction, but defer to the actual returned value rather
+        # than hardcoding).
+        return result.reshape(1, 1)
+    return result
 
 
 def _rank_matrix(matrix: np.ndarray) -> np.ndarray:

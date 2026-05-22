@@ -4,6 +4,16 @@ All notable changes to ModelRisk MCP. Follows [Keep a Changelog](https://keepach
 
 ## [Unreleased]
 
+## [0.3.0-alpha.26] — 2026-05-22
+
+### Fixed
+
+- **Bug #28 — `get_correlation_matrix` crashed when only one variable resolved.** For a 1×N input matrix (one variable), `numpy.corrcoef` returns a 0-d scalar of value 1.0 (the variable's self-correlation) instead of a 2-d (1, 1) matrix. The downstream `_matrix_to_optional_list` then died with `TypeError: iteration over a 0-d array`. Surfaces in real use when `get_correlation_matrix` is called with a single name (or where several names are requested but only one resolves — the failure mode in the autonomous test pass). Fix: `_corrcoef` now promotes a 0-d numpy result to a (1, 1) array before returning. The downstream JSON envelope correctly serialises the trivial `[[1.0]]` matrix.
+
+### Tests
+
+404 unit tests pass (+2 in `test_mrservice.py::TestCorrcoefHelper` covering single-row and multi-row cases — sentinel against the 0-d regression).
+
 ## [0.3.0-alpha.25] — 2026-05-22
 
 Two bugs surfaced by the autonomous end-to-end test pass against a model with extensive text labels.
