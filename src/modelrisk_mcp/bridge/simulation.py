@@ -141,6 +141,9 @@ class SimulationController:
 
     def __init__(self, excel: ExcelBridge) -> None:
         self._excel = excel
+        # Cache: once the XLL is registered in this app instance,
+        # don't re-register on every subsequent sim call.
+        self._xll_registered = False
 
     # ----- public API ----------------------------------------------------
 
@@ -250,13 +253,71 @@ class SimulationController:
         stem = Path(wb.name).stem
         return str(wb.folder / f"{stem}.vmrs")
 
+    def _ensure_xll_registered(self) -> None:
+        """Force-register ModelRisk.xll so its commands are callable
+        via `Application.Run`.
+
+        Bug #29 (alpha.27): when Excel is launched programmatically
+        (e.g. via xlwings' `xw.App()` from an automation or service
+        context) rather than through the normal user-driven flow, the
+        ModelRisk XLL shows up as `Installed=True` in the AddIns
+        collection but its commands aren't reachable —
+        `Application.Run('VoseStartSimulCustom12', ...)` fails with
+        "Cannot run the macro 'VoseStartSimulCustom12'". The
+        underlying cause: Excel's normal startup flow runs the XLL's
+        `xlAutoOpen` which registers each command via
+        `xlfRegister`; the programmatic-launch path skips that step.
+
+        Fix: call `Application.RegisterXLL(path)` for every loaded
+        ModelRisk*.xll. RegisterXLL is idempotent — safe to call even
+        when the XLL is already fully registered (it just re-runs
+        `xlAutoOpen`). We do this once per `SimulationController`
+        invocation instead of once per process so the controller is
+        robust against the user disabling and re-enabling the addin
+        between sim runs."""
+        if self._xll_registered:
+            return
+        app = self._app()
+        try:
+            addins = app.api.AddIns
+            for i in range(1, int(addins.Count) + 1):
+                try:
+                    addin = addins(i)
+                    name = str(addin.Name or "")
+                    if not name.lower().endswith(".xll"):
+                        continue
+                    if "modelrisk" not in name.lower():
+                        continue
+                    if not bool(addin.Installed):
+                        continue
+                    path = str(addin.FullName)
+                    try:
+                        app.api.RegisterXLL(path)
+                    except Exception:
+                        # Per-XLL failure isn't fatal; the next one
+                        # might be the one that provides the command
+                        # we need.
+                        continue
+                except Exception:
+                    continue
+        except Exception:
+            # AddIns collection unreachable — skip silently. The
+            # subsequent Application.Run will surface a clearer error
+            # if registration was actually needed.
+            pass
+        self._xll_registered = True
+
     def _invoke_start_simulation(self, opts: SimulationOptions) -> None:
         """Application.Run("VoseStartSimulCustom12", options_array).
 
         `options_array` must be a 1-row 2D SAFEARRAY of BSTRs. pywin32
         converts a list-of-lists into a SAFEARRAY automatically when the
-        target argument is a VARIANT."""
+        target argument is a VARIANT.
+
+        Before the call, ensure the ModelRisk XLL is registered (see
+        `_ensure_xll_registered` for the backstory)."""
         app = self._app()
+        self._ensure_xll_registered()
         try:
             options_2d = [opts.to_string_list()]  # 1 row x N cols
             app.api.Run(_CMD_START_SIM, options_2d)

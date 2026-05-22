@@ -4,6 +4,20 @@ All notable changes to ModelRisk MCP. Follows [Keep a Changelog](https://keepach
 
 ## [Unreleased]
 
+## [0.3.0-alpha.27] — 2026-05-22
+
+### Fixed
+
+- **Bug #29 — `run_simulation` failed when Excel was started programmatically** (e.g. via xlwings' `xw.App()` from an automation context, CI, or any service-driven setup). The ModelRisk XLL would show up as `Installed=True` in the AddIns collection, but `Application.Run('VoseStartSimulCustom12', ...)` failed with `Cannot run the macro 'VoseStartSimulCustom12'`. Root cause: Excel's normal startup flow runs the XLL's `xlAutoOpen` which registers each command via `xlfRegister`; the programmatic-launch path skips that step. Fix: `SimulationController` now calls `Application.RegisterXLL(path)` for every loaded ModelRisk*.xll before its first sim run. `RegisterXLL` is idempotent (re-runs `xlAutoOpen`) so safe to call whether or not the XLL is already fully registered. Cached per controller instance so we only run it once per session, not before every sim.
+
+### Why this matters
+
+The user-driven Claude Desktop session worked fine all along because Excel's normal startup loaded the XLL properly. But anyone running modelrisk-mcp in a non-interactive context — an automation script, a CI test, an MCP server spawned by a daemon, or the autonomous E2E test harness I just ran — would hit `Cannot run the macro` and not know why. This unblocks every non-Claude-Desktop usage pattern.
+
+### Verified
+
+Live probe before fix: `app.api.Run('VoseStartSimulCustom12')` → "Cannot run the macro". After `app.api.RegisterXLL(path)`: the same call resolves. Now part of `_invoke_start_simulation`'s preamble.
+
 ## [0.3.0-alpha.26] — 2026-05-22
 
 ### Fixed

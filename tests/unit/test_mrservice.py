@@ -307,7 +307,7 @@ class TestVmrsHandleLookupVarId:
 
 class TestCorrcoefHelper:
     """Regression for bug #28 — `_corrcoef` returned a 0-d array
-    when handed a 1×N matrix (single variable), and the downstream
+    when handed a 1xN matrix (single variable), and the downstream
     `_matrix_to_optional_list` then crashed with "iteration over a
     0-d array". Surfaces in real use when `get_correlation_matrix`
     is called with one name (or only one resolves)."""
