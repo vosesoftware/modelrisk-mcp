@@ -5,7 +5,7 @@ from modelrisk_mcp.server import mcp
 
 
 def test_version_is_set() -> None:
-    assert __version__ == "0.3.0a16"
+    assert __version__ == "0.3.0a17"
 
 
 def test_server_name() -> None:
@@ -45,3 +45,46 @@ async def test_tool_descriptions_have_brand_prefix() -> None:
         assert t.description.startswith("ModelRisk: "), (
             f"Tool {t.name!r} missing brand prefix: {t.description!r}"
         )
+
+
+def test_no_tool_returns_bare_list() -> None:
+    """alpha.17 envelope-sweep guard: no tool may declare a bare
+    `list[...]` return type.
+
+    FastMCP serialises a bare list-typed return as one MCP content
+    block per element, which makes the LLM see concatenated objects
+    instead of a single array (bugs #1, #2, #15). The fix is to wrap
+    every list response in a `{"<noun>": [...], "count": N}` dict so
+    FastMCP emits one structured payload. This test scans the source
+    of every tool function and fails if any uses `-> list[`."""
+    import inspect
+
+    from modelrisk_mcp.tools import (
+        building,
+        reading,
+        restore,
+        simulation,
+        workflows,
+    )
+
+    offenders: list[str] = []
+    for module in (building, reading, restore, simulation, workflows):
+        for name, obj in inspect.getmembers(module, inspect.isfunction):
+            if name.startswith("_") or name in {"get_bridge", "set_bridge_for_testing"}:
+                continue
+            # Only check things registered as MCP tools — helpers exempt.
+            if not hasattr(obj, "__wrapped__") and not hasattr(obj, "fn"):
+                # Heuristic: every @mcp.tool registers via @mcp.tool(...)
+                # which decorates without adding __wrapped__. Easier to
+                # just check the source string.
+                pass
+            try:
+                src = inspect.getsource(obj)
+            except (OSError, TypeError):
+                continue
+            if "-> list[" in src and "@mcp.tool" in src:
+                offenders.append(f"{module.__name__}.{name}")
+    assert not offenders, (
+        f"Tools must wrap list returns in a dict envelope "
+        f"(see alpha.17 sweep). Offenders: {offenders}"
+    )

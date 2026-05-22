@@ -72,7 +72,10 @@ class TestWorkbookNavigation:
         ]
         result = reading.list_open_workbooks()
         bridge.excel.list_workbooks.assert_called_once_with()
-        assert result[0].name == "a.xlsx"
+        # alpha.17 envelope sweep: dict envelope avoids FastMCP's
+        # per-element content-block expansion.
+        assert result["count"] == 1
+        assert result["workbooks"][0].name == "a.xlsx"
 
     def test_get_active_workbook_delegates_to_excel(
         self, bridge: MagicMock
@@ -131,7 +134,8 @@ class TestWorkbookListings:
         ]
         result = reading.list_modelrisk_outputs("m.xlsx")
         bridge.list_outputs.assert_called_once_with("m.xlsx")
-        assert result[0].name == "profit"
+        assert result["count"] == 1
+        assert result["outputs"][0].name == "profit"
 
     def test_list_distributions_forwards_sheet_kwarg(
         self, bridge: MagicMock
@@ -267,14 +271,16 @@ class TestFindHardCodedInputs:
             CellRef(workbook="m.xlsx", sheet="In", cell="A2"),
         ]
         result = reading.find_hard_coded_inputs("m.xlsx")
-        assert result == [
+        assert result["count"] == 2
+        assert result["candidates"] == [
             {"workbook": "m.xlsx", "sheet": "In", "cell": "A1"},
             {"workbook": "m.xlsx", "sheet": "In", "cell": "A2"},
         ]
 
     def test_empty_list_passes_through(self, bridge: MagicMock) -> None:
         bridge.find_hard_coded_inputs.return_value = []
-        assert reading.find_hard_coded_inputs("m.xlsx") == []
+        result = reading.find_hard_coded_inputs("m.xlsx")
+        assert result == {"candidates": [], "count": 0}
 
 
 # ----------------------------------------------------------------------
@@ -345,8 +351,8 @@ class TestVmrsVariableEnumeration:
         ]
         result = reading.list_vmrs_variables()
         bridge.list_vmrs_variables.assert_called_once_with(None)
-        assert len(result) == 2
-        assert result[0]["name"] == "profit"
+        assert result["count"] == 2
+        assert result["variables"][0]["name"] == "profit"
 
     def test_list_vmrs_variables_with_workbook_name(
         self, bridge: MagicMock

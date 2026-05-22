@@ -21,13 +21,9 @@ from modelrisk_mcp.bridge.modelrisk import ModelRiskBridge
 from modelrisk_mcp.schemas.results import (
     CorrelationMatrix,
     SensitivityRanking,
-    SimulationResult,
 )
 from modelrisk_mcp.schemas.workbook import (
     CellInfo,
-    DistributionCell,
-    ModelRiskInput,
-    ModelRiskOutput,
     RangeInfo,
     WorkbookInfo,
     WorkbookSummary,
@@ -59,8 +55,13 @@ def set_bridge_for_testing(bridge: ModelRiskBridge | None) -> None:
 
 
 @mcp.tool(description="ModelRisk: List all Excel workbooks currently open.")
-def list_open_workbooks() -> list[WorkbookInfo]:
-    return get_bridge().excel.list_workbooks()
+def list_open_workbooks() -> dict[str, Any]:
+    # Envelope (vs bare `list[WorkbookInfo]`) avoids FastMCP's
+    # list-element expansion which serialises each element as its own
+    # MCP content block — see the module docstring for the full
+    # backstory (alpha.17 sweep).
+    workbooks = get_bridge().excel.list_workbooks()
+    return {"workbooks": workbooks, "count": len(workbooks)}
 
 
 @mcp.tool(description="ModelRisk: Get the name and path of the active workbook.")
@@ -91,8 +92,9 @@ def get_workbook_summary(
 )
 def list_modelrisk_inputs(
     workbook_name: str,
-) -> list[ModelRiskInput]:
-    return get_bridge().list_inputs(workbook_name)
+) -> dict[str, Any]:
+    inputs = get_bridge().list_inputs(workbook_name)
+    return {"inputs": inputs, "count": len(inputs)}
 
 
 @mcp.tool(
@@ -102,8 +104,9 @@ def list_modelrisk_inputs(
 )
 def list_modelrisk_outputs(
     workbook_name: str,
-) -> list[ModelRiskOutput]:
-    return get_bridge().list_outputs(workbook_name)
+) -> dict[str, Any]:
+    outputs = get_bridge().list_outputs(workbook_name)
+    return {"outputs": outputs, "count": len(outputs)}
 
 
 @mcp.tool(
@@ -117,8 +120,9 @@ def list_modelrisk_outputs(
 def list_distributions(
     workbook_name: str,
     sheet: str | None = None,
-) -> list[DistributionCell]:
-    return get_bridge().list_distributions(workbook_name, sheet=sheet)
+) -> dict[str, Any]:
+    distributions = get_bridge().list_distributions(workbook_name, sheet=sheet)
+    return {"distributions": distributions, "count": len(distributions)}
 
 
 @mcp.tool(
@@ -160,8 +164,9 @@ def read_range(
 def get_simulation_results(
     workbook_name: str,
     output_names: list[str] | None = None,
-) -> list[SimulationResult]:
-    return get_bridge().get_simulation_results(workbook_name, output_names)
+) -> dict[str, Any]:
+    results = get_bridge().get_simulation_results(workbook_name, output_names)
+    return {"results": results, "count": len(results)}
 
 
 @mcp.tool(
@@ -204,12 +209,12 @@ def get_sensitivity_ranking(
 )
 def find_hard_coded_inputs(
     workbook_name: str,
-) -> list[dict[str, str]]:
+) -> dict[str, Any]:
     refs = get_bridge().find_hard_coded_inputs(workbook_name)
-    # Return as plain dicts so the MCP JSON serialization is obvious.
-    return [
+    candidates = [
         {"workbook": r.workbook, "sheet": r.sheet, "cell": r.cell} for r in refs
     ]
+    return {"candidates": candidates, "count": len(candidates)}
 
 
 @mcp.tool(
@@ -226,8 +231,9 @@ def list_vmrs_variables(
         str | None,
         Field(description="Workbook name. Omit for the active workbook."),
     ] = None,
-) -> list[dict[str, str | int]]:
-    return get_bridge().list_vmrs_variables(workbook_name)
+) -> dict[str, Any]:
+    variables = get_bridge().list_vmrs_variables(workbook_name)
+    return {"variables": variables, "count": len(variables)}
 
 
 @mcp.tool(
@@ -303,10 +309,11 @@ def read_vmrs(
         str, Field(description="Absolute path to a .vmrs file.")
     ],
     output_names: list[str] | None = None,
-) -> list[SimulationResult]:
+) -> dict[str, Any]:
     reader = get_bridge().results
     reader.set_active_vmrs(path)
-    return reader.get_simulation_results(None, output_names)
+    results = reader.get_simulation_results(None, output_names)
+    return {"results": results, "count": len(results)}
 
 
 __all__ = [

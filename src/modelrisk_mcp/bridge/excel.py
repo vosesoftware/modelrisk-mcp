@@ -385,6 +385,27 @@ class ExcelBridge:
         except Exception as exc:
             raise CellReferenceError(f"Excel.Undo() failed: {exc}") from exc
 
+    def recalculate_workbook(self, workbook: str) -> None:
+        """Force a full recalculation of `workbook`.
+
+        Used by `restore_deterministic_state` to recover a workbook
+        left with VoseOutput cells holding the last simulation sample
+        (the "frozen sample" symptom of bug #20). A full recalc
+        re-runs every formula in the book, which re-evaluates each
+        VoseOutput's underlying expression to its deterministic
+        value."""
+        book = self._get_book(workbook)
+        try:
+            # `FullCalculate` rebuilds the dependency tree as well as
+            # recomputing — more thorough than `Calculate`, and the
+            # right tool when ModelRisk may have left dependency
+            # tracking in an odd state.
+            book.api.Application.CalculateFull()
+        except Exception as exc:
+            raise CellReferenceError(
+                f"Excel.CalculateFull() failed on {workbook!r}: {exc}"
+            ) from exc
+
     def save_workbook_as(
         self, workbook: str, path: str, *, overwrite: bool = False,
     ) -> str:

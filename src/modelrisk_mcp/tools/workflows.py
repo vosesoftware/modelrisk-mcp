@@ -77,12 +77,12 @@ def propose_distributions_for_inputs(
             )
         ),
     ],
-) -> list[dict[str, Any]]:
-    out: list[dict[str, Any]] = []
+) -> dict[str, Any]:
+    proposals: list[dict[str, Any]] = []
     for entry in inputs:
         description = str(entry.get("description", "") or "")
         scenario_name, recs = _pick_scenario(description)
-        out.append(
+        proposals.append(
             {
                 "cell_ref": entry.get("cell_ref"),
                 "current_value": entry.get("current_value"),
@@ -91,7 +91,7 @@ def propose_distributions_for_inputs(
                 "recommendations": recs,
             }
         )
-    return out
+    return {"proposals": proposals, "count": len(proposals)}
 
 
 @mcp.tool(
@@ -106,7 +106,7 @@ def propose_distributions_for_inputs(
 def discover_inputs(
     workbook_name: str,
     limit: int = 25,
-) -> list[dict[str, Any]]:
+) -> dict[str, Any]:
     bridge = get_bridge()
     refs: list[CellRef] = bridge.find_hard_coded_inputs(workbook_name)
     # Build a small score per cell: weight by reference count (we
@@ -148,7 +148,8 @@ def discover_inputs(
             )
         )
     scored.sort(key=lambda kv: kv[0], reverse=True)
-    return [entry for _, entry in scored[:limit]]
+    candidates = [entry for _, entry in scored[:limit]]
+    return {"candidates": candidates, "count": len(candidates)}
 
 
 @mcp.tool(

@@ -331,10 +331,20 @@ class MrServiceBridge:
                 "report this to the modelrisk-mcp maintainers."
             )
         raise SimulationFailedError(
-            "MRService.dll requires activation. Set MRSERVICE_ACTIVATION_KEY "
-            "(a single int64) or both MRSERVICE_ACTIVATION_KEY1 and "
-            "MRSERVICE_ACTIVATION_KEY2 (two int64s). MRSERVICE_DISABLE_"
-            "BUNDLED_KEY is set, so the bundled key was not tried."
+            "MRService.dll requires activation, but no key was supplied.\n\n"
+            "Two activation flavours exist:\n"
+            "  * Single-int64 key — set MRSERVICE_ACTIVATION_KEY to the\n"
+            "    integer Vose issued you. This is the common case.\n"
+            "  * Split-int64 key — set both MRSERVICE_ACTIVATION_KEY1 and\n"
+            "    MRSERVICE_ACTIVATION_KEY2 to the two halves. Used by the\n"
+            "    Ex2 activation API.\n\n"
+            "The bundled key normally covers the default install, but "
+            "MRSERVICE_DISABLE_BUNDLED_KEY=1 is currently set in your "
+            "environment, so it was skipped. Unset that variable to fall "
+            "back to the bundled key, or supply one of the env vars "
+            "above.\n\n"
+            "Docs: "
+            "https://github.com/vosesoftware/modelrisk-mcp/blob/main/docs/activation.md"
         )
 
     # ----- vmrs read API -------------------------------------------------

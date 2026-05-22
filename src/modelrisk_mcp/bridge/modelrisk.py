@@ -40,7 +40,7 @@ from modelrisk_mcp.bridge.simulation import (
     SimulationRunResult,
 )
 from modelrisk_mcp.config import Settings
-from modelrisk_mcp.errors import CellReferenceError
+from modelrisk_mcp.errors import CellReferenceError, SimulationFailedError
 from modelrisk_mcp.safety import (
     WriterMutex,
     append_write_log,
@@ -136,6 +136,27 @@ class ModelRiskBridge:
         seed: int = 1,
         save_to: str | None = None,
     ) -> SimulationRunResult:
+        # Bug #20 fix: capture the list of VoseOutput names BEFORE the
+        # simulation so we can verify at least one ended up registered
+        # in the .vmrs afterwards. Without this, run_simulation
+        # reports success on simulations where ModelRisk's
+        # post-simulation phase quietly failed — leaving the .vmrs
+        # missing output metadata and every downstream reader unable
+        # to find anything.
+        resolved_workbook = (
+            workbook if workbook else self._excel.get_active_workbook().name
+        )
+        expected_output_names: list[str] = []
+        try:
+            expected_output_names = [
+                o.name for o in self.list_outputs(resolved_workbook)
+            ]
+        except Exception:
+            # Scanner failure shouldn't abort the sim — but we lose
+            # the ability to verify outputs. The .vmrs-existence
+            # check downstream is still in force.
+            pass
+
         result = self._simulation.run_simulation(
             workbook_name=workbook,
             samples=samples,
@@ -144,7 +165,87 @@ class ModelRiskBridge:
         )
         # Pin the produced file so the existing reader tools find it.
         self._results.set_active_vmrs(result.vmrs_path)
+
+        # Post-condition verification — see _verify_simulation_post_conditions
+        # for the full criteria. If the .vmrs doesn't contain any of the
+        # expected output names, raise. On raise, attempt to restore the
+        # workbook to deterministic state (bug #21) so the user isn't
+        # left with VoseOutput cells stuck on sample values. The restore
+        # is best-effort; if it fails too, the original SimulationFailed
+        # propagates regardless.
+        if expected_output_names:
+            try:
+                self._verify_simulation_post_conditions(
+                    result.vmrs_path, expected_output_names,
+                )
+            except SimulationFailedError:
+                try:
+                    self._excel.recalculate_workbook(resolved_workbook)
+                except Exception:
+                    pass
+                raise
         return result
+
+    def _verify_simulation_post_conditions(
+        self, vmrs_path: str, expected_output_names: list[str],
+    ) -> None:
+        """Open the produced .vmrs and confirm at least one of the
+        workbook's VoseOutput names resolves to a var_id. That's the
+        cheapest available proof that ModelRisk's post-simulation
+        phase actually wrote output metadata (vs. the bug #20
+        symptom: sim completes, .vmrs is created, but no outputs are
+        registered)."""
+        try:
+            with self._mrservice.open_vmrs(vmrs_path) as handle:
+                for name in expected_output_names:
+                    try:
+                        if handle.lookup_var_id(name) is not None:
+                            return  # post-condition satisfied
+                    except SimulationFailedError:
+                        # lookup_var_id can raise on pathological names;
+                        # one bad name doesn't condemn the whole sim.
+                        continue
+        except SimulationFailedError:
+            raise
+        except Exception as exc:
+            raise SimulationFailedError(
+                f"Simulation completed but the produced .vmrs at "
+                f"{vmrs_path!r} could not be opened for verification: "
+                f"{exc!s}. The file may be incomplete or corrupt."
+            ) from exc
+        raise SimulationFailedError(
+            f"Simulation completed but the produced .vmrs at "
+            f"{vmrs_path!r} does not register any of the expected "
+            f"VoseOutput names: {expected_output_names!r}. This is the "
+            f"signature of ModelRisk's post-simulation phase crashing "
+            f"silently (the sim ran but the output metadata didn't "
+            f"persist). The workbook may also be left with VoseOutput "
+            f"cells stuck on sample values rather than deterministic "
+            f"ones — run `restore_deterministic_state` to recover, then "
+            f"retry the simulation."
+        )
+
+    def restore_deterministic_state(
+        self, workbook: str | None = None,
+    ) -> dict[str, Any]:
+        """Recalculate the workbook to clear any VoseOutput cells that
+        are stuck on sample values from a previous run.
+
+        Recovery path for bug #21: when `run_simulation` fails post-
+        condition (#20), the workbook's VoseOutput cells often retain
+        the final per-iteration sample instead of the deterministic
+        value. Subsequent reads (`list_modelrisk_outputs`,
+        `find_hard_coded_inputs`) would then return misleading
+        `current_value`s. A full recalculation restores the
+        deterministic state by re-evaluating every formula."""
+        resolved_workbook = (
+            workbook if workbook else self._excel.get_active_workbook().name
+        )
+        self._excel.recalculate_workbook(resolved_workbook)
+        return {
+            "workbook_name": resolved_workbook,
+            "recalculated": True,
+        }
 
     # ------------------------------------------------------------------
     # Environment checks
@@ -419,7 +520,6 @@ class ModelRiskBridge:
         stats = self._results.get_simulation_results(wb_path, all_outputs)
         results_by_name = {r.output_name: r for r in stats}
         if primary_output not in results_by_name:
-            from modelrisk_mcp.errors import SimulationFailedError
             raise SimulationFailedError(
                 f"Primary output {primary_output!r} not found in the "
                 "active simulation results. Run a simulation first or "

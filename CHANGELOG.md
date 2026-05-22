@@ -4,6 +4,37 @@ All notable changes to ModelRisk MCP. Follows [Keep a Changelog](https://keepach
 
 ## [Unreleased]
 
+## [0.3.0-alpha.17] — 2026-05-22
+
+Full sweep against the running bug list — the biggest correctness release since the v0.3 pivot. Tackles every still-broken item: the response-envelope cross-cutting fix (#1, #2, validates #15), `run_simulation` false-positive reliability (#20), and the workbook-recovery tool (#21), plus a CI guard so the envelope category can't regress.
+
+### Fixed
+
+- **Envelope sweep across every list-returning MCP tool (#1, #2, validates #15).** FastMCP serialises a bare `list[T]` return as one MCP content block per element — which makes the LLM see N concatenated objects instead of a single array. Symptoms ranged from "list_modelrisk_outputs returns a single record" (#1) to "list_vmrs_variables returns concatenated JSON objects" (#2) to "get_samples wraps each float in a text-block dict" (#15, fixed in alpha.14). Fixed all of them in one pass by wrapping every list-typed response in a dict envelope with a semantic noun key: `list_open_workbooks` → `{workbooks, count}`, `list_modelrisk_inputs` → `{inputs, count}`, `list_modelrisk_outputs` → `{outputs, count}`, `list_distributions` → `{distributions, count}`, `get_simulation_results` → `{results, count}`, `find_hard_coded_inputs` → `{candidates, count}`, `list_vmrs_variables` → `{variables, count}`, `read_vmrs` → `{results, count}`, `propose_distributions_for_inputs` → `{proposals, count}`, `discover_inputs` → `{candidates, count}`. New CI guard test (`test_no_tool_returns_bare_list`) scans every tool module and fails if any uses `-> list[`, so the next instance of this category gets caught before merge.
+- **`run_simulation` no longer reports false-positive success (#20).** Previously the tool returned `samples: 10000` and a valid `.vmrs` path even when ModelRisk's post-simulation phase crashed silently — leaving the `.vmrs` without registered output metadata and every downstream reader unable to find anything. The "samples" number was just echoing the input parameter, not measuring actual completion. Fix: post-condition verification. Before running, the bridge captures the list of expected VoseOutput names. After the simulation returns, it opens the produced `.vmrs` and confirms at least one expected output resolves to a `var_id`. If none do, raises `SimulationFailedError` with an actionable message ("the simulation's post-sim phase failed to register outputs; run `restore_deterministic_state` to recover").
+- **`restore_deterministic_state` recovery tool (#21).** New MCP tool that recalculates the workbook to clear any VoseOutput cells stuck on per-iteration sample values from a previous run. Triggers `Application.CalculateFull` which re-evaluates every formula. Wired into the auto-recovery path on `run_simulation` post-condition failure — so the workbook is restored even if the user doesn't call the tool explicitly.
+- **MRService.dll activation error message (#8).** The "no key supplied" error now lists both activation flavours (single-int64 via `MRSERVICE_ACTIVATION_KEY`, split-int64 via `MRSERVICE_ACTIVATION_KEY1/2`), explains what `MRSERVICE_DISABLE_BUNDLED_KEY` does, and points at the activation docs URL.
+
+### Already fixed (acknowledged from the running bug list)
+
+- **#4 (`wrap_with_output` refuses non-Vose formulas)** — current code passes `allow_overwrite_non_vose=True` and an existing test covers the Workflow-1-Step-6 pattern. The bug was real in an earlier alpha; the current implementation is correct.
+- **#5 (`save_workbook_as` tool)** — registered as an MCP tool in `tools/building.py` since alpha.2.
+- **#6 (`set_cell_formula` / guarded write)** — exposed as `write_formula` in `tools/building.py` since alpha.2.
+- **#7 (`get_active_workbook` OneDrive)** — fallback path in `excel.py::get_active_workbook` already returns an empty path when xlwings' OneDrive resolution fails.
+- **#12 (unsaved-workbook path)** — `_workbook_info` detects path strings missing any separator (the unsaved-workbook signature) and returns empty path.
+
+### Obsoleted
+
+- **#10 (`use_vba_helper_for_simulation` hangs)** and **#11 (`ensure_modelrisk_active` overfit)** — both refer to code that was removed in the v0.3 MRService.dll pivot. The new architecture doesn't have a VBA helper or an add-in-activation gate; simulations run directly via `Application.Run` on the XLL command surface and `.vmrs` reads go through MRService.
+
+### New tools
+
+- `restore_deterministic_state(workbook_name?)` — workbook recovery from the frozen-sample state.
+
+### Tests
+
+398 unit tests pass (+5: post-condition happy path, post-condition fails when no output registered, auto-restore fires on post-condition failure, restore tool with explicit workbook, restore tool defaults to active). Plus the new envelope CI guard.
+
 ## [0.3.0-alpha.16] — 2026-05-22
 
 Two paired bugs in the report builders, both surfaced by the same end-user testing session — charts came out blank, and the staging data leaked onto the user-visible report sheet. Both `build_executive_report` and `build_drivers_report` are affected because they share the same chart-construction helpers.

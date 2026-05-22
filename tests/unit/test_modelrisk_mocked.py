@@ -167,3 +167,151 @@ def test_is_modelrisk_loaded_returns_bool() -> None:
     bridge = ModelRiskBridge(FakeExcelBridge([]))  # type: ignore[arg-type]
     result = bridge.is_modelrisk_loaded()
     assert isinstance(result, bool)
+
+
+# ----------------------------------------------------------------------
+# Bug #20 post-condition verification + #21 restore_deterministic_state
+# ----------------------------------------------------------------------
+
+
+class _PostCondFakeExcel(FakeExcelBridge):
+    """Extends `FakeExcelBridge` with the workbook-level methods that
+    `run_simulation` calls — `get_active_workbook` and
+    `recalculate_workbook`. The latter records its calls so tests can
+    assert the auto-restore fires on post-condition failure (#21)."""
+
+    def __init__(
+        self, cells: list[CellInfo], *, active_name: str = "book.xlsx",
+    ) -> None:
+        super().__init__(cells)
+        self._active_name = active_name
+        self.recalculate_calls: list[str] = []
+
+    def get_active_workbook(self) -> Any:
+        from modelrisk_mcp.schemas.workbook import WorkbookInfo
+        return WorkbookInfo(
+            name=self._active_name, path="", sheets=["Sheet1"],
+        )
+
+    def recalculate_workbook(self, workbook: str) -> None:
+        self.recalculate_calls.append(workbook)
+
+
+class _FakeVmrsHandle:
+    """Stand-in for `VmrsHandle`. `lookup_var_id` returns the configured
+    map; opening / closing are no-ops."""
+
+    def __init__(self, var_ids: dict[str, int | None]) -> None:
+        self._var_ids = var_ids
+
+    def __enter__(self) -> _FakeVmrsHandle:
+        return self
+
+    def __exit__(self, *exc: Any) -> None:
+        pass
+
+    def lookup_var_id(self, name: str) -> int | None:
+        return self._var_ids.get(name)
+
+
+class _FakeMrService:
+    def __init__(self, var_ids: dict[str, int | None]) -> None:
+        self._var_ids = var_ids
+        self.open_calls: list[str] = []
+
+    def open_vmrs(self, path: str) -> _FakeVmrsHandle:
+        self.open_calls.append(path)
+        return _FakeVmrsHandle(self._var_ids)
+
+
+class _FakeSimulationController:
+    """Minimal SimulationController stand-in. `run_simulation` returns
+    a canned `SimulationRunResult` so the bridge wiring is exercised
+    without touching Excel / the XLL surface."""
+
+    def __init__(self, vmrs_path: str = r"C:\tmp\book.vmrs") -> None:
+        self._vmrs_path = vmrs_path
+
+    def run_simulation(
+        self,
+        *,
+        workbook_name: str | None,
+        samples: int,
+        seed: int,
+        save_to: str | None,
+    ) -> Any:
+        from modelrisk_mcp.bridge.simulation import SimulationRunResult
+        return SimulationRunResult(
+            workbook_name=workbook_name or "book.xlsx",
+            vmrs_path=self._vmrs_path,
+            iterations=samples,
+        )
+
+
+def _voseoutput_cells() -> list[CellInfo]:
+    """Cells containing one VoseOutput so list_outputs returns it."""
+    return [
+        make_cell("B2", formula='=VoseOutput("Profit")+B1-50', value=75.0),
+    ]
+
+
+def test_run_simulation_post_condition_satisfied_when_output_resolves() -> None:
+    """Happy path: at least one expected output name resolves to a
+    var_id in the produced .vmrs → no error, no auto-restore."""
+    excel = _PostCondFakeExcel(_voseoutput_cells())
+    bridge = ModelRiskBridge(excel)  # type: ignore[arg-type]
+    bridge._simulation = _FakeSimulationController()  # type: ignore[assignment]
+    bridge._mrservice = _FakeMrService({"Profit": 7})  # type: ignore[assignment]
+    result = bridge.run_simulation(workbook="book.xlsx", samples=1000)
+    assert result.vmrs_path == r"C:\tmp\book.vmrs"
+    assert excel.recalculate_calls == []  # no recovery needed
+
+
+def test_run_simulation_post_condition_fails_when_no_output_registered() -> None:
+    """Bug #20 regression: .vmrs lacks the expected output names →
+    `run_simulation` raises SimulationFailedError instead of
+    pretending success."""
+    from modelrisk_mcp.errors import SimulationFailedError
+
+    excel = _PostCondFakeExcel(_voseoutput_cells())
+    bridge = ModelRiskBridge(excel)  # type: ignore[arg-type]
+    bridge._simulation = _FakeSimulationController()  # type: ignore[assignment]
+    # Profit not in the .vmrs → post-condition fails.
+    bridge._mrservice = _FakeMrService({"Profit": None})  # type: ignore[assignment]
+    with pytest.raises(SimulationFailedError) as exc:
+        bridge.run_simulation(workbook="book.xlsx", samples=1000)
+    msg = str(exc.value)
+    assert "does not register any of the expected" in msg
+    assert "Profit" in msg
+    # Auto-restore fires on failure (bug #21 recovery path).
+    assert excel.recalculate_calls == ["book.xlsx"]
+
+
+def test_run_simulation_skips_verification_when_no_outputs_declared() -> None:
+    """A workbook with zero VoseOutput cells can't be verified — but
+    that's not a failure, it's a no-op (the sim just won't have
+    anything to report)."""
+    excel = _PostCondFakeExcel([])  # no VoseOutputs
+    bridge = ModelRiskBridge(excel)  # type: ignore[arg-type]
+    bridge._simulation = _FakeSimulationController()  # type: ignore[assignment]
+    bridge._mrservice = _FakeMrService({})  # type: ignore[assignment]
+    result = bridge.run_simulation(workbook="book.xlsx", samples=1000)
+    assert result.vmrs_path == r"C:\tmp\book.vmrs"
+
+
+def test_restore_deterministic_state_calls_recalc() -> None:
+    """Bug #21 recovery tool: triggers a full recalculation of the
+    given workbook (or the active one if omitted)."""
+    excel = _PostCondFakeExcel([])
+    bridge = ModelRiskBridge(excel)  # type: ignore[arg-type]
+    out = bridge.restore_deterministic_state("book.xlsx")
+    assert out == {"workbook_name": "book.xlsx", "recalculated": True}
+    assert excel.recalculate_calls == ["book.xlsx"]
+
+
+def test_restore_deterministic_state_defaults_to_active_workbook() -> None:
+    excel = _PostCondFakeExcel([], active_name="active.xlsx")
+    bridge = ModelRiskBridge(excel)  # type: ignore[arg-type]
+    out = bridge.restore_deterministic_state()
+    assert out["workbook_name"] == "active.xlsx"
+    assert excel.recalculate_calls == ["active.xlsx"]

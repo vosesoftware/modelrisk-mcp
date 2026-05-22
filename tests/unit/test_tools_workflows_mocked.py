@@ -49,13 +49,16 @@ def bridge() -> Iterator[MagicMock]:
 
 
 class TestProposeDistributions:
+    # alpha.17 envelope sweep: workflow tools that returned bare lists
+    # now wrap in `{"proposals": [...], "count": N}` — the tests
+    # dereference the noun key but otherwise the semantics are unchanged.
     def test_returns_one_entry_per_input(self) -> None:
         out = workflows.propose_distributions_for_inputs(
             [
                 {"description": "annual demand for widgets"},
                 {"description": "time to failure of pump"},
             ]
-        )
+        )["proposals"]
         assert len(out) == 2
         assert {e["description"] for e in out} == {
             "annual demand for widgets",
@@ -65,7 +68,7 @@ class TestProposeDistributions:
     def test_each_entry_has_recommendations(self) -> None:
         out = workflows.propose_distributions_for_inputs(
             [{"description": "monthly sales count"}]
-        )
+        )["proposals"]
         assert "recommendations" in out[0]
         assert isinstance(out[0]["recommendations"], list)
 
@@ -75,7 +78,7 @@ class TestProposeDistributions:
         recommendations (not an empty list)."""
         out = workflows.propose_distributions_for_inputs(
             [{"description": ""}]
-        )
+        )["proposals"]
         assert out[0]["scenario_matched"] == "unknown"
 
     def test_preserves_cell_ref_and_current_value(self) -> None:
@@ -87,7 +90,7 @@ class TestProposeDistributions:
                     "description": "cost",
                 }
             ]
-        )
+        )["proposals"]
         assert out[0]["cell_ref"] == "S1!A1"
         assert out[0]["current_value"] == 100.0
 
@@ -98,12 +101,15 @@ class TestProposeDistributions:
 
 
 class TestDiscoverInputs:
+    # alpha.17 envelope sweep: `discover_inputs` now returns
+    # `{"candidates": [...], "count": N}` instead of a bare list.
     def test_returns_empty_when_no_candidates(
         self, bridge: MagicMock
     ) -> None:
         bridge.find_hard_coded_inputs.return_value = []
         bridge.excel.iterate_cells.return_value = iter([])
-        assert workflows.discover_inputs("m.xlsx") == []
+        result = workflows.discover_inputs("m.xlsx")
+        assert result == {"candidates": [], "count": 0}
 
     def test_limit_respected(self, bridge: MagicMock) -> None:
         # 30 hard-coded cells, but limit=5 → only 5 returned.
@@ -113,7 +119,7 @@ class TestDiscoverInputs:
         ]
         bridge.find_hard_coded_inputs.return_value = refs
         bridge.excel.iterate_cells.return_value = iter([])
-        out = workflows.discover_inputs("m.xlsx", limit=5)
+        out = workflows.discover_inputs("m.xlsx", limit=5)["candidates"]
         assert len(out) == 5
 
     def test_higher_score_for_round_numbers(
@@ -136,7 +142,7 @@ class TestDiscoverInputs:
                 formula="", value=7, cell_type="number",
             ),
         ])
-        out = workflows.discover_inputs("m.xlsx")
+        out = workflows.discover_inputs("m.xlsx")["candidates"]
         # Sorted descending by score — A1 first.
         assert out[0]["cell"] == "A1"
         assert out[0]["score"] > out[1]["score"]
@@ -162,7 +168,7 @@ class TestDiscoverInputs:
                 formula="", value=20, cell_type="number",
             ),
         ])
-        out = workflows.discover_inputs("m.xlsx")
+        out = workflows.discover_inputs("m.xlsx")["candidates"]
         # A2 (=20) outranks A1 (=1) because A2 gets the multiple-of-10 bonus.
         assert out[0]["cell"] == "A2"
 
@@ -188,7 +194,7 @@ class TestDiscoverInputs:
                 formula="", value=100, cell_type="number",
             ),
         ])
-        out = workflows.discover_inputs("m.xlsx")
+        out = workflows.discover_inputs("m.xlsx")["candidates"]
         # A2 (=100) MUST outrank A1 (=0).
         a1_entry = next(e for e in out if e["cell"] == "A1")
         a2_entry = next(e for e in out if e["cell"] == "A2")
@@ -217,7 +223,7 @@ class TestDiscoverInputs:
                 formula="", value=50, cell_type="number",
             ),
         ])
-        out = workflows.discover_inputs("m.xlsx")
+        out = workflows.discover_inputs("m.xlsx")["candidates"]
         # Both should be present, A2 should score higher.
         a1_entry = next(e for e in out if e["cell"] == "A1")
         a2_entry = next(e for e in out if e["cell"] == "A2")
