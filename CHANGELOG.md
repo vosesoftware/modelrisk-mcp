@@ -4,6 +4,32 @@ All notable changes to ModelRisk MCP. Follows [Keep a Changelog](https://keepach
 
 ## [Unreleased]
 
+## [0.3.0-alpha.13] — 2026-05-22
+
+A single-sheet uncertainty-drivers report — narrower than the executive dashboard, but with auto-generated narrative that explains what the tornado chart actually means.
+
+### Added
+
+- **`build_drivers_report(output_name, title?, subtitle?, sheet_name?, workbook_name?)`** — new MCP tool. Drops a single sheet onto the workbook with:
+  - **Title band** — "Uncertainty Drivers — \<Output>" + run metadata.
+  - **KEY FINDINGS** (3-5 auto-generated plain-English bullets) — names the dominant driver with direction language ("higher widget cost lowers NPV"), quantifies top-N variance share (rough Spearman r² approximation), flags concentration ("Risk is concentrated — most uncertainty from a small number of inputs") vs diffuse profiles, lists negligible inputs the decision-maker can safely deprioritise.
+  - **Tornado chart** — full-prominence, sorted, axis-inverted (largest driver at top).
+  - **Driver ranking table** — every input with correlation, |r|, approximate variance share. |r| cell coloured by strength tier (dark-red strong, orange medium, gray weak).
+  - **HOW TO READ THIS CHART** panel — three short paragraphs explaining Spearman correlation, what bar magnitudes mean, and how to interpret variance share. Written for stakeholders who don't know what r means.
+  - **RECOMMENDED ACTIONS** — three tiers: focus mitigation (|r| ≥ 0.4), monitor (0.2 ≤ |r| < 0.4), deprioritise (|r| < 0.2). Each tier lists the inputs that landed in it.
+- `bridge/reports.py::DriversReportBuilder` — the new report builder. Shares the title-band styling + helper functions with `ExecutiveReportBuilder` (both live in the same module).
+- Narrative helpers: `_strength_label`, `_concentration_label`, `_variance_share`, `_compose_findings`, `_compose_recommendations`, `_drivers_headline`. The narrative is deterministic from the data — same input always produces the same wording.
+
+### Where it slots in
+
+The executive report is the broader dashboard ("here's everything about the simulation"). The drivers report is the focused deliverable ("here's what matters and what to do about it"). Use case: a decision-maker asks "what should I worry about?" — `build_drivers_report` gives them a one-page answer naming the input, the magnitude, the direction, and the recommended action tier.
+
+### Tests
+
+8 new tests in `test_reports.py::TestDriversReportBuilder` covering title placement, findings name+direction generation, top-N variance share text, driver-table population, recommendations-tier assignment, empty-sensitivity edge case, concentration label classification, sheet replacement.
+
+Tool count grows to 39.
+
 ## [0.3.0-alpha.12] — 2026-05-22
 
 Adds the headline feature for end-user testing this week: a single-sheet executive-report builder that the LLM can produce in response to "create a report for a decision-maker."

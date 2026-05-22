@@ -24,6 +24,8 @@ from modelrisk_mcp.bridge.charts import TornadoChartResult, TornadoChartWriter
 from modelrisk_mcp.bridge.excel import ExcelBridge
 from modelrisk_mcp.bridge.mrservice import MrServiceBridge
 from modelrisk_mcp.bridge.reports import (
+    DriversReportBuilder,
+    DriversReportResult,
     ExecutiveReportBuilder,
     ExecutiveReportResult,
     default_subtitle,
@@ -300,6 +302,43 @@ class ModelRiskBridge:
             workbook, names, include_inputs=True
         )
         return self._results.get_correlation_matrix(wb_path, resolved_names)
+
+    def build_drivers_report(
+        self,
+        output_name: str,
+        *,
+        workbook: str | None = None,
+        title: str | None = None,
+        subtitle: str | None = None,
+        sheet_name: str = "Drivers_Report",
+    ) -> DriversReportResult:
+        """Render a single-sheet sensitivity report that explains the
+        tornado in plain English: key findings, driver ranking table,
+        a 'how to read this chart' panel, and tiered recommendations.
+        """
+        wb_name = workbook or self._excel.get_active_workbook().name
+        wb_path, _ = self._resolve_workbook_and_outputs(wb_name, [output_name])
+
+        # Fetch sensitivity + iteration count.
+        input_names = [i.name for i in self.list_inputs(wb_name)]
+        sensitivity = self._results.get_sensitivity_ranking(
+            output_name, input_names, wb_path,
+        )
+
+        if not self._excel.is_connected():
+            self._excel.connect()
+        app = self._excel._app
+        assert app is not None
+        book = app.books[wb_name]
+        return DriversReportBuilder.build(
+            book,
+            sheet_name=sheet_name,
+            output_name=output_name,
+            sensitivity=sensitivity,
+            iterations=sensitivity.iterations,
+            title=title,
+            subtitle=subtitle,
+        )
 
     def build_executive_report(
         self,

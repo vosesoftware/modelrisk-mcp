@@ -22,6 +22,8 @@ from unittest.mock import MagicMock
 import pytest
 
 from modelrisk_mcp.bridge.reports import (
+    DriversReportBuilder,
+    DriversReportResult,
     ExecutiveReportBuilder,
     ExecutiveReportResult,
     default_subtitle,
@@ -448,6 +450,218 @@ class TestBuildExecutiveReportTool:
             assert out["chart_count"] == 2
             assert out["callout_count"] == 4
             assert "1,000.00" in out["headline_summary"]
+        finally:
+            reading.set_bridge_for_testing(None)
+
+
+# ----------------------------------------------------------------------
+# DriversReportBuilder tests
+# ----------------------------------------------------------------------
+
+
+class TestDriversReportBuilder:
+    def test_builds_sheet_with_title_and_findings(self) -> None:
+        book = _FakeBook()
+        sens = _make_sensitivity(
+            "Profit",
+            entries=[
+                ("WidgetCost", -0.72),
+                ("UnitsSold", 0.55),
+                ("Discount", 0.18),
+            ],
+        )
+        result = DriversReportBuilder.build(
+            book,
+            sheet_name="Drivers",
+            output_name="Profit",
+            sensitivity=sens,
+            iterations=5000,
+        )
+        assert isinstance(result, DriversReportResult)
+        sheet = book.sheets["Drivers"]
+        assert "Profit" in sheet.cells["A1"]
+        assert "5,000 iterations" in sheet.cells["A2"]
+        assert sheet.cells["A4"] == "KEY FINDINGS"
+        assert result.drivers_analyzed == 3
+        assert result.top_driver == "WidgetCost"
+        assert result.top_correlation == -0.72
+        assert sheet.activated is True
+
+    def test_findings_name_top_driver_with_direction(self) -> None:
+        book = _FakeBook()
+        sens = _make_sensitivity(
+            "Profit", entries=[("WidgetCost", -0.72)],
+        )
+        DriversReportBuilder.build(
+            book,
+            sheet_name="Drivers",
+            output_name="Profit",
+            sensitivity=sens,
+            iterations=1000,
+        )
+        sheet = book.sheets["Drivers"]
+        # First finding should mention the driver name + that it
+        # LOWERS the output (negative correlation).
+        first_finding_text = sheet.cells.get("A5", "") or ""
+        assert "WidgetCost" in first_finding_text
+        assert "lowers" in first_finding_text
+        assert "Profit" in first_finding_text
+
+    def test_findings_mention_top_n_variance_share(self) -> None:
+        book = _FakeBook()
+        # Two strong drivers — top-2 r² = 0.5184 + 0.4225 ≈ 0.94 → ~94%
+        sens = _make_sensitivity(
+            "Profit",
+            entries=[("A", -0.72), ("B", 0.65), ("C", 0.05)],
+        )
+        DriversReportBuilder.build(
+            book,
+            sheet_name="Drivers",
+            output_name="Profit",
+            sensitivity=sens,
+            iterations=1000,
+        )
+        sheet = book.sheets["Drivers"]
+        coverage_finding = sheet.cells.get("A6", "") or ""
+        assert "top 3" in coverage_finding.lower() or "top-3" in coverage_finding.lower() or "top " in coverage_finding.lower()
+
+    def test_driver_table_populated(self) -> None:
+        book = _FakeBook()
+        sens = _make_sensitivity(
+            "Profit",
+            entries=[("A", -0.7), ("B", 0.4), ("C", 0.1)],
+        )
+        DriversReportBuilder.build(
+            book,
+            sheet_name="Drivers",
+            output_name="Profit",
+            sensitivity=sens,
+            iterations=1000,
+        )
+        sheet = book.sheets["Drivers"]
+        # Header
+        assert sheet.cells["G11"] == "Input"
+        assert sheet.cells["H11"] == "Correlation (r)"
+        assert sheet.cells["I11"] == "|r|"
+        assert sheet.cells["J11"] == "Variance share"
+        # Data row 1 (strongest)
+        assert sheet.cells["G12"] == "A"
+        assert sheet.cells["H12"] == -0.7
+        assert abs(sheet.cells["I12"] - 0.7) < 1e-9
+        assert abs(sheet.cells["J12"] - 0.49) < 1e-9  # r² = 0.49
+
+    def test_recommendations_tier_by_correlation_strength(self) -> None:
+        book = _FakeBook()
+        sens = _make_sensitivity(
+            "Profit",
+            entries=[
+                ("StrongDriver", -0.7),     # focus
+                ("StrongDriver2", 0.5),     # focus
+                ("ModerateDriver", 0.25),   # monitor
+                ("WeakDriver", 0.05),       # deprioritise
+            ],
+        )
+        DriversReportBuilder.build(
+            book,
+            sheet_name="Drivers",
+            output_name="Profit",
+            sensitivity=sens,
+            iterations=1000,
+        )
+        sheet = book.sheets["Drivers"]
+        # The "Focus mitigation on" row lives at RECOMMEND_HEADER_ROW + 1.
+        focus_row = DriversReportBuilder.RECOMMEND_HEADER_ROW + 1
+        monitor_row = focus_row + 1
+        deprioritise_row = focus_row + 2
+        assert "StrongDriver" in sheet.cells[f"B{focus_row}"]
+        assert "StrongDriver2" in sheet.cells[f"B{focus_row}"]
+        assert "ModerateDriver" in sheet.cells[f"B{monitor_row}"]
+        assert "WeakDriver" in sheet.cells[f"B{deprioritise_row}"]
+
+    def test_empty_sensitivity_doesnt_crash(self) -> None:
+        book = _FakeBook()
+        from modelrisk_mcp.schemas.results import SensitivityRanking
+        empty = SensitivityRanking(output_name="Profit", entries=[])
+        result = DriversReportBuilder.build(
+            book,
+            sheet_name="Drivers",
+            output_name="Profit",
+            sensitivity=empty,
+            iterations=0,
+        )
+        assert result.drivers_analyzed == 0
+        assert result.top_driver is None
+        # A finding still gets written, explaining the empty result.
+        sheet = book.sheets["Drivers"]
+        first_finding = sheet.cells.get("A5", "")
+        assert "No drivers" in first_finding
+
+    def test_concentration_label(self) -> None:
+        book = _FakeBook()
+        # Concentrated: one input dominates
+        sens = _make_sensitivity(
+            "Profit",
+            entries=[("A", -0.9), ("B", 0.1), ("C", 0.05)],
+        )
+        result = DriversReportBuilder.build(
+            book,
+            sheet_name="Drivers",
+            output_name="Profit",
+            sensitivity=sens,
+            iterations=1000,
+        )
+        assert result.concentration == "concentrated"
+
+    def test_replaces_existing_sheet(self) -> None:
+        book = _FakeBook()
+        book.sheets.add("Drivers")
+        existing = book.sheets["Drivers"]
+        existing.cells["A1"] = "stale"
+
+        DriversReportBuilder.build(
+            book,
+            sheet_name="Drivers",
+            output_name="Profit",
+            sensitivity=_make_sensitivity(),
+            iterations=1000,
+        )
+        assert existing.deleted is True
+
+
+class TestBuildDriversReportTool:
+    def test_passes_args_through(self) -> None:
+        from modelrisk_mcp.tools import reading, workflows
+
+        bridge = MagicMock()
+        bridge.build_drivers_report.return_value = DriversReportResult(
+            sheet_name="Drivers_Report",
+            output_name="Profit",
+            drivers_analyzed=4,
+            top_driver="WidgetCost",
+            top_correlation=-0.72,
+            concentration="moderate",
+            headline_finding=(
+                "WidgetCost is the strong driver of Profit (r = -0.72); "
+                "4 inputs analyzed."
+            ),
+        )
+        reading.set_bridge_for_testing(bridge)
+        try:
+            out = workflows.build_drivers_report(
+                output_name="Profit",
+                title="What drives Profit",
+                workbook_name="m.xlsx",
+            )
+            bridge.build_drivers_report.assert_called_once_with(
+                "Profit",
+                workbook="m.xlsx",
+                title="What drives Profit",
+                subtitle=None,
+                sheet_name="Drivers_Report",
+            )
+            assert out["top_driver"] == "WidgetCost"
+            assert out["concentration"] == "moderate"
+            assert "Profit" in out["headline_finding"]
         finally:
             reading.set_bridge_for_testing(None)
 

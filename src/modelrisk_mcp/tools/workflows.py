@@ -16,7 +16,7 @@ from pydantic import Field
 
 from modelrisk_mcp.audit.engine import run_audit
 from modelrisk_mcp.bridge.charts import TornadoChartResult
-from modelrisk_mcp.bridge.reports import ExecutiveReportResult
+from modelrisk_mcp.bridge.reports import DriversReportResult, ExecutiveReportResult
 from modelrisk_mcp.schemas.results import AuditReport, SimulationResult
 from modelrisk_mcp.schemas.workbook import CellRef
 from modelrisk_mcp.server import mcp
@@ -280,6 +280,82 @@ def _format_mtime(path: Path) -> str | None:
 
 @mcp.tool(
     description=(
+        "ModelRisk: Build a single-sheet drivers report — a sensitivity "
+        "analysis presented for a decision-maker. Drops onto a new "
+        "sheet: title band; auto-generated KEY FINDINGS in plain "
+        "English ('The dominant driver of NPV is widget cost, r = "
+        "-0.65; higher widget cost lowers NPV'); a prominent tornado "
+        "chart; a driver-ranking table with correlation + |r| + "
+        "approximate variance share; a HOW TO READ THIS CHART panel "
+        "for stakeholders who don't know what Spearman correlation "
+        "means; and tiered RECOMMENDED ACTIONS (focus / monitor / "
+        "deprioritise) grouping inputs by strength. Use this when the "
+        "user asks for an uncertainty-drivers report rather than "
+        "the broader executive dashboard."
+    )
+)
+def build_drivers_report(
+    output_name: Annotated[
+        str,
+        Field(
+            description=(
+                "The output to analyze drivers for (e.g. 'NPV', "
+                "'TotalCost'). Each call produces one sheet for one "
+                "output. Call multiple times for multiple outputs."
+            )
+        ),
+    ],
+    title: Annotated[
+        str | None,
+        Field(
+            description=(
+                "Report title. Default: 'Uncertainty Drivers — <output>'."
+            )
+        ),
+    ] = None,
+    subtitle: Annotated[
+        str | None,
+        Field(
+            description=(
+                "Subtitle. Default: 'Sensitivity analysis · N "
+                "iterations · <date>'."
+            )
+        ),
+    ] = None,
+    sheet_name: Annotated[
+        str,
+        Field(
+            description=(
+                "Target sheet name. Default 'Drivers_Report'. "
+                "Replaced if it already exists."
+            )
+        ),
+    ] = "Drivers_Report",
+    workbook_name: Annotated[
+        str | None,
+        Field(description="Workbook name. Omit for the active workbook."),
+    ] = None,
+) -> dict[str, Any]:
+    result: DriversReportResult = get_bridge().build_drivers_report(
+        output_name,
+        workbook=workbook_name,
+        title=title,
+        subtitle=subtitle,
+        sheet_name=sheet_name,
+    )
+    return {
+        "sheet_name": result.sheet_name,
+        "output_name": result.output_name,
+        "drivers_analyzed": result.drivers_analyzed,
+        "top_driver": result.top_driver,
+        "top_correlation": result.top_correlation,
+        "concentration": result.concentration,
+        "headline_finding": result.headline_finding,
+    }
+
+
+@mcp.tool(
+    description=(
         "ModelRisk: Build a single-sheet executive report for a "
         "decision-maker. Drops a curated dashboard onto a new sheet "
         "with: title band, headline numbers (mean / P5 / P50 / P95 / "
@@ -522,6 +598,7 @@ def generate_executive_summary(
 
 __all__ = [
     "audit_model",
+    "build_drivers_report",
     "build_executive_report",
     "create_tornado_chart",
     "diagnose_workbook",

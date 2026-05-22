@@ -639,7 +639,464 @@ def default_subtitle(samples: int, seed: int | None = None) -> str:
     return " · ".join(parts)
 
 
+# ---------------------------------------------------------------------------
+# Drivers report — narrower than ExecutiveReport, focused on
+# sensitivity. Includes auto-generated plain-English narrative
+# explaining *which* inputs matter and *how to read* the tornado.
+# ---------------------------------------------------------------------------
+
+
+@dataclass(frozen=True)
+class DriversReportResult:
+    """Returned to the MCP layer so the LLM can quote the headline
+    finding without re-reading the sheet."""
+
+    sheet_name: str
+    output_name: str
+    drivers_analyzed: int
+    top_driver: str | None
+    top_correlation: float | None
+    concentration: str  # "concentrated" | "moderate" | "diffuse"
+    headline_finding: str  # one-line summary the LLM can quote
+
+
+class DriversReportBuilder:
+    """Single-sheet sensitivity report that explains the tornado in
+    plain English.
+
+    The added value over `TornadoChartWriter` is the narrative:
+    auto-generated key findings, a 'how to read this chart' panel,
+    and tiered recommendations. Designed for decision-makers who
+    don't know what Spearman correlation means.
+    """
+
+    TITLE_ROW = 1
+    SUBTITLE_ROW = 2
+    FINDINGS_HEADER_ROW = 4
+    FINDINGS_FIRST_ROW = 5
+    CHART_BAND_TOP_ROW = 11
+    TABLE_HEADER_ROW = 11
+    TABLE_DATA_ROW = 12
+    EXPLAIN_HEADER_ROW = 33
+    RECOMMEND_HEADER_ROW = 40
+
+    @staticmethod
+    def build(
+        book: Any,
+        *,
+        sheet_name: str,
+        output_name: str,
+        sensitivity: SensitivityRanking,
+        iterations: int,
+        title: str | None = None,
+        subtitle: str | None = None,
+    ) -> DriversReportResult:
+        """Render the drivers report. Idempotent — replaces an
+        existing sheet of the same name."""
+        ExecutiveReportBuilder._remove_existing_sheet(book, sheet_name)
+        sheet = book.sheets.add(sheet_name, after=book.sheets[-1])
+
+        DriversReportBuilder._set_column_widths(sheet)
+
+        effective_title = title or f"Uncertainty Drivers — {output_name}"
+        effective_subtitle = subtitle or (
+            f"Sensitivity analysis · {iterations:,} iterations · "
+            f"{datetime.now().strftime('%Y-%m-%d')}"
+        )
+        DriversReportBuilder._write_title_band(
+            sheet, effective_title, effective_subtitle,
+        )
+
+        # Sort entries by |correlation| descending so all downstream
+        # logic sees the strongest-first ordering.
+        entries = sorted(
+            sensitivity.entries,
+            key=lambda e: abs(e.correlation),
+            reverse=True,
+        )
+
+        findings = _compose_findings(output_name, entries)
+        DriversReportBuilder._write_findings(sheet, findings)
+
+        DriversReportBuilder._write_tornado_chart(sheet, output_name, entries)
+        DriversReportBuilder._write_driver_table(sheet, entries)
+
+        DriversReportBuilder._write_chart_explanation(sheet)
+        recommendations = _compose_recommendations(entries)
+        DriversReportBuilder._write_recommendations(sheet, recommendations)
+
+        try:
+            sheet.activate()
+        except Exception:
+            pass
+
+        top = entries[0] if entries else None
+        headline = _drivers_headline(output_name, entries)
+        return DriversReportResult(
+            sheet_name=sheet_name,
+            output_name=output_name,
+            drivers_analyzed=len(entries),
+            top_driver=top.input_name if top else None,
+            top_correlation=top.correlation if top else None,
+            concentration=_concentration_label(entries),
+            headline_finding=headline,
+        )
+
+    # ----- composition ----------------------------------------------------
+
+    @staticmethod
+    def _set_column_widths(sheet: Any) -> None:
+        widths = {
+            "A": 24, "B": 14, "C": 14, "D": 14, "E": 14,
+            "F": 4,
+            "G": 20, "H": 12, "I": 12, "J": 12,
+        }
+        for col, w in widths.items():
+            try:
+                sheet.range(f"{col}1").column_width = w
+            except Exception:
+                pass
+
+    @staticmethod
+    def _write_title_band(sheet: Any, title: str, subtitle: str) -> None:
+        sheet.range("A1").value = title
+        sheet.range("A2").value = subtitle
+        try:
+            sheet.range("A1:J1").merge()
+            sheet.range("A2:J2").merge()
+            band = sheet.range("A1:J2")
+            band.api.Interior.Color = _COLOR_TITLE_BG
+            band.api.Font.Color = _COLOR_TITLE_FG
+            sheet.range("A1").api.Font.Size = 18
+            sheet.range("A1").api.Font.Bold = True
+            sheet.range("A2").api.Font.Size = 11
+            sheet.range("A1").api.HorizontalAlignment = -4108
+            sheet.range("A2").api.HorizontalAlignment = -4108
+            sheet.range("A1").row_height = 28
+            sheet.range("A2").row_height = 18
+        except Exception:
+            pass
+
+    @staticmethod
+    def _write_findings(sheet: Any, findings: list[str]) -> None:
+        sheet.range(f"A{DriversReportBuilder.FINDINGS_HEADER_ROW}").value = (
+            "KEY FINDINGS"
+        )
+        try:
+            r = DriversReportBuilder.FINDINGS_HEADER_ROW
+            sheet.range(f"A{r}:J{r}").api.Font.Bold = True
+            sheet.range(f"A{r}").api.Font.Size = 12
+            sheet.range(f"A{r}").api.Font.Color = _rgb(100, 100, 100)
+        except Exception:
+            pass
+        for i, finding in enumerate(findings, start=DriversReportBuilder.FINDINGS_FIRST_ROW):
+            sheet.range(f"A{i}").value = f"•  {finding}"
+            try:
+                sheet.range(f"A{i}:J{i}").merge()
+                sheet.range(f"A{i}").api.WrapText = True
+                sheet.range(f"A{i}").row_height = 28
+            except Exception:
+                pass
+
+    @staticmethod
+    def _write_tornado_chart(
+        sheet: Any, output_name: str, entries: list[Any],
+    ) -> None:
+        if not entries:
+            return
+        # Helper data goes far right (hidden later)
+        _write_tornado_data(sheet, entries, anchor_col="P", anchor_row=1)
+        try:
+            chart = sheet.charts.add(
+                left=10, top=210, width=420, height=320,
+            )
+            chart.set_source_data(
+                sheet.range(f"P1:Q{1 + len(entries)}")
+            )
+            try:
+                chart_api = (
+                    chart.api[1] if isinstance(chart.api, tuple)
+                    else chart.api
+                )
+                chart_api.ChartType = _XL_BAR_CLUSTERED
+                chart_api.HasTitle = True
+                chart_api.ChartTitle.Text = (
+                    f"What moves {output_name}"
+                )
+                category_axis = chart_api.Axes(1)
+                category_axis.ReversePlotOrder = True
+            except Exception:
+                pass
+            try:
+                chart.name = f"DriversTornado_{output_name[:15]}"[:31]
+            except Exception:
+                pass
+        except Exception:
+            pass
+        try:
+            sheet.range("P:Q").api.EntireColumn.Hidden = True
+        except Exception:
+            pass
+
+    @staticmethod
+    def _write_driver_table(sheet: Any, entries: list[Any]) -> None:
+        # Header
+        header_row = DriversReportBuilder.TABLE_HEADER_ROW
+        headers = ["Input", "Correlation (r)", "|r|", "Variance share"]
+        for i, label in enumerate(headers):
+            col = chr(ord("G") + i)
+            sheet.range(f"{col}{header_row}").value = label
+        try:
+            sheet.range(f"G{header_row}:J{header_row}").api.Font.Bold = True
+            sheet.range(
+                f"G{header_row}:J{header_row}"
+            ).api.Interior.Color = _COLOR_BAND_LIGHT
+        except Exception:
+            pass
+
+        for idx, e in enumerate(entries, start=DriversReportBuilder.TABLE_DATA_ROW):
+            sheet.range(f"G{idx}").value = e.input_name
+            sheet.range(f"H{idx}").value = e.correlation
+            sheet.range(f"I{idx}").value = abs(e.correlation)
+            sheet.range(f"J{idx}").value = _variance_share(e.correlation)
+            try:
+                sheet.range(f"H{idx}").api.NumberFormat = "0.000"
+                sheet.range(f"I{idx}").api.NumberFormat = "0.000"
+                sheet.range(f"J{idx}").api.NumberFormat = "0.0%"
+                # Color the |r| cell by strength tier.
+                col_strength = _driver_strength_color(abs(e.correlation))
+                sheet.range(f"I{idx}").api.Font.Color = col_strength
+                sheet.range(f"I{idx}").api.Font.Bold = True
+            except Exception:
+                pass
+
+    @staticmethod
+    def _write_chart_explanation(sheet: Any) -> None:
+        row = DriversReportBuilder.EXPLAIN_HEADER_ROW
+        sheet.range(f"A{row}").value = "HOW TO READ THIS CHART"
+        try:
+            sheet.range(f"A{row}").api.Font.Bold = True
+            sheet.range(f"A{row}").api.Font.Size = 12
+            sheet.range(f"A{row}").api.Font.Color = _rgb(100, 100, 100)
+        except Exception:
+            pass
+        paragraphs = [
+            (
+                "Each bar shows how strongly one input moves the output. "
+                "We use Spearman rank correlation: a value of +1 means the "
+                "input perfectly pushes the output up; -1 means it pushes "
+                "the output down; 0 means no effect."
+            ),
+            (
+                "Bars further from zero matter more. A bar at +0.7 means "
+                "this input is a strong upside driver; at -0.7 a strong "
+                "downside driver. Bars near zero are noise — those inputs "
+                "could change without meaningful impact on the result."
+            ),
+            (
+                "The 'Variance share' column is roughly how much of the "
+                "output's total variation each input alone explains. The "
+                "top few drivers usually account for most of the variance; "
+                "that's where mitigation has the biggest payoff."
+            ),
+        ]
+        for i, paragraph in enumerate(paragraphs, start=row + 1):
+            sheet.range(f"A{i}").value = paragraph
+            try:
+                sheet.range(f"A{i}:J{i}").merge()
+                sheet.range(f"A{i}").api.WrapText = True
+                sheet.range(f"A{i}").row_height = 32
+                sheet.range(f"A{i}").api.VerticalAlignment = -4160  # xlTop
+            except Exception:
+                pass
+
+    @staticmethod
+    def _write_recommendations(
+        sheet: Any, recommendations: dict[str, list[str]],
+    ) -> None:
+        row = DriversReportBuilder.RECOMMEND_HEADER_ROW
+        sheet.range(f"A{row}").value = "RECOMMENDED ACTIONS"
+        try:
+            sheet.range(f"A{row}").api.Font.Bold = True
+            sheet.range(f"A{row}").api.Font.Size = 12
+            sheet.range(f"A{row}").api.Font.Color = _rgb(100, 100, 100)
+        except Exception:
+            pass
+        tier_rows = [
+            ("Focus mitigation on:", "focus", _COLOR_DRIVER_STRONG),
+            ("Monitor:", "monitor", _COLOR_DRIVER_MEDIUM),
+            ("Can be deprioritised:", "deprioritise", _COLOR_DRIVER_WEAK),
+        ]
+        for i, (label, key, color) in enumerate(tier_rows, start=row + 1):
+            sheet.range(f"A{i}").value = label
+            inputs = recommendations.get(key, [])
+            value = ", ".join(inputs) if inputs else "(none)"
+            sheet.range(f"B{i}").value = value
+            try:
+                sheet.range(f"A{i}").api.Font.Bold = True
+                sheet.range(f"B{i}").api.Font.Color = color
+                sheet.range(f"B{i}").api.Font.Bold = True
+                sheet.range(f"B{i}:J{i}").merge()
+                sheet.range(f"B{i}").api.WrapText = True
+            except Exception:
+                pass
+
+
+# ---------------------------------------------------------------------------
+# Narrative-generation helpers
+# ---------------------------------------------------------------------------
+
+
+def _strength_label(corr: float) -> str:
+    a = abs(corr)
+    if a >= 0.7:
+        return "dominant"
+    if a >= 0.4:
+        return "strong"
+    if a >= 0.2:
+        return "moderate"
+    return "weak"
+
+
+def _driver_strength_color(abs_corr: float) -> int:
+    if abs_corr >= 0.4:
+        return _COLOR_DRIVER_STRONG
+    if abs_corr >= 0.2:
+        return _COLOR_DRIVER_MEDIUM
+    return _COLOR_DRIVER_WEAK
+
+
+def _variance_share(corr: float) -> float:
+    """Approximate fraction of output variance an input alone explains.
+    Spearman r² is rank-based and isn't a literal variance decomposition,
+    but it's a defensible decision-maker framing for relative importance."""
+    return corr * corr
+
+
+def _concentration_label(entries: list[Any]) -> str:
+    """How concentrated the risk profile is. Top-3 share of total |r|
+    is a robust signal:
+      - >= 0.75  → concentrated (few drivers matter)
+      - 0.5-0.75 → moderate
+      - < 0.5    → diffuse (no single point of intervention)
+    """
+    if not entries:
+        return "diffuse"
+    total = sum(abs(e.correlation) for e in entries)
+    if total == 0:
+        return "diffuse"
+    top3 = sum(abs(e.correlation) for e in entries[:3])
+    share = top3 / total
+    if share >= 0.75:
+        return "concentrated"
+    if share >= 0.5:
+        return "moderate"
+    return "diffuse"
+
+
+def _compose_findings(
+    output_name: str, entries: list[Any],
+) -> list[str]:
+    """Auto-generate 3-5 plain-English findings from the sensitivity
+    ranking. Each is a single sentence framed for a decision-maker."""
+    findings: list[str] = []
+    if not entries:
+        findings.append(
+            f"No drivers were found for {output_name}. This is unusual — "
+            "check that the workbook has VoseInput cells and that a "
+            "simulation has been run."
+        )
+        return findings
+
+    top = entries[0]
+    strength = _strength_label(top.correlation)
+    direction_phrase = (
+        "raises" if top.correlation > 0 else "lowers"
+    )
+    findings.append(
+        f"The {strength} driver of {output_name} is "
+        f"{top.input_name} (r = {top.correlation:+.2f}). "
+        f"A higher {top.input_name} {direction_phrase} {output_name}."
+    )
+
+    # Top-N coverage of variance share.
+    top_n = entries[:3]
+    coverage = sum(_variance_share(e.correlation) for e in top_n) * 100
+    if len(top_n) > 1:
+        names = ", ".join(e.input_name for e in top_n)
+        findings.append(
+            f"The top {len(top_n)} drivers together account for "
+            f"approximately {coverage:.0f}% of {output_name}'s variance: "
+            f"{names}."
+        )
+
+    # Concentration framing
+    concentration = _concentration_label(entries)
+    if concentration == "concentrated":
+        findings.append(
+            "Risk is concentrated — most of the uncertainty comes from a "
+            "small number of inputs. Mitigation effort can focus narrowly "
+            "with high payoff."
+        )
+    elif concentration == "diffuse":
+        findings.append(
+            "Risk is diffuse — no single input dominates, so no single "
+            "intervention will substantially narrow the outcome range. "
+            "Consider portfolio-level risk management rather than "
+            "input-by-input mitigation."
+        )
+
+    # Weak-input callout — if any input has |r| < 0.15, name them so
+    # decision-makers know what they can safely ignore.
+    weak = [e for e in entries if abs(e.correlation) < 0.15]
+    if weak and len(weak) < len(entries):
+        weak_names = ", ".join(e.input_name for e in weak[:3])
+        more = f" and {len(weak) - 3} more" if len(weak) > 3 else ""
+        findings.append(
+            f"Several inputs have negligible influence on {output_name} "
+            f"(|r| < 0.15): {weak_names}{more}. These can be deprioritised "
+            "in scenario planning."
+        )
+
+    return findings
+
+
+def _compose_recommendations(
+    entries: list[Any],
+) -> dict[str, list[str]]:
+    """Tier inputs into focus / monitor / deprioritise based on
+    |correlation|."""
+    focus, monitor, deprioritise = [], [], []
+    for e in entries:
+        a = abs(e.correlation)
+        if a >= 0.4:
+            focus.append(e.input_name)
+        elif a >= 0.2:
+            monitor.append(e.input_name)
+        else:
+            deprioritise.append(e.input_name)
+    return {
+        "focus": focus,
+        "monitor": monitor,
+        "deprioritise": deprioritise,
+    }
+
+
+def _drivers_headline(output_name: str, entries: list[Any]) -> str:
+    """One-line summary for the LLM to quote."""
+    if not entries:
+        return f"No drivers identified for {output_name}."
+    top = entries[0]
+    strength = _strength_label(top.correlation)
+    return (
+        f"{top.input_name} is the {strength} driver of {output_name} "
+        f"(r = {top.correlation:+.2f}); {len(entries)} inputs analyzed."
+    )
+
+
 __all__ = [
+    "DriversReportBuilder",
+    "DriversReportResult",
     "ExecutiveReportBuilder",
     "ExecutiveReportResult",
     "default_subtitle",
