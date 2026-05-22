@@ -4,6 +4,18 @@ All notable changes to ModelRisk MCP. Follows [Keep a Changelog](https://keepach
 
 ## [Unreleased]
 
+## [0.3.0-alpha.22] — 2026-05-22
+
+Layout consistency fix: alpha.20 polished `build_executive_report`'s layout (narrow gutters at A/M, content in B–L) but I missed applying the same change to `build_drivers_report`. Live screenshot review caught the asymmetry — exec sheet had the polished gutter pattern, drivers sheet still had labels and tornado flush against column A.
+
+### Fixed
+
+- **DriversReportBuilder now uses the same B-shifted layout as ExecutiveReportBuilder.** Title band B:L (was A:J), KEY FINDINGS at B4 (was A4), bullets in B (was A), tornado chart shifted right by ~16pt to align with column B, driver-ranking table moved from G:J to H:K (sits after the mid-gutter at column G), HOW TO READ THIS CHART and RECOMMENDED ACTIONS narrative sections shifted to B with merge ranges expanded to L. Recommendations rows put labels in B and values in C (was A/B); the value cell merges B-merged-to-L. Now both reports look like siblings.
+
+### Tests
+
+399 unit tests pass. 6 drivers-report tests updated to assert against the new column positions (B-shifted findings, H-K driver table, C-shifted recommendations).
+
 ## [0.3.0-alpha.21] — 2026-05-22
 
 Hotfix for a regression introduced by alpha.16's `_ModelRiskReports` helper sheet: the second run of `build_executive_report` (and `build_drivers_report`) failed with `Move method of Worksheet class failed` on real Excel.

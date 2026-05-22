@@ -986,10 +986,17 @@ class DriversReportBuilder:
 
     @staticmethod
     def _set_column_widths(sheet: Any) -> None:
+        """alpha.22 layout: narrow gutters at A and M, content in B-L.
+        Driver table lives at H-K (was G-J). Match the executive
+        report's gutter pattern so the two reports feel like siblings."""
         widths = {
-            "A": 24, "B": 14, "C": 14, "D": 14, "E": 14,
-            "F": 4,
-            "G": 20, "H": 12, "I": 12, "J": 12,
+            "A": 2,   # left gutter
+            "B": 24,  # findings + recommendation labels
+            "C": 14, "D": 14, "E": 14, "F": 14,
+            "G": 4,   # mid gutter
+            "H": 22,  # driver-table Input column
+            "I": 14, "J": 14, "K": 14, "L": 14,
+            "M": 2,   # right gutter
         }
         for col, w in widths.items():
             try:
@@ -999,42 +1006,43 @@ class DriversReportBuilder:
 
     @staticmethod
     def _write_title_band(sheet: Any, title: str, subtitle: str) -> None:
-        sheet.range("A1").value = title
-        sheet.range("A2").value = subtitle
+        sheet.range("B1").value = title
+        sheet.range("B2").value = subtitle
         try:
-            sheet.range("A1:J1").merge()
-            sheet.range("A2:J2").merge()
-            band = sheet.range("A1:J2")
+            # Band spans B:L; A and M stay as narrow gutters.
+            sheet.range("B1:L1").merge()
+            sheet.range("B2:L2").merge()
+            band = sheet.range("B1:L2")
             band.api.Interior.Color = _COLOR_TITLE_BG
             band.api.Font.Color = _COLOR_TITLE_FG
-            sheet.range("A1").api.Font.Size = 18
-            sheet.range("A1").api.Font.Bold = True
-            sheet.range("A2").api.Font.Size = 11
-            sheet.range("A1").api.HorizontalAlignment = -4108
-            sheet.range("A2").api.HorizontalAlignment = -4108
-            sheet.range("A1").row_height = 28
-            sheet.range("A2").row_height = 18
+            sheet.range("B1").api.Font.Size = 18
+            sheet.range("B1").api.Font.Bold = True
+            sheet.range("B2").api.Font.Size = 11
+            sheet.range("B1").api.HorizontalAlignment = -4108
+            sheet.range("B2").api.HorizontalAlignment = -4108
+            sheet.range("B1").row_height = 28
+            sheet.range("B2").row_height = 18
         except Exception:
             pass
 
     @staticmethod
     def _write_findings(sheet: Any, findings: list[str]) -> None:
-        sheet.range(f"A{DriversReportBuilder.FINDINGS_HEADER_ROW}").value = (
+        sheet.range(f"B{DriversReportBuilder.FINDINGS_HEADER_ROW}").value = (
             "KEY FINDINGS"
         )
         try:
             r = DriversReportBuilder.FINDINGS_HEADER_ROW
-            sheet.range(f"A{r}:J{r}").api.Font.Bold = True
-            sheet.range(f"A{r}").api.Font.Size = 12
-            sheet.range(f"A{r}").api.Font.Color = _rgb(100, 100, 100)
+            sheet.range(f"B{r}:L{r}").api.Font.Bold = True
+            sheet.range(f"B{r}").api.Font.Size = 12
+            sheet.range(f"B{r}").api.Font.Color = _rgb(100, 100, 100)
         except Exception:
             pass
         for i, finding in enumerate(findings, start=DriversReportBuilder.FINDINGS_FIRST_ROW):
-            sheet.range(f"A{i}").value = f"•  {finding}"
+            sheet.range(f"B{i}").value = f"•  {finding}"
             try:
-                sheet.range(f"A{i}:J{i}").merge()
-                sheet.range(f"A{i}").api.WrapText = True
-                sheet.range(f"A{i}").row_height = 28
+                sheet.range(f"B{i}:L{i}").merge()
+                sheet.range(f"B{i}").api.WrapText = True
+                sheet.range(f"B{i}").row_height = 28
             except Exception:
                 pass
 
@@ -1070,51 +1078,54 @@ class DriversReportBuilder:
                 helper_anchor_col=anchor,
                 driver_count=len(entries),
                 title=f"What moves {output_name}",
-                left=10, top=210, width=420, height=320,
+                # Shifted right ~16pt post-alpha.22 to align with the
+                # column-B content start (A is now the gutter).
+                left=26, top=210, width=440, height=320,
             )
         except Exception:
             pass
 
     @staticmethod
     def _write_driver_table(sheet: Any, entries: list[Any]) -> None:
-        # Header
+        # alpha.22 layout: table moves from G:J to H:K so it lives
+        # past the mid-gutter at column G.
         header_row = DriversReportBuilder.TABLE_HEADER_ROW
         headers = ["Input", "Correlation (r)", "|r|", "Variance share"]
         for i, label in enumerate(headers):
-            col = chr(ord("G") + i)
+            col = chr(ord("H") + i)
             sheet.range(f"{col}{header_row}").value = label
         try:
-            sheet.range(f"G{header_row}:J{header_row}").api.Font.Bold = True
+            sheet.range(f"H{header_row}:K{header_row}").api.Font.Bold = True
             sheet.range(
-                f"G{header_row}:J{header_row}"
+                f"H{header_row}:K{header_row}"
             ).api.Interior.Color = _COLOR_BAND_LIGHT
         except Exception:
             pass
 
         for idx, e in enumerate(entries, start=DriversReportBuilder.TABLE_DATA_ROW):
-            sheet.range(f"G{idx}").value = e.input_name
-            sheet.range(f"H{idx}").value = e.correlation
-            sheet.range(f"I{idx}").value = abs(e.correlation)
-            sheet.range(f"J{idx}").value = _variance_share(e.correlation)
+            sheet.range(f"H{idx}").value = e.input_name
+            sheet.range(f"I{idx}").value = e.correlation
+            sheet.range(f"J{idx}").value = abs(e.correlation)
+            sheet.range(f"K{idx}").value = _variance_share(e.correlation)
             try:
-                sheet.range(f"H{idx}").api.NumberFormat = "0.000"
                 sheet.range(f"I{idx}").api.NumberFormat = "0.000"
-                sheet.range(f"J{idx}").api.NumberFormat = "0.0%"
+                sheet.range(f"J{idx}").api.NumberFormat = "0.000"
+                sheet.range(f"K{idx}").api.NumberFormat = "0.0%"
                 # Color the |r| cell by strength tier.
                 col_strength = _driver_strength_color(abs(e.correlation))
-                sheet.range(f"I{idx}").api.Font.Color = col_strength
-                sheet.range(f"I{idx}").api.Font.Bold = True
+                sheet.range(f"J{idx}").api.Font.Color = col_strength
+                sheet.range(f"J{idx}").api.Font.Bold = True
             except Exception:
                 pass
 
     @staticmethod
     def _write_chart_explanation(sheet: Any) -> None:
         row = DriversReportBuilder.EXPLAIN_HEADER_ROW
-        sheet.range(f"A{row}").value = "HOW TO READ THIS CHART"
+        sheet.range(f"B{row}").value = "HOW TO READ THIS CHART"
         try:
-            sheet.range(f"A{row}").api.Font.Bold = True
-            sheet.range(f"A{row}").api.Font.Size = 12
-            sheet.range(f"A{row}").api.Font.Color = _rgb(100, 100, 100)
+            sheet.range(f"B{row}").api.Font.Bold = True
+            sheet.range(f"B{row}").api.Font.Size = 12
+            sheet.range(f"B{row}").api.Font.Color = _rgb(100, 100, 100)
         except Exception:
             pass
         paragraphs = [
@@ -1138,12 +1149,12 @@ class DriversReportBuilder:
             ),
         ]
         for i, paragraph in enumerate(paragraphs, start=row + 1):
-            sheet.range(f"A{i}").value = paragraph
+            sheet.range(f"B{i}").value = paragraph
             try:
-                sheet.range(f"A{i}:J{i}").merge()
-                sheet.range(f"A{i}").api.WrapText = True
-                sheet.range(f"A{i}").row_height = 32
-                sheet.range(f"A{i}").api.VerticalAlignment = -4160  # xlTop
+                sheet.range(f"B{i}:L{i}").merge()
+                sheet.range(f"B{i}").api.WrapText = True
+                sheet.range(f"B{i}").row_height = 32
+                sheet.range(f"B{i}").api.VerticalAlignment = -4160  # xlTop
             except Exception:
                 pass
 
@@ -1152,11 +1163,11 @@ class DriversReportBuilder:
         sheet: Any, recommendations: dict[str, list[str]],
     ) -> None:
         row = DriversReportBuilder.RECOMMEND_HEADER_ROW
-        sheet.range(f"A{row}").value = "RECOMMENDED ACTIONS"
+        sheet.range(f"B{row}").value = "RECOMMENDED ACTIONS"
         try:
-            sheet.range(f"A{row}").api.Font.Bold = True
-            sheet.range(f"A{row}").api.Font.Size = 12
-            sheet.range(f"A{row}").api.Font.Color = _rgb(100, 100, 100)
+            sheet.range(f"B{row}").api.Font.Bold = True
+            sheet.range(f"B{row}").api.Font.Size = 12
+            sheet.range(f"B{row}").api.Font.Color = _rgb(100, 100, 100)
         except Exception:
             pass
         tier_rows = [
@@ -1165,16 +1176,16 @@ class DriversReportBuilder:
             ("Can be deprioritised:", "deprioritise", _COLOR_DRIVER_WEAK),
         ]
         for i, (label, key, color) in enumerate(tier_rows, start=row + 1):
-            sheet.range(f"A{i}").value = label
+            sheet.range(f"B{i}").value = label
             inputs = recommendations.get(key, [])
             value = ", ".join(inputs) if inputs else "(none)"
-            sheet.range(f"B{i}").value = value
+            sheet.range(f"C{i}").value = value
             try:
-                sheet.range(f"A{i}").api.Font.Bold = True
-                sheet.range(f"B{i}").api.Font.Color = color
                 sheet.range(f"B{i}").api.Font.Bold = True
-                sheet.range(f"B{i}:J{i}").merge()
-                sheet.range(f"B{i}").api.WrapText = True
+                sheet.range(f"C{i}").api.Font.Color = color
+                sheet.range(f"C{i}").api.Font.Bold = True
+                sheet.range(f"C{i}:L{i}").merge()
+                sheet.range(f"C{i}").api.WrapText = True
             except Exception:
                 pass
 

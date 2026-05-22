@@ -690,9 +690,11 @@ class TestDriversReportBuilder:
         )
         assert isinstance(result, DriversReportResult)
         sheet = book.sheets["Drivers"]
-        assert "Profit" in sheet.cells["A1"]
-        assert "5,000 iterations" in sheet.cells["A2"]
-        assert sheet.cells["A4"] == "KEY FINDINGS"
+        # alpha.22 layout: drivers report shifted to B-column gutter
+        # pattern (matches the executive report).
+        assert "Profit" in sheet.cells["B1"]
+        assert "5,000 iterations" in sheet.cells["B2"]
+        assert sheet.cells["B4"] == "KEY FINDINGS"
         assert result.drivers_analyzed == 3
         assert result.top_driver == "WidgetCost"
         assert result.top_correlation == -0.72
@@ -713,7 +715,7 @@ class TestDriversReportBuilder:
         sheet = book.sheets["Drivers"]
         # First finding should mention the driver name + that it
         # LOWERS the output (negative correlation).
-        first_finding_text = sheet.cells.get("A5", "") or ""
+        first_finding_text = sheet.cells.get("B5", "") or ""
         assert "WidgetCost" in first_finding_text
         assert "lowers" in first_finding_text
         assert "Profit" in first_finding_text
@@ -733,7 +735,7 @@ class TestDriversReportBuilder:
             iterations=1000,
         )
         sheet = book.sheets["Drivers"]
-        coverage_finding = sheet.cells.get("A6", "") or ""
+        coverage_finding = sheet.cells.get("B6", "") or ""
         assert "top 3" in coverage_finding.lower() or "top-3" in coverage_finding.lower() or "top " in coverage_finding.lower()
 
     def test_driver_table_populated(self) -> None:
@@ -750,16 +752,16 @@ class TestDriversReportBuilder:
             iterations=1000,
         )
         sheet = book.sheets["Drivers"]
-        # Header
-        assert sheet.cells["G11"] == "Input"
-        assert sheet.cells["H11"] == "Correlation (r)"
-        assert sheet.cells["I11"] == "|r|"
-        assert sheet.cells["J11"] == "Variance share"
+        # Header — alpha.22 shifted driver table from G:J to H:K.
+        assert sheet.cells["H11"] == "Input"
+        assert sheet.cells["I11"] == "Correlation (r)"
+        assert sheet.cells["J11"] == "|r|"
+        assert sheet.cells["K11"] == "Variance share"
         # Data row 1 (strongest)
-        assert sheet.cells["G12"] == "A"
-        assert sheet.cells["H12"] == -0.7
-        assert abs(sheet.cells["I12"] - 0.7) < 1e-9
-        assert abs(sheet.cells["J12"] - 0.49) < 1e-9  # r² = 0.49
+        assert sheet.cells["H12"] == "A"
+        assert sheet.cells["I12"] == -0.7
+        assert abs(sheet.cells["J12"] - 0.7) < 1e-9
+        assert abs(sheet.cells["K12"] - 0.49) < 1e-9  # r² = 0.49
 
     def test_recommendations_tier_by_correlation_strength(self) -> None:
         book = _FakeBook()
@@ -784,10 +786,12 @@ class TestDriversReportBuilder:
         focus_row = DriversReportBuilder.RECOMMEND_HEADER_ROW + 1
         monitor_row = focus_row + 1
         deprioritise_row = focus_row + 2
-        assert "StrongDriver" in sheet.cells[f"B{focus_row}"]
-        assert "StrongDriver2" in sheet.cells[f"B{focus_row}"]
-        assert "ModerateDriver" in sheet.cells[f"B{monitor_row}"]
-        assert "WeakDriver" in sheet.cells[f"B{deprioritise_row}"]
+        # alpha.22: recommendations values shifted from B → C
+        # (label in B, value in C).
+        assert "StrongDriver" in sheet.cells[f"C{focus_row}"]
+        assert "StrongDriver2" in sheet.cells[f"C{focus_row}"]
+        assert "ModerateDriver" in sheet.cells[f"C{monitor_row}"]
+        assert "WeakDriver" in sheet.cells[f"C{deprioritise_row}"]
 
     def test_empty_sensitivity_doesnt_crash(self) -> None:
         book = _FakeBook()
@@ -804,7 +808,7 @@ class TestDriversReportBuilder:
         assert result.top_driver is None
         # A finding still gets written, explaining the empty result.
         sheet = book.sheets["Drivers"]
-        first_finding = sheet.cells.get("A5", "")
+        first_finding = sheet.cells.get("B5", "")
         assert "No drivers" in first_finding
 
     def test_concentration_label(self) -> None:
