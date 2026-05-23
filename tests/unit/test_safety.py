@@ -22,6 +22,7 @@ from modelrisk_mcp.safety import (
     WriterMutex,
     append_write_log,
     check_bulk_write,
+    count_call_args,
     extract_call_heads,
     has_only_known_functions,
     is_vose_formula,
@@ -112,6 +113,95 @@ class TestHasOnlyKnownFunctions:
 
     def test_no_calls(self, cat) -> None:
         assert has_only_known_functions("=B12*1.1", cat) is True
+
+
+class TestCountCallArgs:
+    """`count_call_args` underpins VOSE-013 (alpha.35). Must correctly
+    count top-level argument commas while skipping:
+    - commas inside string literals
+    - commas inside nested function calls
+    - commas inside array literals `{...}`
+    And must distinguish empty parens from a single-arg call."""
+
+    def test_three_args(self) -> None:
+        assert count_call_args("=VosePERT(10, 20, 30)", "VosePERT") == [3]
+
+    def test_two_args(self) -> None:
+        assert count_call_args("=VoseNormal(0, 1)", "VoseNormal") == [2]
+
+    def test_one_arg(self) -> None:
+        assert count_call_args("=VoseExpon(1.5)", "VoseExpon") == [1]
+
+    def test_zero_args(self) -> None:
+        assert count_call_args("=VoseOutput()", "VoseOutput") == [0]
+
+    def test_single_string_arg(self) -> None:
+        """A single string-literal arg must count as 1, not 0 (the bug
+        the alpha.35 prototype hit when it pre-stripped strings)."""
+        assert count_call_args('=VoseOutput("name")', "VoseOutput") == [1]
+
+    def test_comma_inside_string_does_not_split(self) -> None:
+        assert count_call_args(
+            '=VoseNormal("label,with,commas", 1)', "VoseNormal"
+        ) == [2]
+
+    def test_escaped_quote_inside_string(self) -> None:
+        """Excel doubles `""` to embed a quote in a string literal."""
+        assert count_call_args(
+            '=VoseOutput("say ""hi"", world", "unit")', "VoseOutput"
+        ) == [2]
+
+    def test_comma_in_nested_call_does_not_split(self) -> None:
+        assert count_call_args(
+            "=VoseNormal(MAX(A1,B1), 5)", "VoseNormal"
+        ) == [2]
+
+    def test_array_literal_treated_as_single_arg(self) -> None:
+        assert count_call_args(
+            "=VoseDiscrete({0,1,2}, {0.3,0.4,0.3})", "VoseDiscrete"
+        ) == [2]
+
+    def test_multiple_calls(self) -> None:
+        assert count_call_args(
+            "=VosePERT(1,2,3) + VosePERT(4,5)", "VosePERT"
+        ) == [3, 2]
+
+    def test_nested_same_function(self) -> None:
+        """Two calls to the same function, one inside the other.
+        Both should be counted, the outer one with 3 (its outer args),
+        the inner one with 3 (its inner args)."""
+        assert count_call_args(
+            "=VosePERT(1, VosePERT(2,3,4), 5)", "VosePERT"
+        ) == [3, 3]
+
+    def test_no_match_returns_empty(self) -> None:
+        assert count_call_args("=SUM(A1:A10)", "VosePERT") == []
+
+    def test_function_name_inside_string_is_not_a_call(self) -> None:
+        """A function name that only appears inside a string literal
+        (not as an actual call) must not be counted as a call site."""
+        assert (
+            count_call_args(
+                '=VoseInput("the VosePERT one") + 1', "VosePERT"
+            )
+            == []
+        )
+
+    def test_lots_of_args(self) -> None:
+        assert count_call_args(
+            "=VosePERT(1,2,3,4,5,6,7,8)", "VosePERT"
+        ) == [8]
+
+    def test_whitespace_only_inside_parens(self) -> None:
+        """Excel treats `VoseOutput( )` as a no-arg call."""
+        assert count_call_args("=VoseOutput(   )", "VoseOutput") == [0]
+
+    def test_unterminated_call_skipped(self) -> None:
+        """A malformed formula with unclosed paren is some other rule's
+        problem — this counter just skips it rather than crashing."""
+        # The first VosePERT is unclosed; should yield no count for it.
+        # Other rules / Excel itself will flag the syntax error.
+        assert count_call_args("=VosePERT(1,2,3", "VosePERT") == []
 
 
 class TestBulkWriteGuard:

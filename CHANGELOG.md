@@ -4,6 +4,25 @@ All notable changes to ModelRisk MCP. Follows [Keep a Changelog](https://keepach
 
 ## [Unreleased]
 
+## [0.3.0-alpha.35] — 2026-05-22
+
+### Added
+
+- **VOSE-013 audit rule — `arg_count_mismatch`** (severity: `error`). Catches the classic LLM hallucination class that `VOSE-001` (unknown function) misses: a *real* Vose function called with the wrong number of arguments. Examples flagged: `VosePERT(min, max)` (missing mode), `VoseLognormal(mean)` (missing stdev), `VoseTriangle(1, 2)` (missing mode), `VosePERT(1,2,3,4,5,6,7,8)` (too many — beyond the catalogue's max). The cell would `#VALUE!` or `#NUM!` at Excel calc time, but the formula is well-formed enough that VOSE-001 stays silent. With VOSE-013 we flag it statically before the sim runs.
+
+  Rule compares actual arg count against the catalogue's `required` (min) and `len(parameters)` (max). Skips:
+  - Functions not in the catalogue (VOSE-001's job)
+  - `VoseInput` / `VoseOutput` wrappers (VOSE-008's job)
+  - `VoseChoose`, `VoseDiscrete`, `VoseDiscreteUniform` — variadic shapes the catalogue can't fully describe.
+
+  13 audit rules now ship; all 13 wired up in `RULES_BY_NAME`.
+
+- **New helper `safety.count_call_args(formula, function_name)`**: returns one count per occurrence of `function_name(...)` in `formula`. Walks the raw formula so a single string-literal arg correctly counts as 1 (not 0 — the prototype bug caught by the alpha.35 dev pass). Skips strings, nested calls, and array literals atomically. Underpins VOSE-013 but generally useful for static analysis.
+
+### Tests
+
+11 new cases in `TestArgCountMismatch` (too-few PERT, too-few Normal, too-many, correct arity, optional-trailing-args allowed, wrapper exemption, unknown-function silence, non-Vose silence, nested-call detection, suggested-fix content, one-finding-per-cell) + 16 new cases in `TestCountCallArgs` (covering string literals with embedded commas + doubled quotes, nested calls, array literals, multi-call formulas, malformed inputs).
+
 ## [0.3.0-alpha.34] — 2026-05-22
 
 ### Added

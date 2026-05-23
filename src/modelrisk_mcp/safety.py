@@ -105,6 +105,91 @@ def has_only_known_functions(formula: str, catalogue: FunctionCatalogue) -> bool
 
 
 # ----------------------------------------------------------------------
+# Argument-count extractor (used by VOSE-013 audit rule)
+# ----------------------------------------------------------------------
+
+
+def count_call_args(formula: str, function_name: str) -> list[int]:
+    """Return the number of top-level arguments for every occurrence of
+    `function_name(...)` in `formula`.
+
+    "Top-level" means commas at outer paren-depth — nested calls' commas
+    don't count. Excel string literals (double-quoted, with `""` for an
+    embedded quote) are treated opaquely and their commas don't count.
+    Array literals `{1,2,3}` are likewise treated as a single arg.
+
+    A zero-arg call (e.g. `VoseOutput()`) returns count 0. A call with
+    only whitespace inside the parens also returns 0.
+
+    Multiple matches return one count per occurrence in source order.
+    Used by the VOSE-013 audit detector to compare actual arity against
+    the catalogue's declared `required` / `total` counts.
+    """
+    if function_name not in formula:
+        return []
+    # We walk the raw formula so a quoted string counts as "saw content"
+    # (otherwise `VoseOutput("name")` would look identical to
+    # `VoseOutput()` after string-stripping). String contents still get
+    # skipped opaquely so commas inside strings don't separate args.
+    counts: list[int] = []
+    pat = re.compile(rf"\b{re.escape(function_name)}\s*\(")
+    n = len(formula)
+    for m in pat.finditer(formula):
+        i = m.end()  # position right after the opening paren
+        depth = 1
+        arg_count = 0
+        saw_content = False  # any non-whitespace, including strings
+        while i < n and depth > 0:
+            ch = formula[i]
+            if ch == '"':
+                # Skip the whole string literal — but mark we saw content.
+                saw_content = True
+                i += 1
+                while i < n:
+                    if formula[i] == '"':
+                        # Doubled "" is an escaped quote inside the string.
+                        if i + 1 < n and formula[i + 1] == '"':
+                            i += 2
+                            continue
+                        i += 1
+                        break
+                    i += 1
+                continue
+            if ch == "(":
+                depth += 1
+                saw_content = True
+            elif ch == ")":
+                depth -= 1
+                if depth == 0:
+                    break
+                saw_content = True
+            elif ch == "{":
+                # Skip array literals atomically.
+                saw_content = True
+                array_depth = 1
+                i += 1
+                while i < n and array_depth > 0:
+                    if formula[i] == "{":
+                        array_depth += 1
+                    elif formula[i] == "}":
+                        array_depth -= 1
+                    i += 1
+                continue
+            elif ch == "," and depth == 1:
+                arg_count += 1
+                saw_content = True
+            elif not ch.isspace():
+                saw_content = True
+            i += 1
+        if depth == 0 and saw_content:
+            counts.append(arg_count + 1)
+        elif depth == 0:
+            counts.append(0)
+        # Unterminated call: skip — formula is malformed.
+    return counts
+
+
+# ----------------------------------------------------------------------
 # Bulk-write guard
 # ----------------------------------------------------------------------
 

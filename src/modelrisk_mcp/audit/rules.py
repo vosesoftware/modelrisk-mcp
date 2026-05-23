@@ -17,7 +17,7 @@ from collections.abc import Callable, Iterable
 
 from modelrisk_mcp.audit.engine import RuleContext
 from modelrisk_mcp.bridge.name_parser import extract_vose_first_arg
-from modelrisk_mcp.safety import extract_call_heads
+from modelrisk_mcp.safety import count_call_args, extract_call_heads
 from modelrisk_mcp.schemas.results import AuditFinding
 from modelrisk_mcp.schemas.workbook import CellRef
 
@@ -444,6 +444,90 @@ def _first_distribution_head(
     return None
 
 
+# Functions where the catalogue's declared param count is misleading
+# and VOSE-013's arity check would produce false positives. The
+# wrappers in particular show `total=1` in the catalogue (their `name`
+# arg) but Excel happily accepts `VoseOutput()` — `VOSE-008` is the
+# rule that polices the name itself, so we exempt these here.
+_VOSE_013_EXEMPT_FUNCTIONS = frozenset({
+    "VoseInput",
+    "VoseOutput",
+    # Variadic shapes the catalogue can't fully describe:
+    "VoseChoose",       # VoseChoose(index, val1, val2, ...) — N+1 args
+    "VoseDiscrete",     # VoseDiscrete({xs}, {ps}) but also legacy 2N-arg form
+    "VoseDiscreteUniform",
+})
+
+
+def detect_arg_count_mismatch(ctx: RuleContext) -> Iterable[AuditFinding]:
+    """VOSE-013 — Vose call's argument count is outside the
+    catalogue-declared range.
+
+    Fires when:
+    - `actual < required` — the call is missing mandatory args.
+    - `actual > total`    — the call has more args than the catalogue
+      lists (including optional slots). This catches LLM hallucinations
+      like `VosePERT(1,2,3,4,5,6,7)` that would `#VALUE!` at calc time.
+
+    Catalogue-unknown function names are skipped (VOSE-001's job).
+    Wrappers and a small set of variadic functions are exempt to keep
+    the false-positive rate at zero — see `_VOSE_013_EXEMPT_FUNCTIONS`.
+
+    Why this matters: VOSE-001 catches typo'd names (`VoseNomral`),
+    but a *real* function called with the wrong arity (`VosePERT(min,
+    max)` — missing mode) is well-formed enough that VOSE-001 stays
+    silent. The cell `#VALUE!`s or `#NUM!`s at calc time and the
+    simulation either crashes or produces nonsense. With this rule
+    we flag it statically before the sim runs.
+    """
+    seen: set[tuple[str, str, str]] = set()  # dedupe per (cell, func, count)
+    for cell in ctx.cells:
+        if not cell.formula:
+            continue
+        for head in extract_call_heads(cell.formula):
+            if not head.startswith("Vose"):
+                continue
+            spec = ctx.catalogue.get(head)
+            if spec is None:
+                continue  # VOSE-001 handles unknown function names.
+            if head in _VOSE_013_EXEMPT_FUNCTIONS:
+                continue
+            min_arity = sum(1 for p in spec.parameters if p.required)
+            max_arity = len(spec.parameters)
+            counts = count_call_args(cell.formula, head)
+            for actual in counts:
+                if min_arity <= actual <= max_arity:
+                    continue
+                key = (cell.ref.a1, head, str(actual))
+                if key in seen:
+                    continue
+                seen.add(key)
+                kind = "too few" if actual < min_arity else "too many"
+                required_params = ", ".join(
+                    p.name for p in spec.parameters if p.required
+                ) or "(none)"
+                yield AuditFinding(
+                    severity=ctx.rule.severity,  # type: ignore[arg-type]
+                    cell=cell.ref,
+                    rule_id=ctx.rule.id,
+                    message=(
+                        f"Cell {cell.ref.a1} calls {head}(...) with "
+                        f"{actual} argument{'s' if actual != 1 else ''} "
+                        f"({kind}). Catalogue declares "
+                        f"{min_arity}-{max_arity} args; required "
+                        f"params are: {required_params}."
+                    ),
+                    suggested_fix=_format_fix(
+                        ctx.rule.suggested_fix_template,
+                        function_name=head,
+                        min_args=min_arity,
+                        max_args=max_arity,
+                        actual_args=actual,
+                        required_params=required_params,
+                    ),
+                )
+
+
 def detect_cell_evaluates_to_error(ctx: RuleContext) -> Iterable[AuditFinding]:
     """VOSE-012 — a cell evaluates to an Excel error (`#DIV/0!`, etc.).
 
@@ -516,4 +600,5 @@ RULES_BY_NAME: dict[str, Detector] = {
         detect_high_volatility_normal_positive_mean
     ),
     "cell_evaluates_to_error": detect_cell_evaluates_to_error,
+    "arg_count_mismatch": detect_arg_count_mismatch,
 }

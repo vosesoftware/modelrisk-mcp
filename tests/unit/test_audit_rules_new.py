@@ -17,6 +17,7 @@ import pytest
 
 from modelrisk_mcp.audit.engine import RuleContext, RuleSpec
 from modelrisk_mcp.audit.rules import (
+    detect_arg_count_mismatch,
     detect_cell_evaluates_to_error,
     detect_duplicate_output_names,
     detect_high_volatility_normal_positive_mean,
@@ -335,3 +336,187 @@ class TestCellEvaluatesToError:
         )
         findings = list(detect_cell_evaluates_to_error(ctx))
         assert findings[0].severity == "warning"
+
+
+# ----------------------------------------------------------------------
+# VOSE-013 — arg-count mismatch against catalogue (alpha.35)
+# ----------------------------------------------------------------------
+
+
+class TestArgCountMismatch:
+    """VOSE-013: Vose call has too few or too many arguments versus the
+    catalogue's declared signature. Classic LLM hallucination case
+    (`VosePERT(min, max)` — missing mode) that VOSE-001 doesn't catch
+    because the function name is real."""
+
+    def test_fires_on_too_few_args_pert(self) -> None:
+        """`VosePERT` requires 3 args (min, mode, max). Two is wrong."""
+        ctx = _make_ctx(
+            [_cell("m.xlsx", "S1", "A1", "=VosePERT(10, 30)")],
+            "arg_count_mismatch",
+            severity="error",
+        )
+        findings = list(detect_arg_count_mismatch(ctx))
+        assert len(findings) == 1
+        assert "VosePERT" in findings[0].message
+        assert "2 arguments" in findings[0].message
+        assert "too few" in findings[0].message
+
+    def test_fires_on_too_few_args_normal(self) -> None:
+        """`VoseNormal` requires 2 args (mu, sigma). One is wrong."""
+        ctx = _make_ctx(
+            [_cell("m.xlsx", "S1", "B2", "=VoseNormal(100)")],
+            "arg_count_mismatch",
+            severity="error",
+        )
+        findings = list(detect_arg_count_mismatch(ctx))
+        assert len(findings) == 1
+        assert "VoseNormal" in findings[0].message
+        assert "1 argument" in findings[0].message
+        # Singular: "1 argument" not "1 arguments".
+
+    def test_fires_on_too_many_args(self) -> None:
+        """`VosePERT` has up to 6 params (min, mode, max, U, ext1, ext2).
+        Eight is beyond catalogue and almost certainly a hallucination."""
+        ctx = _make_ctx(
+            [_cell("m.xlsx", "S1", "C3", "=VosePERT(1,2,3,4,5,6,7,8)")],
+            "arg_count_mismatch",
+            severity="error",
+        )
+        findings = list(detect_arg_count_mismatch(ctx))
+        assert len(findings) == 1
+        assert "8 arguments" in findings[0].message
+        assert "too many" in findings[0].message
+
+    def test_silent_on_correct_arity(self) -> None:
+        """Healthy calls don't fire."""
+        ctx = _make_ctx(
+            [
+                _cell("m.xlsx", "S1", "A1", "=VosePERT(10, 20, 30)"),
+                _cell("m.xlsx", "S1", "A2", "=VoseNormal(0, 1)"),
+                _cell("m.xlsx", "S1", "A3", "=VoseExpon(1.5)"),
+            ],
+            "arg_count_mismatch",
+            severity="error",
+        )
+        assert list(detect_arg_count_mismatch(ctx)) == []
+
+    def test_silent_on_optional_trailing_args(self) -> None:
+        """Most Vose distributions accept optional U-object + extension
+        args. A call with 4 args to VosePERT (min, mode, max, u_obj)
+        should NOT fire."""
+        ctx = _make_ctx(
+            [_cell("m.xlsx", "S1", "A1", "=VosePERT(10, 20, 30, A5)")],
+            "arg_count_mismatch",
+            severity="error",
+        )
+        assert list(detect_arg_count_mismatch(ctx)) == []
+
+    def test_silent_on_voseinput_voseoutput_wrappers(self) -> None:
+        """VoseInput/VoseOutput catalogue rows show total=1 but Excel
+        happily accepts VoseOutput() with no args (VOSE-008's job).
+        VOSE-013 must NOT double-fire here."""
+        ctx = _make_ctx(
+            [
+                _cell("m.xlsx", "S1", "A1", "=VoseInput(B1)+VoseNormal(0,1)"),
+                _cell("m.xlsx", "S1", "A2", "=VoseOutput()"),
+                _cell("m.xlsx", "S1", "A3", "=VoseOutput(\"Total\")"),
+            ],
+            "arg_count_mismatch",
+            severity="error",
+        )
+        # No findings from VOSE-013 — only VOSE-008 handles wrappers.
+        wrapper_findings = [
+            f for f in detect_arg_count_mismatch(ctx)
+            if any(w in f.message for w in ("VoseInput", "VoseOutput"))
+        ]
+        assert wrapper_findings == []
+
+    def test_silent_on_unknown_function(self) -> None:
+        """Unknown Vose-prefixed functions are VOSE-001's job; VOSE-013
+        must skip them so we don't double-fire."""
+        ctx = _make_ctx(
+            [_cell("m.xlsx", "S1", "A1", "=VoseNomral(10, 5)")],
+            "arg_count_mismatch",
+            severity="error",
+        )
+        assert list(detect_arg_count_mismatch(ctx)) == []
+
+    def test_silent_on_non_vose_calls(self) -> None:
+        """Excel built-ins like SUM/IF/VLOOKUP must never trigger."""
+        ctx = _make_ctx(
+            [
+                _cell("m.xlsx", "S1", "A1", "=SUM(A1:A10)"),
+                _cell("m.xlsx", "S1", "A2", "=IF(B1>0, 1)"),
+                _cell("m.xlsx", "S1", "A3", "=VLOOKUP(A,table,2,FALSE)"),
+            ],
+            "arg_count_mismatch",
+            severity="error",
+        )
+        assert list(detect_arg_count_mismatch(ctx)) == []
+
+    def test_fires_on_nested_vose_call_with_wrong_arity(self) -> None:
+        """A nested broken call must still be caught."""
+        ctx = _make_ctx(
+            [
+                _cell(
+                    "m.xlsx", "S1", "A1",
+                    "=VoseInput(\"x\") + VoseLognormal(100)",
+                ),
+            ],
+            "arg_count_mismatch",
+            severity="error",
+        )
+        findings = list(detect_arg_count_mismatch(ctx))
+        assert len(findings) == 1
+        assert "VoseLognormal" in findings[0].message
+
+    def test_suggested_fix_includes_catalogue_signature(self) -> None:
+        """The suggested-fix template should expose the expected arity
+        and required-param names so the LLM can self-repair. Uses the
+        real YAML template (not the test fixture's placeholder) so we
+        verify the actual `{function_name}` / `{min_args}` / etc.
+        placeholder substitution."""
+        real_template = (
+            "Check the function's signature in the catalogue. "
+            "{function_name} expects {min_args}-{max_args} args; "
+            "this call has {actual_args}. Required params: "
+            "{required_params}."
+        )
+        ctx = RuleContext(
+            bridge=MagicMock(),
+            catalogue=load_catalogue(),
+            workbook="m.xlsx",
+            cells=[_cell("m.xlsx", "S1", "A1", "=VosePERT(10, 30)")],
+            rule=RuleSpec(
+                id="VOSE-013",
+                name="arg_count_mismatch",
+                severity="error",
+                enabled=True,
+                description="test",
+                suggested_fix_template=real_template,
+            ),
+        )
+        findings = list(detect_arg_count_mismatch(ctx))
+        fix = findings[0].suggested_fix or ""
+        assert "VosePERT" in fix
+        assert "3" in fix  # min args (required count)
+        # Required params should be enumerated.
+        assert "min" in fix and "mode" in fix and "max" in fix
+
+    def test_one_finding_per_unique_call(self) -> None:
+        """Two cells calling the same function with the same wrong arity
+        should each get their own finding (one per cell), not one
+        deduplicated finding."""
+        ctx = _make_ctx(
+            [
+                _cell("m.xlsx", "S1", "A1", "=VosePERT(1, 2)"),
+                _cell("m.xlsx", "S1", "A2", "=VosePERT(3, 4)"),
+            ],
+            "arg_count_mismatch",
+            severity="error",
+        )
+        findings = list(detect_arg_count_mismatch(ctx))
+        assert len(findings) == 2
+        refs = {f.cell.cell for f in findings}
+        assert refs == {"A1", "A2"}

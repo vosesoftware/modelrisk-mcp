@@ -148,6 +148,23 @@ rules:
       VoseNormal / VoseLognormal / etc. as appropriate) or remove the
       VoseInput wrapper.
 
+  - id: VOSE-013
+    name: arg_count_mismatch
+    severity: error
+    enabled: true
+    description: >
+      A Vose function call has fewer arguments than the catalogue
+      declares as required, or more than the catalogue declares at
+      all. Common LLM failure mode: hallucinating `VosePERT(min, max)`
+      (missing mode), `VoseLognormal(mean)` (missing stdev), or
+      `VoseTriangle(min, max)` (missing mode). The cell will return
+      `#VALUE!` or `#NUM!` at calculation time, but the formula is
+      otherwise well-formed so VOSE-001 won't catch it.
+    suggested_fix_template: >
+      Check the function's signature in the catalogue. `{function_name}`
+      expects {min_args}-{max_args} args; this call has {actual_args}.
+      Required params: {required_params}.
+
   - id: VOSE-012
     name: cell_evaluates_to_error
     severity: error
