@@ -124,7 +124,30 @@ jobs:
       id-token: write  # for GitHub OIDC against the registry
       contents: read
     steps:
-      - uses: actions/checkout@v4
+      # Bug #37 (alpha.38): the alpha.37 release hit a transient
+      # GitHub auth outage that caused `actions/checkout@v4` to fail
+      # three times in a row with "fatal: could not read Username".
+      # The retried attempts inside the action all hit the same blip.
+      # PyPI publish for that tag succeeded; only the registry step
+      # was lost. Hardening: try checkout up to 3 times across
+      # separate step invocations (which re-trigger token issuance),
+      # and only treat the last attempt as fatal. Cheap insurance
+      # against a class of outage we hit at least once already.
+      - name: Checkout (attempt 1)
+        id: co1
+        uses: actions/checkout@v4
+        continue-on-error: true
+      - name: Checkout (attempt 2, 30s later)
+        if: steps.co1.outcome == 'failure'
+        id: co2
+        uses: actions/checkout@v4
+        continue-on-error: true
+      - name: Sleep before final checkout attempt
+        if: steps.co1.outcome == 'failure' && steps.co2.outcome == 'failure'
+        run: sleep 30
+      - name: Checkout (attempt 3, fatal if it fails)
+        if: steps.co1.outcome == 'failure' && steps.co2.outcome == 'failure'
+        uses: actions/checkout@v4
 
       - name: Install mcp-publisher
         run: |
@@ -137,11 +160,32 @@ jobs:
         # version visible to the registry's verifier. Give it room.
         run: sleep 60
 
-      - name: Authenticate to the MCP Registry (GitHub OIDC)
-        run: ./mcp-publisher login github-oidc
+      - name: Authenticate to the MCP Registry (GitHub OIDC, with retry)
+        # Same outage class as the checkout case — wrap in a shell
+        # retry loop so a single transient OIDC failure doesn't lose
+        # the registry update for this tag.
+        run: |
+          for i in 1 2 3; do
+            if ./mcp-publisher login github-oidc; then
+              exit 0
+            fi
+            echo "Login attempt $i failed; sleeping 20s"
+            sleep 20
+          done
+          echo "All 3 login attempts failed"
+          exit 1
 
-      - name: Publish server.json to the MCP Registry
-        run: ./mcp-publisher publish
+      - name: Publish server.json to the MCP Registry (with retry)
+        run: |
+          for i in 1 2 3; do
+            if ./mcp-publisher publish; then
+              exit 0
+            fi
+            echo "Publish attempt $i failed; sleeping 30s"
+            sleep 30
+          done
+          echo "All 3 publish attempts failed"
+          exit 1
 
   github-release:
     needs: [build-wheel, build-windows-exe]

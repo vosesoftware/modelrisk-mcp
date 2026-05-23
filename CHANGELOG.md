@@ -4,6 +4,19 @@ All notable changes to ModelRisk MCP. Follows [Keep a Changelog](https://keepach
 
 ## [Unreleased]
 
+## [0.3.0-alpha.38] — 2026-05-23
+
+### Fixed
+
+- **Bug #37 — `publish-mcp-registry` job has zero retry tolerance.** The alpha.37 release ran straight into a transient GitHub Actions auth outage; `actions/checkout@v4` failed three times in a row inside the action with `fatal: could not read Username for 'https://github.com'`, and the registry update for that tag was lost (PyPI publish succeeded — registry was 1 version behind until manually resynced). The same outage window also fired "Failed to save: Our services aren't available right now" warnings against `actions/upload-artifact` and the cache service. Class of failure we'll hit again.
+
+  Fix to `release.yml`'s `publish-mcp-registry` job:
+  - Try `actions/checkout@v4` up to **3 times** across separate step invocations (so each attempt re-issues a fresh GITHUB_TOKEN), with a 30-second sleep before the final attempt. Only the third attempt is fatal.
+  - Wrap `mcp-publisher login github-oidc` in a shell retry loop (3 attempts, 20-second sleep between).
+  - Wrap `mcp-publisher publish` in a shell retry loop (3 attempts, 30-second sleep between).
+
+  Each independent failure mode now needs to lose three coin flips in a row before the job actually fails. Same workflow that produced 4/5 successful registry updates in the past week becomes much more resilient.
+
 ## [0.3.0-alpha.37] — 2026-05-22
 
 ### Fixed
