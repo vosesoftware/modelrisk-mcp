@@ -1,6 +1,6 @@
 # Wiring ModelRisk MCP into Claude for Excel
 
-Claude for Excel runs inside an Office.js iframe sandboxed *inside* Excel itself. It can't spawn local subprocesses (the way Claude Desktop launches a stdio MCP server), so it talks to MCP servers over **HTTP** instead. ModelRisk MCP supports this since `v0.2.0-alpha.1`.
+Claude for Excel runs inside an Office.js iframe sandboxed *inside* Excel itself. It can't spawn local subprocesses (the way Claude Desktop launches a stdio MCP server), so it talks to MCP servers over **HTTP** instead. ModelRisk MCP serves both stdio and HTTP transports.
 
 This is also where the architectural payoff is: Office.js can't reach Excel's COM surface or ModelRisk's ribbon. ModelRisk MCP, running outside the sandbox, can — which means Claude for Excel can do things via this server that it structurally can't do on its own.
 
@@ -48,7 +48,7 @@ Open Excel, open Claude for Excel (the side-panel icon), then:
    - **Token:** paste the token from step 1
 4. Save.
 
-Claude for Excel should report the connection as live and show the 31 ModelRisk tools.
+Claude for Excel should report the connection as live and show the 40 ModelRisk tools.
 
 ## 3. First conversation
 

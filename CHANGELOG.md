@@ -12,14 +12,14 @@ First stable release of the 0.3 line. Promotion from `0.3.0-alpha.38` with no fu
 
 A read/build/run MCP server over Vose Software's ModelRisk Excel add-in. The full surface area is callable from Claude Desktop, Claude Code, Claude for Excel, Cursor, Zed, and any MCP-compliant client.
 
-**Tools (33 total):**
+**Tools (40 total):**
 - **Reading (12):** `list_open_workbooks`, `get_active_workbook`, `get_workbook_summary`, `list_modelrisk_inputs`, `list_modelrisk_outputs`, `list_distributions`, `get_cell`, `read_range`, `get_simulation_results`, `get_correlation_matrix`, `get_sensitivity_ranking`, `find_hard_coded_inputs`
-- **Building (10):** `insert_distribution`, `wrap_with_input`, `wrap_with_output`, `replace_constant_with_distribution`, `fit_distribution_to_data`, `create_aggregate_mc`, `create_copula`, `create_time_series`, `create_risk_event`, `set_named_range`, `write_formula`, `propose_distributions_for_inputs`, `discover_inputs`
-- **Simulation (4):** `run_simulation`, `run_scenarios`, `get_samples`, `restore_deterministic_state`, `restore_cell`
-- **Workflows (5):** `audit_model`, `diagnose_workbook`, `build_drivers_report`, `build_executive_report`, `create_tornado_chart`, `generate_executive_summary`, `save_workbook_as`
-- **VMRS (2):** `read_vmrs`, `set_active_vmrs`, `list_vmrs_variables`
+- **Building (13):** `insert_distribution`, `wrap_with_input`, `wrap_with_output`, `replace_constant_with_distribution`, `fit_distribution_to_data`, `create_aggregate_mc`, `create_copula`, `create_time_series`, `create_risk_event`, `set_named_range`, `write_formula`, `propose_distributions_for_inputs`, `discover_inputs`
+- **Simulation (5):** `run_simulation`, `run_scenarios`, `get_samples`, `restore_deterministic_state`, `restore_cell`
+- **Workflows / reporting (7):** `audit_model`, `diagnose_workbook`, `build_drivers_report`, `build_executive_report`, `create_tornado_chart`, `generate_executive_summary`, `save_workbook_as`
+- **VMRS (3):** `read_vmrs`, `set_active_vmrs`, `list_vmrs_variables`
 
-**Resources (5 URIs):** `modelrisk://functions`, `modelrisk://distributions`, `modelrisk://methodology`, `modelrisk://workbook-state`, `modelrisk://audit-rules`.
+**Resources (5 URIs):** `modelrisk://functions`, `modelrisk://distributions`, `modelrisk://methodology`, `modelrisk://workbook/current`, `modelrisk://audit-rules`.
 
 **Prompts (5):** `build_model`, `audit_model`, `interpret_results`, `add_uncertainty`, `import_legacy_model`.
 

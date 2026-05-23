@@ -26,11 +26,41 @@ If the file doesn't exist, create it with the empty skeleton:
 
 ## Add the ModelRisk server
 
-Two options — pick one.
+Three options — pick one.
 
-### Option A — Run from a source checkout (recommended for development)
+### Option A — One command, `modelrisk-mcp install` (recommended)
 
-Add this entry under `mcpServers`. Replace `C:/Users/you/source/repos/modelrisk-mcp` with the actual path to your clone.
+```powershell
+pip install modelrisk-mcp
+modelrisk-mcp install
+```
+
+`modelrisk-mcp install` finds the config file at the path above, backs it up (`*.bak.<timestamp>`), and adds the `modelrisk` entry — leaving any other servers you have configured intact. Output:
+
+```
+  + Claude Desktop   added    C:\Users\you\AppData\Roaming\Claude\claude_desktop_config.json
+      Registered 'modelrisk' -> {'command': 'C:\\...\\Scripts\\modelrisk-mcp.exe'}
+```
+
+To undo: `modelrisk-mcp uninstall`. To register a second instance under a different name (e.g. dev vs prod side-by-side): `modelrisk-mcp install --name=modelrisk-dev`.
+
+### Option B — Standalone `.exe`
+
+Download `modelrisk-mcp.exe` from the [latest release](https://github.com/vosesoftware/modelrisk-mcp/releases/latest) — no Python required. Add this entry under `mcpServers` using the absolute path:
+
+```json
+{
+  "mcpServers": {
+    "modelrisk": {
+      "command": "C:/path/to/modelrisk-mcp.exe"
+    }
+  }
+}
+```
+
+### Option C — Run from a source checkout (development)
+
+Replace `C:/Users/you/source/repos/modelrisk-mcp` with the actual path to your clone:
 
 ```json
 {
@@ -45,21 +75,6 @@ Add this entry under `mcpServers`. Replace `C:/Users/you/source/repos/modelrisk-
         "-m",
         "modelrisk_mcp"
       ]
-    }
-  }
-}
-```
-
-### Option B — Run an installed wheel
-
-If you've installed `modelrisk-mcp` into a Python you can find on PATH:
-
-```json
-{
-  "mcpServers": {
-    "modelrisk": {
-      "command": "python",
-      "args": ["-m", "modelrisk_mcp"]
     }
   }
 }

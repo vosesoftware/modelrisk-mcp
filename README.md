@@ -8,7 +8,7 @@ Use it with Claude Desktop, Claude Code, Cursor, Zed, or any MCP-compliant clien
 
 > ModelRisk MCP is an open MCP server on the standard Anthropic Model Context Protocol. No proprietary layer, no lock-in. The 1417-entry function catalogue, the Vose methodology principles, and the audit rule set are all included in the package — and editable.
 
-**Status: `0.3.0-alpha.5`** — programmatic simulation via the `run_simulation` tool wired end-to-end (XLL command surface, no fragile COM dispatch); `.vmrs` results read via the official ModelRisk SDK; activation ships bundled so no environment configuration is required. 35 tools across reading, building, simulation, scenario-sweep, restore, charting, audit, and workflow surfaces.
+**Stable: `0.3.0`** — programmatic simulation via the `run_simulation` tool wired end-to-end (XLL command surface, no fragile COM dispatch); `.vmrs` results read via the official ModelRisk SDK; activation ships bundled so no environment configuration is required. 40 tools across reading, building, simulation, scenario-sweep, restore, charting, audit, and workflow surfaces.
 
 ---
 
@@ -188,11 +188,11 @@ The server can both read *and* modify your workbook — that's the central diffe
 
 ## What's inside
 
-- **35 tools** — 16 reading (incl. `read_vmrs` / `set_active_vmrs` / `list_vmrs_variables` / `get_samples`), 10 building, 2 simulation (`run_simulation` + `run_scenarios`), 1 restore (`restore_cell`), 6 workflow (incl. `diagnose_workbook` + `create_tornado_chart`)
-- **7 resources** — `modelrisk://functions`, `modelrisk://functions/{name}`, `modelrisk://distributions`, `modelrisk://methodology`, `modelrisk://workbook/current`, `modelrisk://workbook/current/sheet/{name}`, `modelrisk://audit-rules`
+- **40 tools** — 12 reading, 13 building, 5 simulation (incl. `run_simulation`, `run_scenarios`, `get_samples`, `restore_cell`, `restore_deterministic_state`), 7 workflow / reporting (incl. `audit_model`, `diagnose_workbook`, `create_tornado_chart`, `build_drivers_report`, `build_executive_report`, `generate_executive_summary`, `save_workbook_as`), 3 VMRS (`read_vmrs`, `set_active_vmrs`, `list_vmrs_variables`)
+- **5 resources** — `modelrisk://functions`, `modelrisk://distributions`, `modelrisk://methodology`, `modelrisk://workbook/current`, `modelrisk://audit-rules`
 - **5 slash-command prompts** — `/build-risk-model`, `/audit-model`, `/interpret-results`, `/add-uncertainty`, `/import-legacy-model`
 - **1417-entry function catalogue** extracted directly from the ModelRisk IDL + XLL header
-- **11 audit rules** with editable severity in `data/audit_rules.yaml`; add your own with `docs/authoring-audit-rules.md`
+- **13 audit rules** (VOSE-001 through VOSE-013) with editable severity in `data/audit_rules.yaml`; add your own with `docs/authoring-audit-rules.md`
 - **Methodology-grounded distribution selection guide** in `data/distributions.yaml`
 
 ---

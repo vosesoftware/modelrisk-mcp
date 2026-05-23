@@ -44,7 +44,7 @@ The registry entry's schema lives in `server.json` at repo root. Fields:
 | `version` | The server's version (must match the PyPI package version being verified) |
 | `packages[]` | Where the registry tells clients to fetch the actual code from. For us: `registryType: pypi`, `identifier: modelrisk-mcp`, the current version, and `transport: stdio` |
 
-When bumping versions, update `server.json`'s `version` and `packages[0].version` to match `pyproject.toml`. (Future improvement: derive these from the package version automatically during the release build.)
+When bumping versions, update `server.json`'s `version` and `packages[0].version` to match `pyproject.toml`. (A future improvement would derive these from the package version automatically during the release build — tracked in an issue.)
 
 ## Authentication
 
@@ -55,7 +55,7 @@ We use GitHub OIDC because we already use it for PyPI publishing — same trust 
 3. `mcp-publisher login github-oidc` exchanges that token for a registry session.
 4. Because our server name starts with `io.github.vosesoftware/`, the registry accepts the OIDC identity as the owner.
 
-DNS-based authentication (where the server name would be `com.vosesoftware/modelrisk` instead) is a possible upgrade: cleaner branding, but requires adding a TXT record to `vosesoftware.com` DNS and switching the `mcp-publisher login` command. Skip for now; revisit when the project is post-1.0.
+DNS-based authentication (where the server name would be `com.vosesoftware/modelrisk` instead) is a possible upgrade: cleaner branding, but requires adding a TXT record to `vosesoftware.com` DNS and switching the `mcp-publisher login` command. Not pursued yet — the GitHub-OIDC path works and rebranding the registry name would orphan installed configs.
 
 ## Manual publish (for emergencies)
 
