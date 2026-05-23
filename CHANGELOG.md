@@ -4,6 +4,54 @@ All notable changes to ModelRisk MCP. Follows [Keep a Changelog](https://keepach
 
 ## [Unreleased]
 
+## [0.3.0] — 2026-05-23
+
+First stable release of the 0.3 line. Promotion from `0.3.0-alpha.38` with no functional changes — version bump only.
+
+### What ships in 0.3.0
+
+A read/build/run MCP server over Vose Software's ModelRisk Excel add-in. The full surface area is callable from Claude Desktop, Claude Code, Claude for Excel, Cursor, Zed, and any MCP-compliant client.
+
+**Tools (33 total):**
+- **Reading (12):** `list_open_workbooks`, `get_active_workbook`, `get_workbook_summary`, `list_modelrisk_inputs`, `list_modelrisk_outputs`, `list_distributions`, `get_cell`, `read_range`, `get_simulation_results`, `get_correlation_matrix`, `get_sensitivity_ranking`, `find_hard_coded_inputs`
+- **Building (10):** `insert_distribution`, `wrap_with_input`, `wrap_with_output`, `replace_constant_with_distribution`, `fit_distribution_to_data`, `create_aggregate_mc`, `create_copula`, `create_time_series`, `create_risk_event`, `set_named_range`, `write_formula`, `propose_distributions_for_inputs`, `discover_inputs`
+- **Simulation (4):** `run_simulation`, `run_scenarios`, `get_samples`, `restore_deterministic_state`, `restore_cell`
+- **Workflows (5):** `audit_model`, `diagnose_workbook`, `build_drivers_report`, `build_executive_report`, `create_tornado_chart`, `generate_executive_summary`, `save_workbook_as`
+- **VMRS (2):** `read_vmrs`, `set_active_vmrs`, `list_vmrs_variables`
+
+**Resources (5 URIs):** `modelrisk://functions`, `modelrisk://distributions`, `modelrisk://methodology`, `modelrisk://workbook-state`, `modelrisk://audit-rules`.
+
+**Prompts (5):** `build_model`, `audit_model`, `interpret_results`, `add_uncertainty`, `import_legacy_model`.
+
+**Audit rules (13):** VOSE-001 through VOSE-013. See the `0.3.0-alpha.34/.35` entries for the most recent additions.
+
+**Transports:** `stdio` (default for Claude Desktop) and `streamable-http` / `sse` with bearer-token auth (for Claude for Excel + remote deployments).
+
+**Distribution:**
+- PyPI: `pip install modelrisk-mcp` (via OIDC trusted publishing)
+- Windows single-file: `modelrisk-mcp.exe` (PyInstaller, ~39 MB, attached to the GitHub release)
+- MCP Registry: `io.github.vosesoftware/modelrisk-mcp`
+- CLI installer: `modelrisk-mcp install` configures Claude Desktop + Claude Code automatically
+
+### Alpha-cycle highlights since 0.2.0-alpha
+
+- **MRService.dll integration** (α.1–α.7): direct ctypes bridge to ModelRisk's simulation engine — no longer drives Excel's UI for sim execution, ~10× faster and more reliable than COM-driven sims.
+- **Bridge layer rewrite** (α.8–α.20): xlwings + pywin32 with stale-reconnect, OneDrive path-resolution fallback, COM CVErr handling, multi-strategy dispatch.
+- **Audit rule set** (α.4, α.25, α.33–α.35): grew from 8 → 13 rules, with VOSE-012 (errored cells) and VOSE-013 (arg-count mismatch) catching common LLM hallucination classes.
+- **Reporting** (α.13, α.19–α.23): drivers report (tornado + scatter + narrative), executive report (KPI + histogram + chart polish), corporate styling palette.
+- **Robustness** (α.21–α.32): named-range scanner sees cell-reference forms, expression-based VoseInput/VoseOutput names, `SaveCopyAs` instead of `SaveAs`, `RegisterXLL` before simulation triggers, post-condition verification on sim completion.
+- **Bug surfacing** (α.33–α.36): Excel error cells now distinguished from empty cells in `CellInfo.error`, with bulk `Range.Value2` detection that's robust across Excel versions.
+- **Performance** (α.37): 10× speedup on `iterate_cells` / `audit_model` / `get_workbook_summary` by caching the sheet name once instead of once-per-cell.
+- **Release pipeline** (α.38): hardened GitHub Actions retries on `actions/checkout` and `mcp-publisher login` / `publish` against transient GitHub auth outages.
+
+### Quality bar at cut
+
+- **472 unit tests** pass; ruff + mypy clean
+- **13 audit rules** verified firing end-to-end on a live Excel workbook
+- **20 k-cell workbook** audits in **~1 second**; 100 k-cell extrapolation: ~5 s
+- **PyPI + MCP Registry**: every alpha tag from α.33 through α.38 round-tripped successfully through the publish pipeline (4 of 5 had clean MCP-registry publishes; one hit a transient GitHub auth outage which alpha.38's retry hardening now covers)
+- **Activation-key obfuscation:** `scripts/scan_exe_for_key.py` runs in CI; no plain key in shipped artifacts
+
 ## [0.3.0-alpha.38] — 2026-05-23
 
 ### Fixed
