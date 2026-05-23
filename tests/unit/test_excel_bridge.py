@@ -23,6 +23,7 @@ from modelrisk_mcp.bridge.excel import (
     ExcelBridge,
     _as_2d,
     _classify_cell,
+    _coerce_error_value,
     _detect_excel_error,
 )
 from modelrisk_mcp.errors import WorkbookNotFoundError
@@ -445,6 +446,93 @@ class TestDetectExcelError:
         a COM Variant that didn't coerce), we don't crash."""
         cell = _FakeCell(formula="", value=None, text=42)
         assert _detect_excel_error(cell, None) is None
+
+
+class TestCoerceErrorValue:
+    """Bug #35 (alpha.36): bulk `Range.Text` on some Excel versions
+    returns None for multi-cell ranges, so iterate_cells / read_range
+    rely on `Range.Value2` which reports COM CVErr integer codes.
+    `_coerce_error_value` is the int→error-string mapper."""
+
+    def test_div_zero_code(self) -> None:
+        assert _coerce_error_value(-2146826281) == "#DIV/0!"
+
+    def test_name_code(self) -> None:
+        assert _coerce_error_value(-2146826259) == "#NAME?"
+
+    def test_value_code(self) -> None:
+        assert _coerce_error_value(-2146826273) == "#VALUE!"
+
+    def test_num_code(self) -> None:
+        assert _coerce_error_value(-2146826252) == "#NUM!"
+
+    def test_na_code(self) -> None:
+        assert _coerce_error_value(-2146826246) == "#N/A"
+
+    def test_ref_code(self) -> None:
+        assert _coerce_error_value(-2146826265) == "#REF!"
+
+    def test_null_code(self) -> None:
+        assert _coerce_error_value(-2146826288) == "#NULL!"
+
+    def test_normal_number_returns_none(self) -> None:
+        """Plain numbers must not be misinterpreted as error codes."""
+        assert _coerce_error_value(42) is None
+        assert _coerce_error_value(0) is None
+        assert _coerce_error_value(-1) is None
+
+    def test_float_returns_none(self) -> None:
+        assert _coerce_error_value(42.0) is None
+        assert _coerce_error_value(-2146826281.0) is None
+
+    def test_string_returns_none(self) -> None:
+        assert _coerce_error_value("#DIV/0!") is None  # strings go via Text path
+
+    def test_none_returns_none(self) -> None:
+        assert _coerce_error_value(None) is None
+
+    def test_bool_returns_none(self) -> None:
+        """`True`/`False` are technically `int` subclasses in Python but
+        must NOT be interpreted as error codes."""
+        assert _coerce_error_value(True) is None
+        assert _coerce_error_value(False) is None
+
+
+class TestDetectExcelErrorValue2Fallback:
+    """`_detect_excel_error` (used by get_cell) falls back to Value2
+    when Text doesn't yield a recognised error literal. Pins the
+    alpha.36 backstop."""
+
+    def test_falls_back_to_value2_when_text_is_none(self) -> None:
+        """If Text returns None but Value2 carries the CVErr code, we
+        still detect the error."""
+
+        class _Api:
+            Text = None
+            Value2 = -2146826281
+
+        cell = SimpleNamespace(api=_Api())
+        assert _detect_excel_error(cell, None) == "#DIV/0!"
+
+    def test_text_wins_when_both_present(self) -> None:
+        """If Text gives a valid error literal, we don't bother with
+        Value2."""
+
+        class _Api:
+            Text = "#NAME?"
+            # Value2 is a sentinel we don't expect to be read.
+            Value2 = 9999
+
+        cell = SimpleNamespace(api=_Api())
+        assert _detect_excel_error(cell, None) == "#NAME?"
+
+    def test_returns_none_when_neither_indicates_error(self) -> None:
+        class _Api:
+            Text = "42"
+            Value2 = 42
+
+        cell = SimpleNamespace(api=_Api())
+        assert _detect_excel_error(cell, 42) is None
 
 
 class TestClassifyCellWithError:

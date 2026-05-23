@@ -252,33 +252,46 @@ class ExcelBridge:
         raw_formulas = r.formula
         values = _as_2d(raw_values)
         formulas = [[str(f or "") for f in row] for row in _as_2d(raw_formulas)]
-        # Bug #34 (alpha.33): also pull `Range.Text` as a single COM
-        # call so we can flag cells that evaluate to an Excel error
-        # ("#DIV/0!", "#REF!", ...) — the `value` accessor returns
-        # `None` for those, making them indistinguishable from empty
-        # cells. Text returns the *displayed* string, so a cell with
-        # an error always shows the error literal there.
+        # Bug #34 (alpha.33) / bug #35 (alpha.36): also surface error
+        # cells. Same dual strategy as `iterate_cells`:
+        # 1. `Range.Value2` returns integer CVErr codes on multi-cell
+        #    ranges — robust across Excel versions (the alpha.36
+        #    fallback after Text-returning-None was observed live).
+        # 2. `Range.Text` as a secondary check for any cells Value2
+        #    didn't classify.
         errors: list[list[str | None]] = []
+        value2_2d: list[list[Any]] = []
         try:
-            raw_text = r.api.Text
-            text_2d = _as_2d(raw_text)
-            if len(text_2d) == len(values):
-                for text_row in text_2d:
-                    err_row: list[str | None] = []
-                    for cell_text in text_row:
-                        if (
-                            isinstance(cell_text, str)
-                            and cell_text.strip() in _EXCEL_ERROR_STRINGS
-                        ):
-                            err_row.append(cell_text.strip())
-                        else:
-                            err_row.append(None)
-                    errors.append(err_row)
+            value2_2d = _as_2d(r.api.Value2)
+            if len(value2_2d) != len(values):
+                value2_2d = []
         except Exception:
-            # Some Excel/COM versions raise on bulk Range.Text. Better
-            # to return values/formulas with no error info than to
-            # fail the whole read.
-            errors = []
+            value2_2d = []
+        text_2d: list[list[Any]] = []
+        try:
+            text_2d = _as_2d(r.api.Text)
+            if len(text_2d) != len(values):
+                text_2d = []
+        except Exception:
+            text_2d = []
+        if value2_2d or text_2d:
+            for ri in range(len(values)):
+                err_row: list[str | None] = []
+                v2_row = value2_2d[ri] if value2_2d and ri < len(value2_2d) else []
+                tx_row = text_2d[ri] if text_2d and ri < len(text_2d) else []
+                for ci in range(len(values[ri])):
+                    err: str | None = None
+                    if ci < len(v2_row):
+                        err = _coerce_error_value(v2_row[ci])
+                    if err is None and ci < len(tx_row):
+                        t = tx_row[ci]
+                        if (
+                            isinstance(t, str)
+                            and t.strip() in _EXCEL_ERROR_STRINGS
+                        ):
+                            err = t.strip()
+                    err_row.append(err)
+                errors.append(err_row)
         # Keep `errors` compact when nothing is errored — empty list
         # signals "no errors detected", same shape as before.
         if errors and not any(e for row in errors for e in row):
@@ -317,48 +330,74 @@ class ExcelBridge:
                 formulas_2d = _as_2d(used.formula)
             except Exception:
                 continue
-            # Bug #34 (alpha.33): bulk-read Range.Text once per sheet
-            # so we can flag error cells inside an audit/scan without
-            # per-cell COM round-trips. Errors show up as their literal
-            # ("#DIV/0!" etc.) in Text. Failure here is non-fatal: the
-            # scan still runs, just without error-cell classification.
+            # Bug #34 (alpha.33) / bug #35 (alpha.36): bulk-detect
+            # error cells per sheet so an audit scan flags them without
+            # per-cell COM round-trips.
+            #
+            # alpha.33 used `Range.Text` for this. That works for
+            # single cells but on multi-cell ranges some Excel versions
+            # return `None` from the bulk `Range.Text` property — which
+            # silently regressed VOSE-012 on real workbooks (caught by
+            # round-10 live probe).
+            #
+            # alpha.36 fix: prefer `Range.Value2`, which on a bulk
+            # range reliably returns a tuple-of-tuples with the COM
+            # CVErr **integer code** in each errored cell's slot.
+            # Mapping is stable across Excel versions. Fall back to
+            # Text if Value2 is also unavailable.
             text_2d: list[list[Any]] = []
+            value2_2d: list[list[Any]] = []
+            try:
+                value2_2d = _as_2d(used.api.Value2)
+                if len(value2_2d) != len(values_2d):
+                    value2_2d = []
+            except Exception:
+                value2_2d = []
             try:
                 text_2d = _as_2d(used.api.Text)
                 if len(text_2d) != len(values_2d):
                     text_2d = []
             except Exception:
                 text_2d = []
+
             first_row = used.row
             first_col = used.column
             for ri, (vrow, frow) in enumerate(
                 zip(values_2d, formulas_2d, strict=False)
             ):
-                trow = text_2d[ri] if text_2d and ri < len(text_2d) else []
+                v2_row = (
+                    value2_2d[ri]
+                    if value2_2d and ri < len(value2_2d)
+                    else []
+                )
+                tx_row = (
+                    text_2d[ri] if text_2d and ri < len(text_2d) else []
+                )
                 for ci, (val, formula_str) in enumerate(
                     zip(vrow, frow, strict=False)
                 ):
                     formula = str(formula_str or "")
-                    if not formula and (val is None or val == ""):
-                        # Even a Vose error cell with no formula shows
-                        # an error literal — but if there's no formula
-                        # AND no value, the cell is genuinely empty.
-                        cell_text = trow[ci] if ci < len(trow) else None
-                        if not (
-                            isinstance(cell_text, str)
-                            and cell_text.strip() in _EXCEL_ERROR_STRINGS
+                    # Prefer Value2 (robust on this Excel version); fall
+                    # back to Text if Value2 didn't give us an answer.
+                    cell_error: str | None = None
+                    if ci < len(v2_row):
+                        cell_error = _coerce_error_value(v2_row[ci])
+                    if cell_error is None and ci < len(tx_row):
+                        t = tx_row[ci]
+                        if (
+                            isinstance(t, str)
+                            and t.strip() in _EXCEL_ERROR_STRINGS
                         ):
+                            cell_error = t.strip()
+                    if not formula and (val is None or val == ""):
+                        # Empty cells: skip unless they're errored.
+                        # (Some Vose paths can leave a cell that has
+                        # no formula but evaluates to an error literal.)
+                        if cell_error is None:
                             continue
                     abs_row = first_row + ri
                     abs_col = first_col + ci
                     cell_ref = _coord_to_a1(abs_row, abs_col)
-                    cell_text = trow[ci] if ci < len(trow) else None
-                    error: str | None = None
-                    if (
-                        isinstance(cell_text, str)
-                        and cell_text.strip() in _EXCEL_ERROR_STRINGS
-                    ):
-                        error = cell_text.strip()
                     info = CellInfo(
                         ref=CellRef(
                             workbook=workbook,
@@ -367,8 +406,10 @@ class ExcelBridge:
                         ),
                         formula=formula,
                         value=val if not isinstance(val, list) else None,
-                        cell_type=_classify_cell(formula, val, error=error),
-                        error=error,
+                        cell_type=_classify_cell(
+                            formula, val, error=cell_error,
+                        ),
+                        error=cell_error,
                     )
                     if predicate is None or predicate(info):
                         yield info
@@ -695,28 +736,76 @@ _EXCEL_ERROR_STRINGS = frozenset({
 })
 
 
+# Bug #35 (alpha.36): on at least some Excel versions, `Range.Text` on
+# a MULTI-cell range returns `None` (single-cell Text works fine). The
+# alpha.33 `iterate_cells` path relied on bulk Text — which then
+# silently produced no error info for any sheet, regressing VOSE-012
+# on real workbooks.
+#
+# Fix: also detect errors via `Range.Value2`, which on a multi-cell
+# range reliably returns a tuple-of-tuples containing the COM CVErr
+# **integer code** (HRESULTs in the 0x800A07D0-0x800A07FB range) for
+# each errored cell. Mapping is stable across Excel versions because
+# it's the Office COM facility's error codes — the lower 16 bits are
+# the well-known xlCVError constants. This map was probed empirically
+# against Excel 365 (each row was confirmed: typed the formula in,
+# called Range.api.Value2, recorded the int).
+_EXCEL_ERROR_CODE_TO_STRING: dict[int, str] = {
+    -2146826281: "#DIV/0!",   # 0x800A07D7, xlErrDiv0   (2007)
+    -2146826288: "#NULL!",    # 0x800A07D0, xlErrNull   (2000)
+    -2146826273: "#VALUE!",   # 0x800A07DF, xlErrValue  (2015)
+    -2146826265: "#REF!",     # 0x800A07E7, xlErrRef    (2023)
+    -2146826259: "#NAME?",    # 0x800A07ED, xlErrName   (2029)
+    -2146826252: "#NUM!",     # 0x800A07F4, xlErrNum    (2036)
+    -2146826246: "#N/A",      # 0x800A07FA, xlErrNA     (2042)
+    -2146826245: "#GETTING_DATA",  # 0x800A07FB, xlErrGettingData (2043)
+    # Newer dynamic-array errors fall outside this canonical set on
+    # some Excel versions; if Value2 returns a code we don't recognise
+    # we fall through to the Text-based detector instead.
+}
+
+
+def _coerce_error_value(value: Any) -> str | None:
+    """If `value` is one of Excel's COM CVErr integer codes, return the
+    corresponding error literal; else None. Used by both the bulk
+    iterate_cells path and the per-cell get_cell path as a robust
+    backstop for cases where Range.Text returns None."""
+    if isinstance(value, int) and not isinstance(value, bool):
+        return _EXCEL_ERROR_CODE_TO_STRING.get(value)
+    return None
+
+
 def _detect_excel_error(cell_obj: Any, value: Any) -> str | None:
     """Return the Excel error string (`"#DIV/0!"` etc.) if this cell
     evaluates to an error, else `None`.
 
-    Detection strategy: read `Range.Text`. xlwings' `.value` accessor
-    returns `None` for error cells, which collides with empty cells —
-    we can't disambiguate from `value` alone. But `Range.Text` always
-    returns the *displayed* contents, which is the error literal for
-    error cells regardless of number format. A single COM round-trip
-    extra per `get_cell` call is a fine tax to surface a real category
-    of workbook problem to the LLM (bug #34).
+    Detection strategy (in order):
+
+    1. `Range.Text`. For a single cell this reliably returns the
+       displayed error literal regardless of number format.
+    2. `Range.Value2` integer CVErr code lookup (bug #35 alpha.36
+       fallback). Some Excel versions return `None` for `Range.Text`
+       on certain cells but always report the integer error code.
+       The map is stable across Excel versions because it's the
+       Office COM facility's error codes.
+
+    A single extra COM round-trip per `get_cell` is a fine tax to
+    surface a real category of workbook problem to the LLM (bug #34).
     """
     try:
         text = cell_obj.api.Text
     except Exception:
-        return None
-    if not isinstance(text, str):
-        return None
-    stripped = text.strip()
-    if stripped in _EXCEL_ERROR_STRINGS:
-        return stripped
-    return None
+        text = None
+    if isinstance(text, str):
+        stripped = text.strip()
+        if stripped in _EXCEL_ERROR_STRINGS:
+            return stripped
+    # Fallback: integer CVErr code via api.Value2 (bug #35).
+    try:
+        val2 = cell_obj.api.Value2
+    except Exception:
+        val2 = None
+    return _coerce_error_value(val2)
 
 
 def _as_2d(value: Any) -> list[list[Any]]:

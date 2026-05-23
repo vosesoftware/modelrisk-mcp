@@ -4,6 +4,27 @@ All notable changes to ModelRisk MCP. Follows [Keep a Changelog](https://keepach
 
 ## [Unreleased]
 
+## [0.3.0-alpha.36] — 2026-05-22
+
+### Fixed
+
+- **Bug #35 — bulk `Range.Text` returns `None` on some Excel versions, regressing VOSE-012 on real workbooks.** The alpha.33 `iterate_cells` / `read_range` bulk error-detection path relied on `used_range.api.Text` returning a 2D tuple of cell text. On the dev Excel (Office 365) this property returns `None` for any multi-cell range — single-cell `.Text` still works fine. Result: audit scans saw `error=None` on every cell of every sheet, and VOSE-012 silently couldn't fire on errored cells even though `get_cell` (which only reads single cells) worked correctly. Round-10 live-workbook probe caught this — the audit found 0 VOSE-012 findings on a workbook with a deliberate `=1/0` cell.
+
+  Fix: prefer `Range.Value2` for bulk error detection. On a multi-cell range Value2 reliably returns a tuple-of-tuples with the COM CVErr **integer code** in each errored cell's slot (e.g. `-2146826281` for `#DIV/0!`, `-2146826259` for `#NAME?`). The mapping is stable across Excel versions because the lower 16 bits are the well-known `xlCVError` constants. Text remains as a secondary fallback for any cell Value2 didn't classify. Empirically verified all seven canonical errors round-trip correctly: `#DIV/0!`, `#N/A`, `#NAME?`, `#NULL!`, `#NUM!`, `#REF!`, `#VALUE!`.
+
+  `_detect_excel_error` (used by `get_cell`) now also has the Value2 fallback for defence in depth.
+
+### Verified
+
+Round-10 live-workbook audit probe: built one Excel sheet with cells engineered to trigger each of the 13 audit rules, ran `audit_model` against it, asserted every rule fires at least once. Before alpha.36: 12/13 (VOSE-012 missing). After alpha.36: **13/13 — all rules fire on a real workbook.**
+
+### Tests
+
+- 12 new cases in `TestCoerceErrorValue` (every canonical CVErr code → string, plus plain numbers / floats / strings / None / booleans must NOT be misinterpreted)
+- 3 new cases in `TestDetectExcelErrorValue2Fallback` (Text=None + Value2 code = detected; Text wins when both present; neither = None)
+
+472 unit tests pass.
+
 ## [0.3.0-alpha.35] — 2026-05-22
 
 ### Added
