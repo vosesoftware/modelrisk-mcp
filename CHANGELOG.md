@@ -4,6 +4,25 @@ All notable changes to ModelRisk MCP. Follows [Keep a Changelog](https://keepach
 
 ## [Unreleased]
 
+## [0.3.0-alpha.37] — 2026-05-22
+
+### Fixed
+
+- **Bug #36 — `iterate_cells` called `sh.name` once per cell.** Each `sh.name` access on an xlwings sheet wrapper triggers a COM round-trip (`ISheet::Get_Name`) costing ~150μs. The inner loop's `CellRef(workbook=workbook, sheet=sh.name, cell=ref)` made that round-trip for every cell it yielded — so a 10k-cell scan paid 1.5 seconds of pure attribute overhead. Caught by `cProfile`: `sh.name` accounted for **81%** of `iterate_cells`' total runtime.
+
+  Fix: cache `sh.name` once per sheet before the inner loop. One line. Verified speedups on the 20k-cell live perf probe:
+
+  | Op | α.36 | α.37 | Speedup |
+  |---|---|---|---|
+  | `iterate_cells` | 3.37 s | **0.23 s** | 14.7× |
+  | `get_workbook_summary` | 3.15 s | **0.36 s** | 8.8× |
+  | `find_hard_coded_inputs` | 3.16 s | **0.34 s** | 9.3× |
+  | `run_audit` (13 rules) | 7.35 s | **1.04 s** | 7.1× |
+
+### Verified
+
+Round-10 perf probe on a 20k-cell synthetic workbook (2 sheets × 200 rows × 50 cols) — every read/audit path now runs in well under 5 seconds. Headroom: a 100k-cell enterprise model would audit in ~5s rather than ~35s.
+
 ## [0.3.0-alpha.36] — 2026-05-22
 
 ### Fixed
