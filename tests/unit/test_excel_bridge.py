@@ -25,6 +25,7 @@ from modelrisk_mcp.bridge.excel import (
     _classify_cell,
     _coerce_error_value,
     _detect_excel_error,
+    _normalize_value,
 )
 from modelrisk_mcp.errors import WorkbookNotFoundError
 
@@ -554,3 +555,50 @@ class TestClassifyCellWithError:
 
     def test_no_error_no_formula_text(self) -> None:
         assert _classify_cell("", "Label", error=None) == "text"
+
+
+class TestNormalizeValue:
+    """`_normalize_value` is the bridge boundary that coerces xlwings
+    cell values into the `float | str | bool | None` union accepted by
+    `CellInfo.value`. The critical case is `datetime`/`date`: Excel
+    date-formatted cells come back as `datetime.datetime` from xlwings,
+    and without this coercion `CellInfo` construction fails with a
+    Pydantic validation error — which used to take the entire audit
+    down with it on any workbook with a date in its used range
+    (bug #35)."""
+
+    def test_none_passthrough(self) -> None:
+        assert _normalize_value(None) is None
+
+    def test_bool_passthrough(self) -> None:
+        # Bool must be preserved as bool — not coerced to float —
+        # otherwise classify("boolean") downstream breaks.
+        assert _normalize_value(True) is True
+        assert _normalize_value(False) is False
+
+    def test_int_to_float(self) -> None:
+        # Numerics normalise to float so the schema's `float | ...`
+        # union accepts them whether xlwings handed us int or float.
+        assert _normalize_value(3) == 3.0
+        assert _normalize_value(3.14) == 3.14
+
+    def test_str_passthrough(self) -> None:
+        assert _normalize_value("Label") == "Label"
+
+    def test_datetime_to_iso(self) -> None:
+        from datetime import datetime
+
+        dt = datetime(2026, 5, 23, 12, 48, 5)
+        assert _normalize_value(dt) == "2026-05-23T12:48:05"
+
+    def test_date_to_iso(self) -> None:
+        from datetime import date
+
+        assert _normalize_value(date(2026, 5, 23)) == "2026-05-23"
+
+    def test_unknown_type_stringifies(self) -> None:
+        # Decimal, custom COM scalars, etc.: prefer "we showed something"
+        # over "the audit crashed".
+        from decimal import Decimal
+
+        assert _normalize_value(Decimal("1.5")) == "1.5"

@@ -21,6 +21,7 @@ Design notes:
 from __future__ import annotations
 
 from collections.abc import Callable, Iterator
+from datetime import date, datetime
 from typing import Any
 
 from modelrisk_mcp.errors import (
@@ -229,7 +230,7 @@ class ExcelBridge:
         return CellInfo(
             ref=ref,
             formula=formula,
-            value=value,
+            value=_normalize_value(value),
             number_format=number_format,
             cell_type=_classify_cell(formula, value, error=error),
             error=error,
@@ -412,7 +413,11 @@ class ExcelBridge:
                             cell=cell_ref,
                         ),
                         formula=formula,
-                        value=val if not isinstance(val, list) else None,
+                        value=(
+                            _normalize_value(val)
+                            if not isinstance(val, list)
+                            else None
+                        ),
                         cell_type=_classify_cell(
                             formula, val, error=cell_error,
                         ),
@@ -682,6 +687,44 @@ class ExcelBridge:
 # ----------------------------------------------------------------------
 # Helpers
 # ----------------------------------------------------------------------
+
+
+def _normalize_value(value: Any) -> float | str | bool | None:
+    """Coerce an xlwings cell value into the type union accepted by
+    `CellInfo.value` (`float | str | bool | None`).
+
+    Bug #35 (alpha.4-followup): Excel date-formatted cells come back from
+    xlwings as `datetime.datetime` (or `datetime.date`). `CellInfo.value`
+    doesn't permit those, so Pydantic refuses to construct the model and
+    `iterate_cells` blows up on any workbook with a date in its used
+    range — which then takes the audit down with it.
+
+    Fix: stringify date/datetime as ISO 8601 at the bridge boundary. The
+    audit rules don't reason about dates (they tokenise formulas), so
+    losing the typed datetime here is harmless; surfacing the value as
+    text keeps it visible to the LLM. Other unsupported types (e.g.
+    Decimal) fall through to `str(...)` for the same reason.
+
+    `bool` must be checked *before* `int/float` because `True` is an
+    `int` in Python and we want `cell_type="boolean"` semantics
+    preserved upstream by `_classify_cell` (which sees the original
+    value, not the coerced one).
+    """
+    if value is None:
+        return None
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, (int, float)):
+        return float(value)
+    if isinstance(value, str):
+        return value
+    if isinstance(value, datetime):
+        return value.isoformat()
+    if isinstance(value, date):
+        return value.isoformat()
+    # Last-ditch fallback for anything else xlwings might hand us
+    # (Decimal, custom COM scalars, etc.). Stringify rather than crash.
+    return str(value)
 
 
 def _classify_cell(formula: str, value: Any, *, error: str | None = None) -> str:
