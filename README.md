@@ -24,7 +24,7 @@ This server turns Claude (or any MCP client) into a methodology-aware co-pilot f
 
 Every formula written to Excel is validated against the ModelRisk function catalogue first — there's no path to a hallucinated function name reaching your workbook.
 
-**See the [user manual](docs/user-manual.md)** for a walkthrough of the eight things you can do, a realistic end-to-end example, and what the server explicitly does and doesn't do.
+**See the [user manual](docs/user-manual.md)** for a walkthrough of the eight things you can do, a realistic end-to-end example, and what the server explicitly does and doesn't do. New to Monte Carlo or to the ModelRisk MCP toolchain? Start with the **[15-minute quick-start tutorial](docs/quick-start.md)**; unfamiliar with a term, see the **[glossary](docs/glossary.md)**.
 
 ---
 

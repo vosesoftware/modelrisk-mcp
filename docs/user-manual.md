@@ -2,6 +2,8 @@
 
 A practical guide to what ModelRisk MCP can do for you and why it's useful. Not a reference (see [README](../README.md) for the tool list); this is the "what can I actually accomplish with it" document.
 
+> **New here?** The [15-minute quick-start tutorial](quick-start.md) walks you through building your first probabilistic model end-to-end. Domain term unfamiliar? Check the [glossary](glossary.md).
+
 ---
 
 ## What this is
@@ -41,9 +43,13 @@ You stay in the conversation; the workbook fills in around you. Every formula go
 
 Most real Excel models start out as point estimates. "Year-3 revenue = $4.2M" lives in a single cell. The model says nothing about how confident you are or how wide the range is.
 
+![A deterministic NPV model — single point estimate in every cell, no range](img/01-before-deterministic.png)
+
 > Look at the active workbook. Identify the inputs that are obviously uncertain (round numbers referenced by formulas) and propose appropriate distributions for each.
 
 Claude calls `find_hard_coded_inputs` to find the candidates, `propose_distributions_for_inputs` to suggest distribution families based on the context (a "Discount Rate" cell gets a different proposal than "Quantity Sold"), then `replace_constant_with_distribution` one cell at a time. After each replacement you can decline, accept, or refine.
+
+![The same workbook after `replace_constant_with_distribution` — each input is now a Vose distribution wrapped with VoseInput; the output cell is wrapped with VoseOutput](img/02-after-probabilistic.png)
 
 This is the typical entry point for a team that has ten years of Excel models sitting on SharePoint. You don't rewrite them; you wrap their constants.
 
@@ -107,6 +113,8 @@ The reads go through ModelRisk's official SDK (MRService.dll) reading `.vmrs` fi
 
 `build_executive_report` and `build_drivers_report` write multi-sheet Excel reports in-place: KPI tile, histogram with cumulative overlay, percentile table, tornado chart, scatter of top drivers, contingency analysis, executive narrative. Corporate styling throughout — no manual chart formatting.
 
+![Post-simulation results sheet — KPI table, percentiles, sensitivity ranking, executive narrative](img/03-results-summary.png)
+
 `generate_executive_summary` emits the narrative as Markdown for pasting into a doc, a deck, or a board pack.
 
 ---
@@ -168,6 +176,8 @@ Out comes a multi-sheet Excel report and a Markdown brief. The whole sequence to
 
 ## Where to go next
 
+- **[Quick-start tutorial](quick-start.md)** — 15-minute, zero-to-simulation walkthrough
+- **[Glossary](glossary.md)** — Monte Carlo + MCP vocabulary
 - **[README](../README.md)** — quick-start install + wire instructions
 - **[docs/installation.md](installation.md)** — fuller install guide
 - **[docs/claude-desktop.md](claude-desktop.md)** — Claude Desktop setup
