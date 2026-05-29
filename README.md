@@ -12,6 +12,32 @@ Use it with Claude Desktop, Claude Code, Cursor, Zed, or any MCP-compliant clien
 
 ---
 
+## Purpose
+
+**Monte Carlo risk modelling is the right way to reason about an uncertain future — and almost nobody does it.**
+
+The mathematics has been settled for decades: when your inputs are uncertain, you don't reason with a single "best guess" number, you reason with the *distribution of outcomes*. A point estimate ("Q3 revenue will be $4.2M") hides exactly the thing a decision-maker needs to know — how wrong could it be, how bad is the downside, which assumption is driving the risk. ModelRisk has given Excel users a rigorous, validated engine for this for years.
+
+The barrier was never the maths. It was the **friction**:
+
+- The discipline carries a real skill curve — 1,400+ functions, the right distribution family for each input, the methodology traps (fit without parameter uncertainty, correlations ignored, risk events modelled as `p × impact`) that quietly produce confident-but-wrong answers.
+- Setting a model up by hand is slow and fiddly — wrapping inputs, naming outputs, wiring copulas and time-series, formatting the report.
+- So under deadline pressure, most teams fall back to a single-point spreadsheet and a gut-feel range. The rigorous tool sits unused.
+
+**This server removes that friction.** Large language models can now drive domain tools through the open Model Context Protocol. ModelRisk MCP puts the whole ModelRisk surface — build, fit, simulate, audit, interpret — behind a conversation. You describe the problem in plain language; Claude proposes the right distributions, wires the structure, runs the simulation, reads the tail, and writes the report. The expertise moves into the loop; the friction drops to a sentence.
+
+It is built on five deliberate principles:
+
+1. **Open, not locked-in.** A server on the standard Anthropic MCP — works with Claude Desktop, Claude Code, Claude for Excel, Cursor, Zed, and any compliant client. MIT-licensed. The function catalogue, methodology, and audit rules ship in the package and are editable. No proprietary connector, no vendor cage.
+2. **Methodology-grounded, not just mechanically capable.** The server is opinionated about *correct* practice. Fits default to `uncertainty=TRUE`; risk events use the bimodal `VoseRiskEvent`; the 13-rule audit encodes the mistakes Vose practitioners have seen across decades of consulting. It won't just do what you ask — it'll steer you toward what's right.
+3. **Local-only, no telemetry.** Everything runs on your machine against your Excel and your ModelRisk install. No data leaves your computer; the activation key is bundled and offline.
+4. **Excel stays the model.** No re-platforming, no shadow tooling. The workbook *is* the model — versionable in Git, openable by anyone with Excel + ModelRisk, reproducible by re-running one tool call.
+5. **Safe by design.** Every write previews first (`dry_run=True`), lands in Excel's undo stack, and is logged. The server can modify your workbook — and does so under nine layered safeguards (see [Safety by design](#safety-by-design)).
+
+The goal is simple: make defensible, quantitative risk analysis something you reach for by default — because it's now no harder than asking.
+
+---
+
 ## What this does
 
 This server turns Claude (or any MCP client) into a methodology-aware co-pilot for ModelRisk. It can:
@@ -259,6 +285,22 @@ More: [docs/architecture.md](docs/architecture.md), [docs/com-surface.md](docs/c
 ## License
 
 MIT. See [LICENSE](LICENSE).
+
+---
+
+## Documentation
+
+| Doc | What it's for |
+|---|---|
+| [Quick-start tutorial](docs/quick-start.md) | 15 minutes, zero to your first simulation |
+| [Walk-through scenarios](docs/scenarios.md) | Six problem-shaped recipes — budgets, data fitting, loss aggregation, correlated inputs, stress tests, audits |
+| [User manual](docs/user-manual.md) | The eight things you can do, in depth; what the server does and doesn't do |
+| [Glossary](docs/glossary.md) | Monte Carlo + MCP vocabulary for non-statisticians |
+| [Installation](docs/installation.md) | Full install + activation detail |
+| [Claude Desktop setup](docs/claude-desktop.md) · [Claude Code setup](docs/claude-code.md) · [Claude for Excel setup](docs/claude-for-excel.md) | Per-client wiring |
+| [Chart style guide](docs/chart-style-guide.md) | The native-Excel-chart styling ruleset the reports follow |
+| [Authoring audit rules](docs/authoring-audit-rules.md) | Extend the 13-rule audit set with your own |
+| [Architecture](docs/architecture.md) | Internal layers + the two integration paths |
 
 ---
 
