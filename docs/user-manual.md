@@ -2,7 +2,7 @@
 
 A practical guide to what ModelRisk MCP can do for you and why it's useful. Not a reference (see [README](../README.md) for the tool list); this is the "what can I actually accomplish with it" document.
 
-> **New here?** The [15-minute quick-start tutorial](quick-start.md) walks you through building your first probabilistic model end-to-end. Domain term unfamiliar? Check the [glossary](glossary.md).
+> **New here?** The [15-minute quick-start tutorial](quick-start.md) walks you through building your first probabilistic model end-to-end. Then follow a [walk-through scenario](scenarios.md) for your problem type. Domain term unfamiliar? Check the [glossary](glossary.md).
 
 ---
 
