@@ -11,7 +11,7 @@ To keep a single source of truth, the substance ships as a package **data file**
 
 ## What's in it
 
-Six sections, each distilled from a ModelRisk Help article:
+Nine sections, each distilled from a ModelRisk Help article:
 
 | Section | Source article |
 |---|---|
@@ -21,6 +21,9 @@ Six sections, each distilled from a ModelRisk Help article:
 | Eliciting expert opinion | *Modeling expert opinion* |
 | Modeling correlation | *Modeling correlation* · *Copulas* |
 | Modeling a quantity over time | *Time series introduction* |
+| Fitting distributions to data (MLE, information criteria, the uncertainty parameter) | *Fitting in ModelRisk* |
+| Choosing an aggregation method (Monte Carlo / Panjer / De Pril / FFT) | *Aggregate modeling in ModelRisk* |
+| Interpreting sensitivity (tornado types) | *Tornado plot* |
 
 ## How it relates to the other knowledge docs
 

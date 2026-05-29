@@ -198,12 +198,95 @@ explore the realistic range.
 
 ---
 
+## 7. Fitting distributions to data
+
+When you have a real sample, fit rather than guess — but fit *well*:
+
+- **Method.** ModelRisk fits by **Maximum Likelihood Estimation
+  (MLE)**. Competing fitted models are ranked by **information
+  criteria** — SIC, HQIC, or AIC (Akaike) — which trade goodness-of-fit
+  against the number of parameters, so a more complex distribution has
+  to *earn* its extra parameters. Don't pick a family on eyeball shape
+  alone; compare the criteria.
+- **The uncertainty parameter — set it to TRUE.** Every ModelRisk fit
+  takes an `uncertainty` flag. It defaults to FALSE (returning bare
+  MLEs) only to match common practice — but the Help **strongly
+  recommends TRUE**. With TRUE, ModelRisk generates uncertainty about
+  the fitted parameters by **parametric bootstrapping**, which (unlike
+  classical asymptotic methods) captures the *correlation between the
+  fitted parameters* and non-normal parameter uncertainty. Using just
+  the MLEs — especially with few data, or when the model must be
+  precise — can **significantly understate** the output uncertainty.
+  This is the mechanism behind methodology principle 2 (audit rule
+  VOSE-003).
+
+*Source: ModelRisk Help — Fitting in ModelRisk.*
+
+---
+
+## 8. Choosing an aggregation method
+
+For a frequency-severity total (a random count of severity draws),
+ModelRisk offers several aggregation methods, not just Monte Carlo.
+They trade accuracy, speed, and applicability:
+
+- **Aggregate Monte Carlo** (`VoseAggregateMC`) — the general-purpose
+  choice: draws a frequency, then that many severities, each iteration.
+  Always applicable; converges with iterations like any MC estimate.
+- **Panjer** and **De Pril** — recursive analytic methods for the
+  aggregate distribution; fast and exact for the (a, b, 0)-class
+  frequency distributions they apply to.
+- **FFT** (Fast Fourier Transform) — convolves the severity
+  distribution very fast; excellent when you need the full aggregate
+  distribution quickly.
+- **Multivariate** variants (Monte Carlo, FFT) — when several
+  correlated aggregates are modelled together.
+
+Default to Aggregate Monte Carlo for flexibility; reach for Panjer / De
+Pril / FFT when you need speed or an exact analytic aggregate and the
+frequency/severity assumptions fit those methods.
+
+*Source: ModelRisk Help — Aggregate modeling in ModelRisk.*
+
+---
+
+## 9. Interpreting sensitivity (tornado plots)
+
+A tornado plot ranks inputs by how much each drives an output's
+uncertainty. The *type* of tornado matters — they measure influence
+differently, and the right one depends on the question:
+
+- **Conditional mean** (the default, most generally useful) — the mean
+  of the output for the lowest vs highest tranche of each input defines
+  the bar's ends. Shows how the output's *mean* responds to each input,
+  in units the decision-maker understands (dollars, days). Use this to
+  answer "which assumption moves my expected result most."
+- **Conditional cumulative percentile** — same idea but at a chosen
+  percentile, so it shows sensitivity of the *tail* (e.g. how each
+  input drives the P90). Use when the downside, not the average, is the
+  concern.
+- **Rank correlation** — the most common and simplest: rank correlation
+  between each input and the output, on a −1…+1 scale. A *crude* screen,
+  good for identifying which variables deserve closer analysis, but
+  hard to read in the decision-maker's own units.
+
+Prefer conditional-mean or conditional-percentile tornadoes for
+communicating to decision-makers; use rank correlation for quick
+screening of which drivers matter at all.
+
+*Source: ModelRisk Help — Tornado plot.*
+
+---
+
 ## How to use this knowledge base
 
 - When **building**: work down §3's five properties for every input;
   apply §4 when the input is an expert judgement; apply §5 when inputs
-  co-move; apply §6 when a quantity has a time path. Keep §2's two-forms
-  distinction front of mind.
+  co-move; apply §6 when a quantity has a time path; fit with §7 when
+  you have data; aggregate with §8 for frequency-severity totals. Keep
+  §2's two-forms distinction front of mind.
+- When **interpreting**: use §9 to choose and read the right sensitivity
+  view for the question (mean vs tail vs screening).
 - When **auditing**: these principles are the *why* behind the audit
   rules — see `modelrisk://methodology` for the principle-to-rule map.
 - For the **mechanics** (which exact function, how to compose

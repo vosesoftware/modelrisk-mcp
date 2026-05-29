@@ -88,6 +88,9 @@ def test_knowledge_base_resource_returns_cited_markdown() -> None:
         "expert opinion",
         "correlation",
         "over time",
+        "Fitting distributions to data",
+        "aggregation method",
+        "Interpreting sensitivity",
     ):
         assert topic.lower() in md.lower(), f"knowledge base missing: {topic}"
 

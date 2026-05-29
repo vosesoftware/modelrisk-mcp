@@ -4,6 +4,21 @@ All notable changes to ModelRisk MCP. Follows [Keep a Changelog](https://keepach
 
 ## [Unreleased]
 
+## [0.3.1-alpha.4] — 2026-05-29
+
+### Changed
+
+- **Expanded the `modelrisk://knowledge` resource from six sections to nine**, distilling three more ModelRisk Help articles (still attributed, still our own words):
+  - **Fitting distributions to data** — ModelRisk fits by MLE and ranks competing families by information criteria (SIC / HQIC / AIC); the `uncertainty` flag defaults to FALSE only to match common practice but should be TRUE, generating parameter uncertainty by parametric bootstrapping (which captures parameter correlation and non-normal marginals). This is the concrete mechanism behind methodology principle 2 / audit rule VOSE-003.
+  - **Choosing an aggregation method** — Monte Carlo (general), Panjer / De Pril (recursive analytic), FFT (fast convolution), and the multivariate variants — which to reach for and when.
+  - **Interpreting sensitivity (tornado types)** — conditional mean (default, decision-meaningful), conditional cumulative percentile (tail sensitivity), and rank correlation (crude screening); which to use for which question.
+
+  All three drawn from material already in the ModelRisk Help corpus — no new external sources. The build/audit prompts already point Claude at this resource, so the added depth flows into model construction and critique automatically.
+
+### Tests
+
+The knowledge-base resource test now asserts all nine topics are present. 502 unit tests pass.
+
 ## [0.3.1-alpha.3] — 2026-05-29
 
 ### Added
