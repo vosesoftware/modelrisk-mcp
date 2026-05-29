@@ -59,6 +59,9 @@ Workflow (do this in order; pause for the user's input at each step):
 
 Resources to load into context as you go:
 - `modelrisk://methodology` — the 8 core principles.
+- `modelrisk://knowledge` — the risk-analysis knowledge base distilled
+  from the ModelRisk Help (why to quantify uncertainty, selecting
+  distributions, expert opinion, correlation, time series).
 - `modelrisk://distributions` — the distribution selection guide.
 - `modelrisk://functions/{name}` — when explaining a specific
   function's parameters.

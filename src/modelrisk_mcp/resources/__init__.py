@@ -8,6 +8,7 @@ from modelrisk_mcp.resources import (
     audit_rules,
     distribution_guide,
     function_reference,
+    knowledge_base,
     methodology,
     workbook_state,
 )
@@ -16,6 +17,7 @@ __all__ = [
     "audit_rules",
     "distribution_guide",
     "function_reference",
+    "knowledge_base",
     "methodology",
     "workbook_state",
 ]

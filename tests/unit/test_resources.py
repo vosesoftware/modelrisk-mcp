@@ -23,6 +23,7 @@ async def test_seven_resources_registered() -> None:
     assert "modelrisk://functions" in static_uris
     assert "modelrisk://distributions" in static_uris
     assert "modelrisk://methodology" in static_uris
+    assert "modelrisk://knowledge" in static_uris
     assert "modelrisk://workbook/current" in static_uris
     assert "modelrisk://audit-rules" in static_uris
     # Templated resources.
@@ -66,6 +67,29 @@ async def test_function_entry_resource_returns_known_entry() -> None:
     payload = json.loads(function_entry_resource("VoseModPERT"))
     assert payload["name"] == "VoseModPERT"
     assert payload["category"] == "continuous"
+
+
+def test_knowledge_base_resource_returns_cited_markdown() -> None:
+    """The curated knowledge base ships as a data file, is served as
+    markdown, and must carry its ModelRisk Help attribution so the
+    distillation never loses its provenance."""
+    from modelrisk_mcp.resources.knowledge_base import (
+        knowledge_base_resource,
+    )
+
+    md = knowledge_base_resource()
+    assert len(md) > 1000
+    # Provenance is non-negotiable for a distilled resource.
+    assert "ModelRisk Help" in md
+    # The six distilled topics are present.
+    for topic in (
+        "two forms of uncertainty",
+        "Selecting the appropriate distribution",
+        "expert opinion",
+        "correlation",
+        "over time",
+    ):
+        assert topic.lower() in md.lower(), f"knowledge base missing: {topic}"
 
 
 @pytest.mark.asyncio

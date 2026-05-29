@@ -4,6 +4,20 @@ All notable changes to ModelRisk MCP. Follows [Keep a Changelog](https://keepach
 
 ## [Unreleased]
 
+## [0.3.1-alpha.3] — 2026-05-29
+
+### Added
+
+- **A curated risk-analysis knowledge base, served as the `modelrisk://knowledge` resource.** An attributed distillation — in our own words, not verbatim — of foundational guidance from the **ModelRisk Help** (Vose Software): why to quantify uncertainty (the vaccine/investment insight), the two forms of uncertainty (variability vs risk events), selecting a distribution via the five properties (discrete/continuous, bounded/unbounded, parametric/non-parametric, univariate/multivariate, first/second order), eliciting expert opinion, modeling correlation (rank-order → envelope → lookup → conditional → copulas), and modeling a quantity over time. Each section cites its source article.
+
+  The new resource is wired into the `/build-risk-model` and `/audit-model` prompts so it's loaded into the LLM's context at build/critique time — grounding model construction in the authoritative source, not just general intuition. This is the sixth MCP resource.
+
+  Single source of truth: the substance ships as the package data file `data/knowledge_base.md` (force-included in the wheel), is served by the resource, and is pointed to from `docs/knowledge-base.md` for GitHub readers — no duplicated copies to drift.
+
+### Tests
+
+`test_knowledge_base_resource_returns_cited_markdown` (provenance marker + all six topics present) and the registration test now assert `modelrisk://knowledge`. 502 unit tests pass.
+
 ## [0.3.1-alpha.2] — 2026-05-29
 
 ### Changed

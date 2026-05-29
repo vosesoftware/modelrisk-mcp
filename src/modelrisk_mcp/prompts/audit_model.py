@@ -27,7 +27,8 @@ Workflow:
 3. **Surface findings, severity-first.**
    - For each `error`: name the cell, quote the formula, explain
      what makes it an error (drawing on
-     `modelrisk://methodology` and `modelrisk://audit-rules`),
+     `modelrisk://methodology`, `modelrisk://knowledge`, and
+     `modelrisk://audit-rules`),
      and propose the fix tool + arguments. Show the dry_run
      preview before committing.
    - For each `warning`: same pattern but frame as a methodology

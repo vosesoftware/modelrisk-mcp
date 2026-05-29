@@ -296,6 +296,7 @@ MIT. See [LICENSE](LICENSE).
 | [Walk-through scenarios](docs/scenarios.md) | Six problem-shaped recipes — budgets, data fitting, loss aggregation, correlated inputs, stress tests, audits |
 | [User manual](docs/user-manual.md) | The eight things you can do, in depth; what the server does and doesn't do |
 | [Methodology](docs/methodology.md) | The principles behind every model, each tied to the audit rule that enforces it |
+| [Knowledge base](docs/knowledge-base.md) | Risk-analysis guidance distilled from the ModelRisk Help — served to the LLM at build time (`modelrisk://knowledge`) |
 | [Distribution selection](docs/distribution-selection.md) | Which distribution for which uncertain quantity |
 | [Modeling patterns](docs/modeling-patterns.md) | Techniques — frequency-severity, correlation, common random numbers, time-series choice |
 | [Glossary](docs/glossary.md) | Monte Carlo + MCP vocabulary for non-statisticians |
