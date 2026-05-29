@@ -199,6 +199,10 @@ wrong if its deterministic scaffolding is broken.
 - **SS-003 (overly_complex_formula)** — a single formula doing too
   much; dense formulas are the hardest to review and the easiest to
   get subtly wrong. Break the calculation into one step per cell.
+- **SS-004 (inconsistent_formula_in_block)** — a cell in the middle of
+  a filled run whose pattern differs from both neighbours when those
+  neighbours agree; the classic "overtyped one cell after filling a
+  row/column" error, and the most dangerous because it's invisible.
 """
 
 

@@ -248,3 +248,20 @@ rules:
       Split the formula into intermediate cells, one calculation step
       each, with labels. The model becomes far easier to audit and to
       trace when a result looks wrong.
+
+  - id: SS-004
+    name: inconsistent_formula_in_block
+    severity: warning
+    enabled: true
+    description: >
+      A cell in the middle of a filled run of formulas has a different
+      pattern from the cells on both sides of it, when those neighbours
+      agree with each other. This is the classic and most dangerous
+      spreadsheet error: a row or column was filled correctly, then one
+      interior cell was overtyped or edited, silently breaking the
+      pattern and corrupting every downstream result.
+    suggested_fix_template: >
+      Compare this cell's formula with its neighbours in the run. If it
+      was meant to follow the same pattern, re-fill it from a correct
+      neighbour. If the difference is intentional, consider a layout or
+      comment that makes the exception obvious to the next reader.

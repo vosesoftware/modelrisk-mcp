@@ -4,6 +4,20 @@ All notable changes to ModelRisk MCP. Follows [Keep a Changelog](https://keepach
 
 ## [Unreleased]
 
+## [0.3.1-alpha.7] — 2026-05-29
+
+### Added
+
+- **SS-004 inconsistent_formula_in_block** (warning) — the single most valuable spreadsheet-integrity check: it catches the classic and most dangerous spreadsheet error (per the EuSpRIG literature) where a row or column of formulas was filled correctly, then one interior cell was overtyped, silently breaking the pattern.
+
+  Detection is tuned for **near-zero false positives**: formulas are normalised to a position-relative form (so a correctly-filled run collapses to one identical string regardless of which cells it references), and a cell is flagged only when it is an **interior cell whose pattern differs from both neighbours while those neighbours agree with each other** — the unambiguous "odd one out in the middle" signature. Edge cells (legitimate first/last-period differences) are never flagged; heterogeneous rows with no agreeing neighbours are never flagged; relative fills that differ literally but share a pattern are never flagged. Works on both horizontal and vertical runs; skips Vose and errored cells.
+
+  `audit_model` now runs **17 rules** (13 VOSE methodology + 4 SS spreadsheet-integrity).
+
+### Tests
+
+`TestInconsistentFormulaInBlock` — 6 cases: horizontal overtype, vertical overtype, clean run, heterogeneous row, edge cell, relative-fill-same-pattern. 519 unit tests pass.
+
 ## [0.3.1-alpha.6] — 2026-05-29
 
 ### Added

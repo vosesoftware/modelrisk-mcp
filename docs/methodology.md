@@ -67,7 +67,7 @@ Three classes of problem are about mechanical correctness or distribution choice
 | Surface | Role |
 |---|---|
 | `modelrisk://methodology` resource | loaded into Claude's context at `/build-risk-model` and `/audit-model` time — shapes what gets built |
-| `audit_model` (16 rules) | checks a live workbook against the principles, cell by cell — 13 Monte-Carlo-methodology rules (VOSE-001…013) + 3 spreadsheet-integrity rules (SS-001…003) |
+| `audit_model` (17 rules) | checks a live workbook against the principles, cell by cell — 13 Monte-Carlo-methodology rules (VOSE-001…013) + 4 spreadsheet-integrity rules (SS-001…004) |
 | `modelrisk://knowledge` resource | curated risk-analysis knowledge base distilled from the ModelRisk Help, loaded at build time |
 | `propose_distributions_for_inputs` + `modelrisk://distributions` | steers family selection toward sound choices |
 | the `/build-risk-model` prompt | walks a new model through the principles in order |

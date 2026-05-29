@@ -709,6 +709,118 @@ def detect_overly_complex_formula(ctx: RuleContext) -> Iterable[AuditFinding]:
         )
 
 
+_CELL_ADDR_RE = re.compile(r"^([A-Z]{1,3})(\d{1,7})$")
+# A1 reference token inside a formula, capturing $ flags on col and row.
+_REF_TOKEN_RE = re.compile(r"(\$?)([A-Z]{1,3})(\$?)(\d{1,7})")
+
+
+def _col_to_num(letters: str) -> int:
+    n = 0
+    for ch in letters:
+        n = n * 26 + (ord(ch) - ord("A") + 1)
+    return n
+
+
+def _addr_to_rowcol(addr: str) -> tuple[int, int] | None:
+    m = _CELL_ADDR_RE.match(addr)
+    if not m:
+        return None
+    return int(m.group(2)), _col_to_num(m.group(1))
+
+
+def _normalize_relative(formula: str, row: int, col: int) -> str:
+    """Rewrite a formula's cell references into position-relative tokens
+    so that a 'filled' row or column of formulas normalises to one
+    identical string. A relative ref becomes `C[dcol]R[drow]` (offset
+    from the origin cell); absolute parts keep their `$` literal. The
+    exact tokenisation needn't be perfect — it only has to be
+    *consistent* across a run, which it is."""
+    stripped = _strip_strings(formula)
+
+    def repl(m: re.Match[str]) -> str:
+        col_abs, letters, row_abs, digits = m.groups()
+        ref_col = _col_to_num(letters)
+        ref_row = int(digits)
+        colpart = f"${letters}" if col_abs else f"C[{ref_col - col}]"
+        rowpart = f"${digits}" if row_abs else f"R[{ref_row - row}]"
+        return colpart + rowpart
+
+    return _REF_TOKEN_RE.sub(repl, stripped)
+
+
+def detect_inconsistent_formula_in_block(
+    ctx: RuleContext,
+) -> Iterable[AuditFinding]:
+    """SS-004 — a cell in the middle of a filled run of formulas whose
+    pattern differs from both neighbours when those neighbours agree.
+
+    This is the classic, most-common, and most-dangerous spreadsheet
+    error (EuSpRIG): a formula row/column was filled correctly, then one
+    interior cell was overtyped or edited, silently breaking the
+    pattern. We flag only the *interior odd-one-out with agreeing
+    neighbours* — the highest-confidence, near-zero-false-positive
+    signature.
+    """
+    # Index normalised formulas by sheet → {(row, col): norm}.
+    by_sheet: dict[str, dict[tuple[int, int], str]] = {}
+    for cell in ctx.cells:
+        f = cell.formula or ""
+        if not f.lstrip().startswith("="):
+            continue
+        if cell.error is not None or _is_vose_cell(f):
+            continue
+        rc = _addr_to_rowcol(cell.ref.cell)
+        if rc is None:
+            continue
+        by_sheet.setdefault(cell.ref.sheet, {})[rc] = _normalize_relative(
+            f, rc[0], rc[1]
+        )
+
+    flagged: set[tuple[str, int, int]] = set()
+    for sheet, grid in by_sheet.items():
+        # Horizontal runs (same row, consecutive cols) and vertical runs
+        # (same col, consecutive rows).
+        for axis in ("h", "v"):
+            for (r, c), norm in grid.items():
+                if axis == "h":
+                    left = grid.get((r, c - 1))
+                    right = grid.get((r, c + 1))
+                else:
+                    left = grid.get((r - 1, c))
+                    right = grid.get((r + 1, c))
+                if left is None or right is None:
+                    continue  # not interior on this axis
+                if norm != left and norm != right and left == right:
+                    flagged.add((sheet, r, c))
+
+    for sheet, r, c in sorted(flagged):
+        a1 = _coord_a1(c, r)
+        yield AuditFinding(
+            severity=ctx.rule.severity,  # type: ignore[arg-type]
+            cell=CellRef(workbook=ctx.workbook, sheet=sheet, cell=a1),
+            rule_id=ctx.rule.id,
+            message=(
+                f"Cell {sheet}!{a1} breaks the formula pattern of the run "
+                f"it sits in — its neighbours on both sides share a "
+                f"pattern it doesn't. Often a cell that was overtyped "
+                f"after a row/column was filled."
+            ),
+            suggested_fix=_format_fix(ctx.rule.suggested_fix_template),
+        )
+
+
+_LETTERS = "ABCDEFGHIJKLMNOPQRSTUVWXYZ"
+
+
+def _coord_a1(col: int, row: int) -> str:
+    letters = ""
+    c = col
+    while c > 0:
+        c, rem = divmod(c - 1, 26)
+        letters = _LETTERS[rem] + letters
+    return f"{letters}{row}"
+
+
 Detector = Callable[[RuleContext], Iterable[AuditFinding]]
 
 RULES_BY_NAME: dict[str, Detector] = {
@@ -739,4 +851,5 @@ RULES_BY_NAME: dict[str, Detector] = {
     "magic_number_in_formula": detect_magic_number_in_formula,
     "number_stored_as_text": detect_number_stored_as_text,
     "overly_complex_formula": detect_overly_complex_formula,
+    "inconsistent_formula_in_block": detect_inconsistent_formula_in_block,
 }

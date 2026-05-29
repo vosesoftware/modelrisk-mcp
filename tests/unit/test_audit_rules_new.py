@@ -21,6 +21,7 @@ from modelrisk_mcp.audit.rules import (
     detect_cell_evaluates_to_error,
     detect_duplicate_output_names,
     detect_high_volatility_normal_positive_mean,
+    detect_inconsistent_formula_in_block,
     detect_input_wrapper_without_distribution,
     detect_magic_number_in_formula,
     detect_number_stored_as_text,
@@ -640,3 +641,84 @@ class TestOverlyComplexFormula:
             "overly_complex_formula", severity="info",
         )
         assert list(detect_overly_complex_formula(ctx)) == []
+
+
+class TestInconsistentFormulaInBlock:
+    """SS-004 — an interior cell that breaks a filled run's pattern when
+    its neighbours agree (the classic overtype error). Tuned for
+    near-zero false positives."""
+
+    def test_fires_on_overtyped_interior_cell(self) -> None:
+        cells = [
+            _typed_cell("B2", formula="=B1*1.1", ctype="formula"),
+            _typed_cell("C2", formula="=C1*1.5", ctype="formula"),  # overtyped
+            _typed_cell("D2", formula="=D1*1.1", ctype="formula"),
+            _typed_cell("E2", formula="=E1*1.1", ctype="formula"),
+        ]
+        ctx = _make_ctx(
+            cells, "inconsistent_formula_in_block", severity="warning"
+        )
+        findings = list(detect_inconsistent_formula_in_block(ctx))
+        assert [f.cell.cell for f in findings] == ["C2"]
+
+    def test_fires_on_vertical_run(self) -> None:
+        cells = [
+            _typed_cell("B2", formula="=A2*2", ctype="formula"),
+            _typed_cell("B3", formula="=A3+9", ctype="formula"),  # odd one
+            _typed_cell("B4", formula="=A4*2", ctype="formula"),
+        ]
+        ctx = _make_ctx(
+            cells, "inconsistent_formula_in_block", severity="warning"
+        )
+        findings = list(detect_inconsistent_formula_in_block(ctx))
+        assert [f.cell.cell for f in findings] == ["B3"]
+
+    def test_silent_on_clean_filled_run(self) -> None:
+        cells = [
+            _typed_cell("B2", formula="=B1*1.1", ctype="formula"),
+            _typed_cell("C2", formula="=C1*1.1", ctype="formula"),
+            _typed_cell("D2", formula="=D1*1.1", ctype="formula"),
+        ]
+        ctx = _make_ctx(
+            cells, "inconsistent_formula_in_block", severity="warning"
+        )
+        assert list(detect_inconsistent_formula_in_block(ctx)) == []
+
+    def test_silent_when_neighbours_disagree(self) -> None:
+        """A genuinely heterogeneous row (e.g. a summary row) has no
+        agreeing neighbours, so nothing is flagged."""
+        cells = [
+            _typed_cell("B2", formula="=B1", ctype="formula"),
+            _typed_cell("C2", formula="=SUM(A1:A9)", ctype="formula"),
+            _typed_cell("D2", formula="=D1*2", ctype="formula"),
+        ]
+        ctx = _make_ctx(
+            cells, "inconsistent_formula_in_block", severity="warning"
+        )
+        assert list(detect_inconsistent_formula_in_block(ctx)) == []
+
+    def test_silent_on_edge_cell(self) -> None:
+        """An edge cell (only one neighbour) is never flagged — avoids
+        the legitimate-boundary false positive (e.g. first period)."""
+        cells = [
+            _typed_cell("B2", formula="=999", ctype="formula"),  # edge, differs
+            _typed_cell("C2", formula="=C1*1.1", ctype="formula"),
+            _typed_cell("D2", formula="=D1*1.1", ctype="formula"),
+        ]
+        ctx = _make_ctx(
+            cells, "inconsistent_formula_in_block", severity="warning"
+        )
+        assert list(detect_inconsistent_formula_in_block(ctx)) == []
+
+    def test_relative_fill_normalises_identically(self) -> None:
+        """The whole row uses relative refs that differ literally but are
+        the same *pattern* — must NOT be flagged."""
+        cells = [
+            _typed_cell("B2", formula="=A2+B1", ctype="formula"),
+            _typed_cell("C2", formula="=B2+C1", ctype="formula"),
+            _typed_cell("D2", formula="=C2+D1", ctype="formula"),
+        ]
+        ctx = _make_ctx(
+            cells, "inconsistent_formula_in_block", severity="warning"
+        )
+        assert list(detect_inconsistent_formula_in_block(ctx)) == []

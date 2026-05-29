@@ -220,7 +220,7 @@ The server can both read *and* modify your workbook — that's the central diffe
 - **5 resources** — `modelrisk://functions`, `modelrisk://distributions`, `modelrisk://methodology`, `modelrisk://workbook/current`, `modelrisk://audit-rules`
 - **5 slash-command prompts** — `/build-risk-model`, `/audit-model`, `/interpret-results`, `/add-uncertainty`, `/import-legacy-model`
 - **1417-entry function catalogue** extracted directly from the ModelRisk IDL + XLL header
-- **16 audit rules** — 13 Monte-Carlo-methodology (VOSE-001 … VOSE-013) + 3 spreadsheet-integrity (SS-001 … SS-003) — with editable severity in `data/audit_rules.yaml`; add your own with `docs/authoring-audit-rules.md`
+- **17 audit rules** — 13 Monte-Carlo-methodology (VOSE-001 … VOSE-013) + 4 spreadsheet-integrity (SS-001 … SS-004) — with editable severity in `data/audit_rules.yaml`; add your own with `docs/authoring-audit-rules.md`
 - **Methodology-grounded distribution selection guide** in `data/distributions.yaml`
 
 ---
