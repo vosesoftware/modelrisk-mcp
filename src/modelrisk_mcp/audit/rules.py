@@ -575,6 +575,140 @@ def detect_cell_evaluates_to_error(ctx: RuleContext) -> Iterable[AuditFinding]:
         )
 
 
+# ----------------------------------------------------------------------
+# Spreadsheet-integrity rules (SS-*)
+#
+# A family distinct from the VOSE-* Monte-Carlo-methodology rules:
+# general spreadsheet-hygiene checks drawn from the established
+# spreadsheet-error / model-control discipline (O'Beirne, *Spreadsheet
+# Check and Control*; Rees, *Principles of Financial Modelling*; the
+# EuSpRIG body of work). These police the deterministic scaffolding of
+# the workbook, not its stochastic layer — so for the formula-shape
+# checks (SS-001, SS-003) we deliberately skip cells containing Vose
+# calls, whose numeric literals are distribution parameters, not
+# buried spreadsheet constants.
+# ----------------------------------------------------------------------
+
+_A1_REF_RE = re.compile(r"\b[A-Z]{1,3}\$?\d{1,7}\b")
+# A "parameter-like" literal: has a decimal point (rates, factors,
+# 1.21, 0.85). Pure integers are usually structural and excluded to
+# keep the false-positive rate low. Negative lookbehind/ahead avoid
+# matching the numeric part of a cell ref or an identifier.
+_DECIMAL_LITERAL_RE = re.compile(r"(?<![A-Za-z0-9_.$])\d+\.\d+(?![A-Za-z0-9_.])")
+_NUMERIC_TEXT_RE = re.compile(r"^[+-]?(?:\d{1,3}(?:,\d{3})+|\d+)(?:\.\d+)?%?$")
+_OPERATOR_RE = re.compile(r"[+\-*/^&]")
+
+
+def _is_vose_cell(formula: str) -> bool:
+    return any(h.startswith("Vose") for h in extract_call_heads(formula))
+
+
+def _strip_strings(formula: str) -> str:
+    """Blank out double-quoted string literals so their contents don't
+    trip the numeric / operator scans."""
+    return re.sub(r'"(?:[^"]|"")*"', " ", formula)
+
+
+def detect_magic_number_in_formula(ctx: RuleContext) -> Iterable[AuditFinding]:
+    """SS-001 — a non-Vose formula buries a parameter-like constant
+    (a decimal literal such as 1.21 or 0.85) alongside cell references.
+
+    Best practice (Rees; the FAST standard): inputs live in their own
+    labelled cells, not hard-coded inside formulas, so they're visible,
+    auditable, and changeable in one place. A rate or factor buried in
+    `=Revenue*1.21` is invisible to a reviewer and easy to get wrong.
+    """
+    for cell in ctx.cells:
+        f = cell.formula or ""
+        if not f.lstrip().startswith("="):
+            continue
+        if _is_vose_cell(f):
+            continue
+        body = _strip_strings(f)
+        if not _A1_REF_RE.search(body):
+            continue  # no cell references → not a "calculation" cell
+        literals = _DECIMAL_LITERAL_RE.findall(body)
+        if not literals:
+            continue
+        yield AuditFinding(
+            severity=ctx.rule.severity,  # type: ignore[arg-type]
+            cell=cell.ref,
+            rule_id=ctx.rule.id,
+            message=(
+                f"Cell {cell.ref.a1} buries a constant ({', '.join(literals[:3])}) "
+                f"inside a formula that also references other cells. "
+                f"Hard-coded parameters are invisible to reviewers and "
+                f"easy to mis-edit."
+            ),
+            suggested_fix=_format_fix(
+                ctx.rule.suggested_fix_template, literal=literals[0],
+            ),
+        )
+
+
+def detect_number_stored_as_text(ctx: RuleContext) -> Iterable[AuditFinding]:
+    """SS-002 — a numeric-looking value is stored as text in a cell that
+    a formula references. Text numbers silently drop out of SUM and
+    arithmetic, producing wrong totals with no error shown."""
+    # Build the set of cell addresses referenced by any formula.
+    referenced: set[str] = set()
+    for cell in ctx.cells:
+        f = cell.formula or ""
+        if f.lstrip().startswith("="):
+            for m in _A1_REF_RE.findall(_strip_strings(f)):
+                referenced.add(m.replace("$", ""))
+    for cell in ctx.cells:
+        if cell.cell_type != "text":
+            continue
+        val = cell.value
+        if not isinstance(val, str) or not _NUMERIC_TEXT_RE.match(val.strip()):
+            continue
+        if cell.ref.cell not in referenced:
+            continue  # not used in a calculation → harmless label
+        yield AuditFinding(
+            severity=ctx.rule.severity,  # type: ignore[arg-type]
+            cell=cell.ref,
+            rule_id=ctx.rule.id,
+            message=(
+                f"Cell {cell.ref.a1} holds the number {val!r} as TEXT and "
+                f"is referenced by a formula. Text numbers are skipped by "
+                f"SUM and arithmetic, silently corrupting totals."
+            ),
+            suggested_fix=_format_fix(ctx.rule.suggested_fix_template),
+        )
+
+
+def detect_overly_complex_formula(ctx: RuleContext) -> Iterable[AuditFinding]:
+    """SS-003 — a single non-Vose formula does too much. Long, dense
+    formulas are the hardest cells to review and the easiest to get
+    subtly wrong; best practice is to break a calculation into one
+    step per cell."""
+    op_threshold = 12
+    len_threshold = 256
+    for cell in ctx.cells:
+        f = cell.formula or ""
+        if not f.lstrip().startswith("="):
+            continue
+        if _is_vose_cell(f):
+            continue
+        body = _strip_strings(f)
+        n_ops = len(_OPERATOR_RE.findall(body))
+        if n_ops <= op_threshold and len(f) <= len_threshold:
+            continue
+        yield AuditFinding(
+            severity=ctx.rule.severity,  # type: ignore[arg-type]
+            cell=cell.ref,
+            rule_id=ctx.rule.id,
+            message=(
+                f"Cell {cell.ref.a1} has a complex formula "
+                f"({n_ops} operators, {len(f)} chars). Dense formulas are "
+                f"hard to review and audit — consider breaking it into "
+                f"one calculation step per cell."
+            ),
+            suggested_fix=_format_fix(ctx.rule.suggested_fix_template),
+        )
+
+
 Detector = Callable[[RuleContext], Iterable[AuditFinding]]
 
 RULES_BY_NAME: dict[str, Detector] = {
@@ -601,4 +735,8 @@ RULES_BY_NAME: dict[str, Detector] = {
     ),
     "cell_evaluates_to_error": detect_cell_evaluates_to_error,
     "arg_count_mismatch": detect_arg_count_mismatch,
+    # Spreadsheet-integrity family (SS-*).
+    "magic_number_in_formula": detect_magic_number_in_formula,
+    "number_stored_as_text": detect_number_stored_as_text,
+    "overly_complex_formula": detect_overly_complex_formula,
 }

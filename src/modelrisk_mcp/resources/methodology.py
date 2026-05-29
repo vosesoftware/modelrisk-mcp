@@ -179,6 +179,26 @@ correctness or distribution choice rather than the principles above:
 - **Error propagation.** VOSE-012 (cell_evaluates_to_error): a cell
   resolving to `#DIV/0!`, `#REF!`, etc. — especially inside a Vose
   call — poisons every iteration of the run.
+
+## Spreadsheet integrity (the SS-* rules)
+
+A separate family from the Monte-Carlo-methodology rules above:
+general spreadsheet hygiene, drawn from the established
+spreadsheet-error / model-control discipline (O'Beirne, *Spreadsheet
+Check and Control*; Rees, *Principles of Financial Modelling*; the
+EuSpRIG literature). A model can be methodologically perfect and still
+wrong if its deterministic scaffolding is broken.
+
+- **SS-001 (magic_number_in_formula)** — a parameter-like constant
+  (a decimal such as 1.21 or 0.85) buried in a formula instead of
+  living in its own labelled input cell, where it would be visible,
+  auditable, and changeable in one place.
+- **SS-002 (number_stored_as_text)** — a numeric value held as text in
+  a cell a formula references; text numbers are silently skipped by
+  SUM and arithmetic, corrupting totals with no error shown.
+- **SS-003 (overly_complex_formula)** — a single formula doing too
+  much; dense formulas are the hardest to review and the easiest to
+  get subtly wrong. Break the calculation into one step per cell.
 """
 
 

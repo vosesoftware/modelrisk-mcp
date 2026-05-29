@@ -4,6 +4,27 @@ All notable changes to ModelRisk MCP. Follows [Keep a Changelog](https://keepach
 
 ## [Unreleased]
 
+## [0.3.1-alpha.6] — 2026-05-29
+
+### Added
+
+- **A spreadsheet-integrity audit family (SS-001 … SS-003)** — a new class of audit rule, distinct from the VOSE-* Monte-Carlo-methodology rules, that checks whether the *deterministic scaffolding* of the workbook is sound. A model can be methodologically perfect and still wrong if the spreadsheet underneath it is broken. Drawn from the established spreadsheet-error / model-control discipline (O'Beirne, *Spreadsheet Check and Control*; Rees, *Principles of Financial Modelling*; the EuSpRIG literature).
+  - **SS-001 magic_number_in_formula** (info) — a parameter-like decimal (1.21, 0.85) buried in a formula instead of a labelled input cell. Skips Vose cells (their literals are distribution parameters).
+  - **SS-002 number_stored_as_text** (warning) — a numeric value held as text in a cell a formula references; silently dropped by SUM/arithmetic. Only fires when the cell is actually referenced, to keep false positives near zero.
+  - **SS-003 overly_complex_formula** (info) — a single non-Vose formula doing too much (many operators / very long); best practice is one calculation step per cell.
+
+  `audit_model` now runs **16 rules**. The new family is tuned for a low false-positive rate (decimal-only magic numbers, referenced-only text numbers, generous complexity thresholds, Vose cells excluded where their literals are legitimate).
+
+- **An annotated bibliography** in `docs/methodology.md` — the standard references for risk modelling (Vose; Savage's *Flaw of Averages*; Hubbard's *How to Measure Anything*; O'Beirne; Rees; Winston; Charnes; Hulett; Grinstead & Snell; Grzelak & Oosterlee), each with a one-line relevance note. External references for further study; no book content reproduced.
+
+### Changed
+
+- The `modelrisk://methodology` resource now documents the SS-* family in its appendix. The drift-guard test was generalised to cover any rule-id prefix (`PREFIX-###`), so every one of the 16 rules must still be cross-referenced.
+
+### Tests
+
+`TestMagicNumberInFormula`, `TestNumberStoredAsText`, `TestOverlyComplexFormula` (positive + false-positive-avoidance cases each). 513 unit tests pass.
+
 ## [0.3.1-alpha.5] — 2026-05-29
 
 ### Changed

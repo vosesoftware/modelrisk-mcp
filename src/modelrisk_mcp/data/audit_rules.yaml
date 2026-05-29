@@ -196,3 +196,55 @@ rules:
       Consider VoseLognormal(mu, sigma) (matches mean and stdev, always
       positive) or VoseGamma. If negatives ARE genuinely possible
       (returns, deltas), use VoseNormalT to truncate at zero.
+
+  # ----------------------------------------------------------------------
+  # Spreadsheet-integrity rules (SS-*) — general spreadsheet hygiene,
+  # distinct from the VOSE-* Monte-Carlo-methodology rules above. Drawn
+  # from the established spreadsheet-error / model-control discipline
+  # (O'Beirne, "Spreadsheet Check and Control"; Rees, "Principles of
+  # Financial Modelling"; the EuSpRIG literature).
+  # ----------------------------------------------------------------------
+
+  - id: SS-001
+    name: magic_number_in_formula
+    severity: info
+    enabled: true
+    description: >
+      A (non-Vose) formula buries a parameter-like constant — a decimal
+      literal such as 1.21 or 0.85 — alongside cell references. Inputs
+      should live in their own labelled cells, not be hard-coded inside
+      formulas, so they are visible, auditable, and changeable in one
+      place. A tax rate or growth factor hidden in `=Revenue*1.21` is
+      invisible to a reviewer and easy to get wrong.
+    suggested_fix_template: >
+      Move the constant {literal} into its own labelled input cell and
+      reference that cell from the formula. This makes the assumption
+      visible and lets it be changed (or made uncertain with VoseInput)
+      in one place.
+
+  - id: SS-002
+    name: number_stored_as_text
+    severity: warning
+    enabled: true
+    description: >
+      A numeric-looking value is stored as TEXT in a cell that a formula
+      references. Text numbers are silently skipped by SUM and
+      arithmetic, producing wrong totals with no error shown — one of
+      the most common and dangerous spreadsheet faults.
+    suggested_fix_template: >
+      Convert the cell to a real number (e.g. retype it, multiply by 1,
+      or use VALUE()). Then confirm any totals that reference it update.
+
+  - id: SS-003
+    name: overly_complex_formula
+    severity: info
+    enabled: true
+    description: >
+      A single (non-Vose) formula does too much — many operators or a
+      very long expression. Dense formulas are the hardest cells to
+      review and the easiest to get subtly wrong; best practice is to
+      break a calculation into one clear step per cell.
+    suggested_fix_template: >
+      Split the formula into intermediate cells, one calculation step
+      each, with labels. The model becomes far easier to audit and to
+      trace when a result looks wrong.

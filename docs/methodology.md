@@ -67,7 +67,8 @@ Three classes of problem are about mechanical correctness or distribution choice
 | Surface | Role |
 |---|---|
 | `modelrisk://methodology` resource | loaded into Claude's context at `/build-risk-model` and `/audit-model` time — shapes what gets built |
-| `audit_model` (13 rules) | checks a live workbook against the principles, cell by cell |
+| `audit_model` (16 rules) | checks a live workbook against the principles, cell by cell — 13 Monte-Carlo-methodology rules (VOSE-001…013) + 3 spreadsheet-integrity rules (SS-001…003) |
+| `modelrisk://knowledge` resource | curated risk-analysis knowledge base distilled from the ModelRisk Help, loaded at build time |
 | `propose_distributions_for_inputs` + `modelrisk://distributions` | steers family selection toward sound choices |
 | the `/build-risk-model` prompt | walks a new model through the principles in order |
 
@@ -77,13 +78,30 @@ A drift-guard test (`test_methodology_crossref.py`) keeps the principle ↔ rule
 
 ## Sources & further reading
 
-The principles above are conservative statements of established quantitative-risk practice. To deepen this into a fully *sourced* knowledge base — with specific guidance, thresholds, and worked justifications attributed to authoritative material — the natural sources are:
+The principles above are conservative statements of established quantitative-risk practice. The `modelrisk://knowledge` resource is an attributed distillation of the **ModelRisk Help** (Vose Software); the SS-* spreadsheet-integrity rules draw on the spreadsheet-control literature. For deeper study, these works are the standard references in the field.
 
-- **Vose, D. — *Risk Analysis: A Quantitative Guide*** (the standard reference; the methodology behind ModelRisk).
-- **The ModelRisk documentation / help** — function-level guidance and worked examples.
-- **Vose Software's published technical notes and consulting canon.**
+**Foundational to ModelRisk's methodology**
+- **Vose, D. — *Risk Analysis: A Quantitative Guide*.** The standard reference; the methodology ModelRisk implements. The single best next read for anyone using this server seriously.
+- **The ModelRisk Help** (Vose Software) — function-level guidance and worked examples; the source the `modelrisk://knowledge` resource distils.
 
-> *This section is a placeholder for sourced expansion. Content attributed to these works should be added with citations rather than paraphrased from memory — see the project maintainers before extending.*
+**Why quantify uncertainty (the motivating case)**
+- **Savage, S. L. — *The Flaw of Averages*.** Why plans built on average inputs are systematically wrong; the most accessible argument for simulating instead of point-estimating. Reinforces principle 1.
+- **Hubbard, D. W. — *How to Measure Anything*.** That anything can be measured, that measurement reduces uncertainty, and how to elicit calibrated estimates — directly relevant to principle 1 and to eliciting expert opinion when "we have no data."
+
+**Spreadsheet integrity (the SS-* rules)**
+- **O'Beirne, P. — *Spreadsheet Check and Control*.** Practical discipline for finding and preventing spreadsheet errors.
+- **Rees, M. — *Principles of Financial Modelling: Model Design and Best Practices Using Excel and VBA*.** Model structure and best practice — inputs separated from calculations, simple traceable formulas.
+
+**Applied simulation & domain practice**
+- **Winston, W. L. — *Financial Models Using Simulation and Optimization*.** Applied Monte Carlo and optimization in Excel.
+- **Charnes, J. — *Financial Modeling with Crystal Ball and Excel*.** Applied simulation modelling (uses Crystal Ball; the methodology transfers).
+- **Hulett, D. — *Integrated Cost-Schedule Risk Analysis*.** Project risk; why cost and schedule risk are correlated and must be modelled together (an applied case of principle 5).
+
+**Foundations & advanced**
+- **Grinstead, C. M. & Snell, J. L. — *Introduction to Probability*.** A rigorous, freely-licensed probability text — good grounding for the concepts the audit rules and distribution choices rest on.
+- **Grzelak, L. A. & Oosterlee, C. W. — *Mathematical Modeling and Computation in Finance*.** Advanced quantitative finance (stochastic processes, computational methods); relevant to deeper time-series work, less Excel-focused.
+
+> These are external references for further study; this guide does not reproduce their contents. The server's own knowledge resources (`modelrisk://methodology`, `modelrisk://knowledge`, `modelrisk://distributions`) are the material loaded into Claude at build time.
 
 ---
 

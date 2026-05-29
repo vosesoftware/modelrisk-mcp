@@ -15,7 +15,9 @@ import yaml
 
 from modelrisk_mcp.resources.methodology import _METHODOLOGY
 
-_RULE_REF_RE = re.compile(r"VOSE-0\d\d")
+# Match any rule id (VOSE-013, SS-002, …) so new rule families are
+# covered by the coverage guard automatically.
+_RULE_REF_RE = re.compile(r"\b[A-Z]{2,5}-\d{2,3}\b")
 
 
 def _audit_rule_ids() -> set[str]:

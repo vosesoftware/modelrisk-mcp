@@ -22,6 +22,9 @@ from modelrisk_mcp.audit.rules import (
     detect_duplicate_output_names,
     detect_high_volatility_normal_positive_mean,
     detect_input_wrapper_without_distribution,
+    detect_magic_number_in_formula,
+    detect_number_stored_as_text,
+    detect_overly_complex_formula,
     detect_risk_event_degenerate_probability,
     detect_voseoutput_missing_name,
 )
@@ -520,3 +523,120 @@ class TestArgCountMismatch:
         assert len(findings) == 2
         refs = {f.cell.cell for f in findings}
         assert refs == {"A1", "A2"}
+
+
+# ----------------------------------------------------------------------
+# SS-* spreadsheet-integrity rules (0.3.1) — distinct from VOSE-*
+# ----------------------------------------------------------------------
+
+
+def _typed_cell(ref: str, *, formula: str = "", value=None, ctype: str = "general") -> CellInfo:
+    return CellInfo(
+        ref=CellRef(workbook="m.xlsx", sheet="S1", cell=ref),
+        formula=formula,
+        value=value,
+        cell_type=ctype,
+    )
+
+
+class TestMagicNumberInFormula:
+    """SS-001 — a parameter-like decimal buried in a calculation."""
+
+    def test_fires_on_buried_decimal(self) -> None:
+        ctx = _make_ctx(
+            [_typed_cell("A1", formula="=B5*1.21")],
+            "magic_number_in_formula", severity="info",
+        )
+        findings = list(detect_magic_number_in_formula(ctx))
+        assert len(findings) == 1
+        assert "1.21" in findings[0].message
+
+    def test_silent_on_integer_constant(self) -> None:
+        """Pure integers are usually structural — kept quiet to hold the
+        false-positive rate down."""
+        ctx = _make_ctx(
+            [_typed_cell("A1", formula="=B5*2")],
+            "magic_number_in_formula", severity="info",
+        )
+        assert list(detect_magic_number_in_formula(ctx)) == []
+
+    def test_silent_on_no_cell_reference(self) -> None:
+        ctx = _make_ctx(
+            [_typed_cell("A1", formula="=1.21")],
+            "magic_number_in_formula", severity="info",
+        )
+        assert list(detect_magic_number_in_formula(ctx)) == []
+
+    def test_silent_on_vose_cell(self) -> None:
+        """A Vose call's literals are distribution parameters, not buried
+        spreadsheet constants — must not fire."""
+        ctx = _make_ctx(
+            [_typed_cell("A1", formula="=VoseNormal(B5, 20.5)")],
+            "magic_number_in_formula", severity="info",
+        )
+        assert list(detect_magic_number_in_formula(ctx)) == []
+
+    def test_silent_on_decimal_inside_string(self) -> None:
+        ctx = _make_ctx(
+            [_typed_cell("A1", formula='=B5&" rate 1.21"')],
+            "magic_number_in_formula", severity="info",
+        )
+        assert list(detect_magic_number_in_formula(ctx)) == []
+
+
+class TestNumberStoredAsText:
+    """SS-002 — a numeric value held as text and used in a calculation."""
+
+    def test_fires_when_referenced(self) -> None:
+        cells = [
+            _typed_cell("B1", value="1,234.50", ctype="text"),
+            _typed_cell("B3", formula="=B1+10"),
+        ]
+        ctx = _make_ctx(cells, "number_stored_as_text", severity="warning")
+        findings = list(detect_number_stored_as_text(ctx))
+        assert len(findings) == 1
+        assert findings[0].cell.cell == "B1"
+
+    def test_silent_on_text_label(self) -> None:
+        cells = [
+            _typed_cell("B2", value="Total", ctype="text"),
+            _typed_cell("B3", formula="=B2"),
+        ]
+        ctx = _make_ctx(cells, "number_stored_as_text", severity="warning")
+        assert list(detect_number_stored_as_text(ctx)) == []
+
+    def test_silent_when_unreferenced(self) -> None:
+        """A numeric-text cell nobody does arithmetic on is a harmless
+        label (e.g. a year header)."""
+        cells = [_typed_cell("C9", value="2024", ctype="text")]
+        ctx = _make_ctx(cells, "number_stored_as_text", severity="warning")
+        assert list(detect_number_stored_as_text(ctx)) == []
+
+
+class TestOverlyComplexFormula:
+    """SS-003 — a single formula doing too much."""
+
+    def test_fires_on_dense_formula(self) -> None:
+        dense = "=A1+B1*C1-D1/E1+F1*G1-H1/I1+J1*K1-L1/M1+N1"
+        ctx = _make_ctx(
+            [_typed_cell("D1", formula=dense)],
+            "overly_complex_formula", severity="info",
+        )
+        findings = list(detect_overly_complex_formula(ctx))
+        assert len(findings) == 1
+
+    def test_silent_on_simple_formula(self) -> None:
+        ctx = _make_ctx(
+            [_typed_cell("D2", formula="=A1+B1")],
+            "overly_complex_formula", severity="info",
+        )
+        assert list(detect_overly_complex_formula(ctx)) == []
+
+    def test_silent_on_vose_cell(self) -> None:
+        """Long Vose composition formulas are legitimately complex."""
+        long_vose = "=VoseAggregateMC(VosePoisson(4), VoseLognormal(250000, 400000))"
+        ctx = _make_ctx(
+            [_typed_cell("A1", formula=long_vose)],
+            "overly_complex_formula", severity="info",
+        )
+        assert list(detect_overly_complex_formula(ctx)) == []
