@@ -4,6 +4,29 @@ All notable changes to ModelRisk MCP. Follows [Keep a Changelog](https://keepach
 
 ## [Unreleased]
 
+## [0.3.1-alpha.1] — 2026-05-23
+
+### Changed
+
+- **Report charts now follow a complete styling ruleset** (`docs/chart-style-guide.md`), taking the native Excel histogram and tornado from "generic" to "designer-perfect" — while staying **native, editable chart objects** (no embedded images). The histogram in `build_executive_report` gains:
+  - **Round-number bins** (`_nice_bins`): bin edges floor/ceil to a `1/2/2.5/5 × 10ⁿ` width, so the X axis reads `2M 3M 4M…` instead of irregular raw bin centres (`2,182,219 …`). This was the single worst aesthetic problem in the old charts.
+  - **Magnitude-aware tick formats** (`_axis_scale_format`): `4M` / `850K` / `420` depending on scale; thinned labels via `TickLabelSpacing`.
+  - **Central-80% bar shading**: bars inside [P10, P90] solid brand-blue, tails muted — the confidence interval shown directly on the bars, no extra series.
+  - **Decluttered**: count-axis labels removed (absolute frequency isn't decision-relevant), gridlines moved to the cumulative-% axis, no tick marks, no chart/plot borders, tight `GapWidth=16`.
+  - **Secondary axis hard-capped at 100%** (`Max=1.0, MajorUnit=0.2`).
+  - **Brand typography**: one font family chart-wide, left-aligned navy semibold title.
+
+  The tornado and any chart using the shared `_style_chart_frame` / `_style_chart_axes` helpers inherit the font, border-removal, tick-mark removal, and left-aligned title automatically.
+
+### Added
+
+- `docs/chart-style-guide.md` — the 11-rule chart styling standard, documented (not just coded), with the colour palette table and the function map.
+- `_HistogramBins`, `_nice_bins`, `_percentile`, `_axis_scale_format` in `reports.py` — the pure, testable core of the binning/scaling logic.
+
+### Tests
+
+`test_report_binning.py` — 18 cases covering round-boundary binning, label spacing, monotone cumulative, degenerate/empty inputs, percentile interpolation, and magnitude-format selection. 490 unit tests pass.
+
 ## [0.3.0] — 2026-05-23
 
 First stable release of the 0.3 line. Promotion from `0.3.0-alpha.38` with no functional changes — version bump only.

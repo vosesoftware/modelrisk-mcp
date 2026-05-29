@@ -48,6 +48,8 @@ _XL_BAR_CLUSTERED = 57
 _XL_COLUMN_CLUSTERED = 51
 _XL_COLUMNS = 2          # PlotBy argument for SetSourceData (series are columns)
 _XL_SHEET_VERY_HIDDEN = 2  # Worksheet.Visible value — unreachable from UI
+_XL_TICK_MARK_NONE = -4142       # xlNone — no tick marks
+_XL_TICK_LABEL_NONE = -4142      # xlNone — hide axis tick labels entirely
 
 
 # Single workbook-scoped sheet that holds the staging data for every
@@ -106,7 +108,8 @@ _COLOR_DRIVER_WEAK = _rgb(140, 140, 140)
 # band's deep-navy plus complementary positive / negative tones for
 # directional bars. Used consistently across both report builders so
 # the visual identity is unified.
-_COLOR_CHART_PRIMARY = _rgb(45, 85, 135)    # steel blue — histogram bars
+_COLOR_CHART_PRIMARY = _rgb(45, 85, 135)    # steel blue — histogram core bars
+_COLOR_CHART_MUTED = _rgb(170, 190, 215)    # light blue — histogram tail bars
 _COLOR_CHART_LINE = _rgb(190, 90, 40)       # burnt orange — cumulative line
 _COLOR_BAR_POSITIVE = _rgb(40, 110, 60)     # forest green — driver lifts output
 _COLOR_BAR_NEGATIVE = _rgb(170, 50, 50)     # brick red — driver lowers output
@@ -140,6 +143,11 @@ def _style_chart_axes(
             x_axis.TickLabels.NumberFormat = x_number_format
         x_axis.TickLabels.Font.Color = _COLOR_AXIS_TEXT
         x_axis.TickLabels.Font.Size = 9
+        try:
+            x_axis.MajorTickMark = _XL_TICK_MARK_NONE
+            x_axis.MinorTickMark = _XL_TICK_MARK_NONE
+        except Exception:
+            pass
         if hide_major_gridlines:
             try:
                 x_axis.HasMajorGridlines = False
@@ -153,10 +161,16 @@ def _style_chart_axes(
             y_axis.TickLabels.NumberFormat = y_number_format
         y_axis.TickLabels.Font.Color = _COLOR_AXIS_TEXT
         y_axis.TickLabels.Font.Size = 9
+        try:
+            y_axis.MajorTickMark = _XL_TICK_MARK_NONE
+            y_axis.MinorTickMark = _XL_TICK_MARK_NONE
+        except Exception:
+            pass
         if hide_major_gridlines:
             try:
                 y_axis.HasMajorGridlines = True
                 y_axis.MajorGridlines.Format.Line.ForeColor.RGB = _COLOR_GRIDLINE
+                y_axis.MajorGridlines.Format.Line.Weight = 0.75
             except Exception:
                 pass
     except Exception:
@@ -176,22 +190,45 @@ def _style_chart_axes(
         pass
 
 
+_CHART_FONT = "Segoe UI"
+
+
 def _style_chart_frame(chart_api: Any, title_size: int = 13) -> None:
-    """Frame the chart: soft border, no legend by default, sized title."""
+    """Frame the chart per the style guide: one font family chart-wide,
+    no chart/plot border, no legend by default, left-aligned brand
+    title. Every step is independently wrapped so a missing element
+    never tanks the report."""
     try:
         chart_api.HasLegend = False
     except Exception:
         pass
+    # One font family across the whole chart.
     try:
-        chart_api.ChartArea.Format.Line.ForeColor.RGB = _COLOR_CHART_BORDER
-        chart_api.ChartArea.Format.Line.Weight = 0.75
+        chart_api.ChartArea.Format.TextFrame2.TextRange.Font.Name = _CHART_FONT
+    except Exception:
+        pass
+    # Chartjunk: no chart-area border, no plot-area border/fill.
+    try:
+        chart_api.ChartArea.Format.Line.Visible = False
     except Exception:
         pass
     try:
+        chart_api.PlotArea.Format.Line.Visible = False
+        chart_api.PlotArea.Format.Fill.Visible = False
+    except Exception:
+        pass
+    # Title: left-aligned, semibold, brand navy.
+    try:
         if chart_api.HasTitle:
-            chart_api.ChartTitle.Format.TextFrame2.TextRange.Font.Size = title_size
-            chart_api.ChartTitle.Format.TextFrame2.TextRange.Font.Bold = True
-            chart_api.ChartTitle.Format.TextFrame2.TextRange.Font.Fill.ForeColor.RGB = _COLOR_TITLE_BG
+            tf = chart_api.ChartTitle.Format.TextFrame2.TextRange.Font
+            tf.Size = title_size
+            tf.Bold = True
+            tf.Name = _CHART_FONT
+            tf.Fill.ForeColor.RGB = _COLOR_TITLE_BG
+            try:
+                chart_api.ChartTitle.Left = 6
+            except Exception:
+                pass
     except Exception:
         pass
 
@@ -278,6 +315,7 @@ class ExecutiveReportBuilder:
             sheet,
             primary_output=primary_output,
             primary_samples=primary_samples,
+            primary_percentiles=primary_result.percentiles,
             sensitivity=sensitivity,
             top_drivers=top_drivers,
         )
@@ -455,6 +493,7 @@ class ExecutiveReportBuilder:
         *,
         primary_output: str,
         primary_samples: list[float],
+        primary_percentiles: dict[float, float],
         sensitivity: SensitivityRanking,
         top_drivers: int,
     ) -> int:
@@ -471,18 +510,26 @@ class ExecutiveReportBuilder:
         hist_col = ExecutiveReportBuilder._HELPER_HISTOGRAM_COL
         if primary_samples:
             try:
+                bins = _nice_bins(primary_samples)
+                # P10/P90 drive the central-80% bar shading. Prefer the
+                # already-computed percentiles; fall back to the samples.
+                p10 = primary_percentiles.get(0.10) or _percentile(
+                    primary_samples, 0.10)
+                p90 = primary_percentiles.get(0.90) or _percentile(
+                    primary_samples, 0.90)
                 _clear_helper_block(
-                    helper, hist_col, columns=3, rows=_HISTOGRAM_BINS + 2,
+                    helper, hist_col, columns=3, rows=bins.n + 2,
                 )
                 _write_histogram_data(
-                    helper, primary_samples,
-                    anchor_col=hist_col, anchor_row=1,
+                    helper, bins, anchor_col=hist_col, anchor_row=1,
                 )
                 chart_count += _add_histogram_chart(
                     sheet,
                     helper=helper,
                     helper_anchor_col=hist_col,
-                    bin_count=_HISTOGRAM_BINS,
+                    bins=bins,
+                    p10=p10,
+                    p90=p90,
                     title=f"Distribution — {primary_output}",
                     # Shifted right by ~16pt post-alpha.20 to align
                     # with column B (content starts after gutter A).
@@ -681,6 +728,90 @@ class ExecutiveReportBuilder:
 _HISTOGRAM_BINS = 30
 
 
+@dataclass(frozen=True)
+class _HistogramBins:
+    """A histogram computed on ROUND-NUMBER boundaries so the chart's
+    category axis reads `2M, 3M, 4M…` rather than irregular bin
+    centres. `label_every` is how many bins make up one nice major
+    unit — used to thin the X tick labels."""
+
+    centres: list[float]
+    counts: list[int]
+    cumulative: list[float]
+    lo: float
+    bin_width: float
+    n: int
+    label_every: int
+
+
+def _percentile(samples: list[float], q: float) -> float:
+    """Linear-interpolated percentile (q in 0..1). Local helper so the
+    chart layer doesn't depend on the stats objects carrying every
+    percentile we might want for shading."""
+    if not samples:
+        return 0.0
+    s = sorted(samples)
+    k = (len(s) - 1) * q
+    f = math.floor(k)
+    c = min(f + 1, len(s) - 1)
+    if f == c:
+        return s[f]
+    return s[f] + (s[c] - s[f]) * (k - f)
+
+
+def _nice_bins(samples: list[float], target: int = _HISTOGRAM_BINS) -> _HistogramBins:
+    """Bin `samples` onto round boundaries.
+
+    Picks a 'nice' bin width (1/2/2.5/5 x 10^n) close to span/target,
+    then floors/ceils the range to that width so bin edges — and the
+    thinned tick labels — land on round values. This is rule #1 of the
+    chart style guide: a histogram X axis must show meaningful round
+    numbers, never raw min/max-derived bin centres."""
+    if not samples:
+        return _HistogramBins([], [], [], 0.0, 1.0, 0, 1)
+    lo_raw, hi_raw = min(samples), max(samples)
+    span = hi_raw - lo_raw
+    if span <= 0:
+        span = abs(hi_raw) or 1.0
+    raw_w = span / max(1, target)
+    mag = 10 ** math.floor(math.log10(raw_w)) if raw_w > 0 else 1.0
+    bin_w = next((m * mag for m in (1, 2, 2.5, 5, 10) if raw_w <= m * mag),
+                 10 * mag)
+    lo = math.floor(lo_raw / bin_w) * bin_w
+    hi = math.ceil(hi_raw / bin_w) * bin_w
+    n = max(1, round((hi - lo) / bin_w))
+    counts = [0] * n
+    for s in samples:
+        idx = min(n - 1, max(0, int((s - lo) / bin_w)))
+        counts[idx] += 1
+    centres = [lo + (j + 0.5) * bin_w for j in range(n)]
+    cum, total, cumulative = 0, len(samples), []
+    for c in counts:
+        cum += c
+        cumulative.append(cum / total)
+    label_span = hi - lo
+    major = next(
+        (mu for mu in (bin_w, bin_w * 2, bin_w * 2.5, bin_w * 5,
+                       bin_w * 10, bin_w * 20)
+         if 4 <= (label_span / mu if mu else 999) <= 9),
+        bin_w * 5,
+    )
+    label_every = max(1, round(major / bin_w))
+    return _HistogramBins(centres, counts, cumulative, lo, bin_w, n, label_every)
+
+
+def _axis_scale_format(values: list[float]) -> str:
+    """Magnitude-aware number format for a value axis. Keeps tick
+    labels short ('4M', '850K') regardless of whether the model is
+    currency. Rule #2 of the style guide."""
+    m = max((abs(v) for v in values), default=0.0)
+    if m >= 1e6:
+        return '#,##0,,"M"'
+    if m >= 1e3:
+        return '#,##0,"K"'
+    return '#,##0'
+
+
 # ---------------------------------------------------------------------------
 # Hidden helper sheet + chart binding
 # ---------------------------------------------------------------------------
@@ -769,35 +900,22 @@ def _bind_chart_to_range(
 
 
 def _write_histogram_data(
-    sheet: Any, samples: list[float], *, anchor_col: str, anchor_row: int,
+    sheet: Any, bins: _HistogramBins, *, anchor_col: str, anchor_row: int,
 ) -> None:
-    """Compute histogram counts and write bin centres / counts /
-    cumulative as three columns starting at anchor on the provided
+    """Write a precomputed `_HistogramBins` as three columns (bin
+    centre / count / cumulative) starting at anchor on the provided
     sheet (typically the hidden helper sheet)."""
-    if not samples:
+    if bins.n == 0:
         return
-    lo, hi = min(samples), max(samples)
-    if hi == lo:
-        hi = lo + 1.0
-    bin_w = (hi - lo) / _HISTOGRAM_BINS
-    counts = [0] * _HISTOGRAM_BINS
-    for s in samples:
-        idx = min(_HISTOGRAM_BINS - 1, max(0, int((s - lo) / bin_w)))
-        counts[idx] += 1
-    # Write header in anchor row, data starting next row.
     headers = ["Bin", "Count", "Cumulative %"]
     for i, h in enumerate(headers):
         col = chr(ord(anchor_col) + i)
         sheet.range(f"{col}{anchor_row}").value = h
-    cumulative = 0
-    total = len(samples)
-    for j in range(_HISTOGRAM_BINS):
-        bin_centre = lo + (j + 0.5) * bin_w
-        cumulative += counts[j]
+    for j in range(bins.n):
         row = anchor_row + 1 + j
-        sheet.range(f"{anchor_col}{row}").value = bin_centre
-        sheet.range(f"{chr(ord(anchor_col) + 1)}{row}").value = counts[j]
-        sheet.range(f"{chr(ord(anchor_col) + 2)}{row}").value = cumulative / total
+        sheet.range(f"{anchor_col}{row}").value = bins.centres[j]
+        sheet.range(f"{chr(ord(anchor_col) + 1)}{row}").value = bins.counts[j]
+        sheet.range(f"{chr(ord(anchor_col) + 2)}{row}").value = bins.cumulative[j]
 
 
 def _add_histogram_chart(
@@ -805,7 +923,9 @@ def _add_histogram_chart(
     *,
     helper: Any,
     helper_anchor_col: str,
-    bin_count: int,
+    bins: _HistogramBins,
+    p10: float,
+    p90: float,
     title: str,
     left: int, top: int, width: int, height: int,
 ) -> int:
@@ -816,17 +936,24 @@ def _add_histogram_chart(
 
     Layout assumption: helper sheet has a 3-column block at
     `helper_anchor_col` — bin centres in col[0], counts in col[1],
-    cumulative % in col[2], all with a header row at row 1. The chart
-    plots Count + Cumulative as data series and uses Bin as the
-    X-axis categories.
+    cumulative % in col[2], all with a header row at row 1.
 
-    Bug #18b (alpha.20) — prior versions used `SetSourceData` against
-    the whole 3-column range, which made Excel turn EVERY column into
-    a data series. The visible result was a chart with three labelled
-    series ("Bin", "Count", "Cumulative %") where Bin's numeric values
-    were being plotted as bars instead of forming the X-axis. Fix:
-    bind only the Count + Cumulative columns, then explicitly assign
-    XValues on both series to point at the Bin column."""
+    Styling follows docs/chart-style-guide.md (alpha 0.3.1):
+      * round-number X labels via `_axis_scale_format` + thinned
+        `TickLabelSpacing` (bins are pre-rounded by `_nice_bins`)
+      * central-80% shading: bars whose centre is inside [P10, P90]
+        get the solid brand colour, tails get the muted tone — the
+        confidence interval is shown directly on the bars
+      * tight `GapWidth` so it reads as a histogram, not a bar chart
+      * NO count-axis labels (absolute frequency isn't decision-
+        relevant); horizontal gridlines move to the % axis
+      * secondary axis hard-capped at 100%
+
+    Bug #18b (alpha.20) — bind only the Count + Cumulative columns,
+    then explicitly assign XValues to the Bin column so the bin
+    midpoints form the category axis (not the 1..N row index)."""
+    if bins.n == 0:
+        return 0
     try:
         chart = sheet.charts.add(left=left, top=top, width=width, height=height)
     except Exception:
@@ -834,11 +961,7 @@ def _add_histogram_chart(
     bin_col = helper_anchor_col
     count_col = chr(ord(helper_anchor_col) + 1)
     cum_col = chr(ord(helper_anchor_col) + 2)
-    # Bind to ONLY the Count + Cumulative columns. The Bin column
-    # becomes the category axis below, not a data series.
-    data_range = helper.range(
-        f"{count_col}1:{cum_col}{1 + bin_count}"
-    )
+    data_range = helper.range(f"{count_col}1:{cum_col}{1 + bins.n}")
     try:
         chart_api = chart.api[1] if isinstance(chart.api, tuple) else chart.api
         chart_api.ChartType = _XL_COLUMN_CLUSTERED
@@ -847,10 +970,7 @@ def _add_histogram_chart(
     bound = _bind_chart_to_range(chart, data_range, plot_by=_XL_COLUMNS)
     if not bound:
         return 0
-    # Assign bin centres as the X-axis for both series. Without this
-    # the chart's X-axis labels would be 1..N (the row index) instead
-    # of the bin midpoints — which is what the prior version showed.
-    x_range = helper.range(f"{bin_col}2:{bin_col}{1 + bin_count}")
+    x_range = helper.range(f"{bin_col}2:{bin_col}{1 + bins.n}")
     try:
         chart_api = chart.api[1] if isinstance(chart.api, tuple) else chart.api
         chart_api.HasTitle = True
@@ -860,41 +980,96 @@ def _add_histogram_chart(
                 chart_api.SeriesCollection(i).XValues = x_range.api
             except Exception:
                 pass
-        # alpha.23 polish: brand the histogram bars (steel blue) and
-        # make the cumulative line a thinner, complementary burnt-
-        # orange. Default Excel colours look generic.
+        # --- bars: central-80% shading (core solid, tails muted) ---
         try:
             bars = chart_api.SeriesCollection(1)
             bars.Format.Fill.ForeColor.RGB = _COLOR_CHART_PRIMARY
-            bars.Format.Line.Visible = False  # no per-bar outline
+            bars.Format.Line.Visible = False
+            for idx in range(bins.n):
+                centre = bins.centres[idx]
+                colour = (
+                    _COLOR_CHART_PRIMARY if p10 <= centre <= p90
+                    else _COLOR_CHART_MUTED
+                )
+                try:
+                    bars.Points(idx + 1).Format.Fill.ForeColor.RGB = colour
+                except Exception:
+                    continue
         except Exception:
             pass
-        # Make the cumulative series a line on a secondary axis.
+        # --- tight gap width: reads as a histogram ---
+        try:
+            chart_api.ChartGroups(1).GapWidth = 16
+        except Exception:
+            pass
+        # --- cumulative series → line on the secondary axis ---
         try:
             series = chart_api.SeriesCollection(2)
             series.ChartType = 4  # xlLine
-            series.AxisGroup = 2  # secondary axis
+            series.AxisGroup = 2
             series.Format.Line.ForeColor.RGB = _COLOR_CHART_LINE
             series.Format.Line.Weight = 2.25
             try:
-                # Hide line markers — they add visual noise on a
-                # 30-point monotonic CDF.
                 series.MarkerStyle = _XL_LINE_STYLE_NONE
             except Exception:
                 pass
         except Exception:
             pass
-        # Hide the legend (small chart, two series with self-evident
-        # roles via title + colour) and frame the chart.
         _style_chart_frame(chart_api)
-        # Number formats: bin axis as thousands-separated currency-ish,
-        # primary Y as integers (counts), secondary Y as percent.
-        _style_chart_axes(
-            chart_api,
-            x_number_format='#,##0;(#,##0);-',
-            y_number_format='#,##0',
-            y2_number_format='0%',
-        )
+        # --- X axis: round-number labels, thinned, no tick marks ---
+        try:
+            xa = chart_api.Axes(1)
+            xa.TickLabels.NumberFormat = _axis_scale_format(bins.centres)
+            xa.TickLabels.Font.Color = _COLOR_AXIS_TEXT
+            xa.TickLabels.Font.Size = 9
+            xa.TickLabelSpacing = bins.label_every
+            try:
+                xa.TickMarkSpacing = bins.label_every
+            except Exception:
+                pass
+            xa.MajorTickMark = _XL_TICK_MARK_NONE
+            xa.MinorTickMark = _XL_TICK_MARK_NONE
+            try:
+                xa.HasMajorGridlines = False
+            except Exception:
+                pass
+        except Exception:
+            pass
+        # --- primary Y (counts): hide labels + gridlines, keep title ---
+        try:
+            ya = chart_api.Axes(2, 1)
+            ya.TickLabelPosition = _XL_TICK_LABEL_NONE
+            ya.MajorTickMark = _XL_TICK_MARK_NONE
+            try:
+                ya.HasMajorGridlines = False
+            except Exception:
+                pass
+            ya.HasTitle = True
+            ya.AxisTitle.Text = "Frequency"
+            ya.AxisTitle.Format.TextFrame2.TextRange.Font.Size = 10
+            ya.AxisTitle.Format.TextFrame2.TextRange.Font.Fill.ForeColor.RGB = (
+                _COLOR_AXIS_TEXT
+            )
+        except Exception:
+            pass
+        # --- secondary Y (cumulative %): hard cap 100%, owns gridlines ---
+        try:
+            y2 = chart_api.Axes(2, 2)
+            y2.MinimumScale = 0
+            y2.MaximumScale = 1.0
+            y2.MajorUnit = 0.2
+            y2.TickLabels.NumberFormat = '0%'
+            y2.TickLabels.Font.Size = 9
+            y2.TickLabels.Font.Color = _COLOR_CHART_LINE
+            y2.MajorTickMark = _XL_TICK_MARK_NONE
+            try:
+                y2.HasMajorGridlines = True
+                y2.MajorGridlines.Format.Line.ForeColor.RGB = _COLOR_GRIDLINE
+                y2.MajorGridlines.Format.Line.Weight = 0.75
+            except Exception:
+                pass
+        except Exception:
+            pass
         chart.name = f"Histogram_{title[:20]}"[:31]
     except Exception:
         pass
