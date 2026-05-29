@@ -177,6 +177,10 @@ Out comes a multi-sheet Excel report and a Markdown brief. The whole sequence to
 ## Where to go next
 
 - **[Quick-start tutorial](quick-start.md)** — 15-minute, zero-to-simulation walkthrough
+- **[Walk-through scenarios](scenarios.md)** — six problem-shaped recipes
+- **[Methodology](methodology.md)** — the principles behind every model
+- **[Distribution selection](distribution-selection.md)** — which distribution for which quantity
+- **[Modeling patterns](modeling-patterns.md)** — frequency-severity, correlation, time-series, and more
 - **[Glossary](glossary.md)** — Monte Carlo + MCP vocabulary
 - **[README](../README.md)** — quick-start install + wire instructions
 - **[docs/installation.md](installation.md)** — fuller install guide

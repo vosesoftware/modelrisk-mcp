@@ -257,7 +257,10 @@ Whether the model is sound enough to base a decision on — and a clean bill of 
 
 - **[User manual](user-manual.md)** — the eight capabilities in depth, plus what the server does and doesn't do
 - **[Quick-start](quick-start.md)** — the 15-minute first-simulation tutorial
+- **[Methodology](methodology.md)** — the principles behind every model
+- **[Distribution selection](distribution-selection.md)** — which distribution for which quantity
+- **[Modeling patterns](modeling-patterns.md)** — the techniques behind these scenarios
 - **[Glossary](glossary.md)** — Monte Carlo + MCP vocabulary
-- **`modelrisk://methodology`** — fetch the eight Vose methodology principles from any MCP client
+- **`modelrisk://methodology`** — fetch the methodology principles from any MCP client
 
 Have a problem that doesn't fit any of these six? Describe it to Claude directly — "I'm trying to model X, the uncertain parts are Y and Z" — and it'll propose a structure. The scenarios are starting points, not a closed set.

@@ -295,6 +295,9 @@ MIT. See [LICENSE](LICENSE).
 | [Quick-start tutorial](docs/quick-start.md) | 15 minutes, zero to your first simulation |
 | [Walk-through scenarios](docs/scenarios.md) | Six problem-shaped recipes — budgets, data fitting, loss aggregation, correlated inputs, stress tests, audits |
 | [User manual](docs/user-manual.md) | The eight things you can do, in depth; what the server does and doesn't do |
+| [Methodology](docs/methodology.md) | The principles behind every model, each tied to the audit rule that enforces it |
+| [Distribution selection](docs/distribution-selection.md) | Which distribution for which uncertain quantity |
+| [Modeling patterns](docs/modeling-patterns.md) | Techniques — frequency-severity, correlation, common random numbers, time-series choice |
 | [Glossary](docs/glossary.md) | Monte Carlo + MCP vocabulary for non-statisticians |
 | [Installation](docs/installation.md) | Full install + activation detail |
 | [Claude Desktop setup](docs/claude-desktop.md) · [Claude Code setup](docs/claude-code.md) · [Claude for Excel setup](docs/claude-for-excel.md) | Per-client wiring |
