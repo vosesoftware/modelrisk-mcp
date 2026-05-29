@@ -4,6 +4,22 @@ All notable changes to ModelRisk MCP. Follows [Keep a Changelog](https://keepach
 
 ## [Unreleased]
 
+## [0.3.1-alpha.2] — 2026-05-29
+
+### Changed
+
+- **The `modelrisk://methodology` resource is now a methodology *knowledge base*, not just a list.** Each of the 8 core principles gains a **Why**, a **Failure mode**, and an **Enforced by** line naming the audit rule(s) that police it — so a principle is never just advice, it's tied to a check `audit_model` runs against the live workbook. The resource is loaded into the LLM's context at `/build-risk-model` and `/audit-model` time, so this directly sharpens how Claude builds and critiques models.
+
+  A closing section maps the remaining rules that are about *correctness* or *distribution selection* rather than the core principles (VOSE-001, VOSE-011, VOSE-012, VOSE-013) — so all 13 audit rules are now cross-referenced from the methodology. Nothing in the knowledge base is invented: it's grounded in the existing principles and the existing rule set.
+
+### Added
+
+- `test_methodology_crossref.py` — a **drift guard**: every `VOSE-0NN` cited in the methodology must exist in `audit_rules.yaml`, and every rule must be referenced back. Renaming, adding, or removing a rule without updating the methodology now fails CI. Knowledge that drifts from code is worse than none; this makes drift unmergeable.
+
+### Tests
+
+501 unit tests pass (+4 cross-reference / structure guards).
+
 ## [0.3.1-alpha.1] — 2026-05-23
 
 ### Changed
