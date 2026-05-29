@@ -4,6 +4,31 @@ All notable changes to ModelRisk MCP. Follows [Keep a Changelog](https://keepach
 
 ## [Unreleased]
 
+## [0.3.1] — 2026-05-29
+
+First stable release of the 0.3.1 line. Promotion from `0.3.1-alpha.7` with no functional changes beyond the version bump. The line adds three substantial things on top of 0.3.0, all without changing the tool surface:
+
+### Designer-quality native charts
+
+Report charts (`build_executive_report`, `build_drivers_report`) now follow a complete styling ruleset — round-number axis bins, magnitude-aware labels, central-80% confidence shading on the histogram, decluttered axes, capped cumulative axis, brand typography — while staying **native, editable Excel chart objects** (no embedded images). Documented in `docs/chart-style-guide.md`. (α.1)
+
+### A risk-analysis knowledge layer
+
+- **`modelrisk://knowledge`** — a new MCP resource: a curated, attributed distillation of the **ModelRisk Help** (Vose Software) in ten sections — why to quantify uncertainty, the two forms of uncertainty, selecting a distribution (the five properties), expert opinion, correlation, time series, fitting (MLE + information criteria + the parametric-bootstrap uncertainty parameter), aggregation methods, interpreting sensitivity, and a ~18-family quick-reference. Loaded into the LLM's context by the build/audit prompts. (α.3–α.5)
+- **`modelrisk://methodology`** deepened — each of the 8 principles now carries its reasoning, failure mode, and the audit rule that enforces it, guarded against drift by a test. (α.2)
+- New human docs: `methodology.md`, `distribution-selection.md`, `modeling-patterns.md`, `knowledge-base.md`, plus an annotated bibliography of the standard risk-modelling literature. (α.2, α.6)
+
+### Spreadsheet-integrity audit family
+
+`audit_model` grew from 13 to **17 rules** with a new **SS-*** family — general spreadsheet hygiene, distinct from the VOSE-* Monte-Carlo-methodology rules, drawn from the spreadsheet-control discipline (O'Beirne, Rees, EuSpRIG): SS-001 magic-number-in-formula, SS-002 number-stored-as-text, SS-003 overly-complex-formula, and SS-004 inconsistent-formula-in-block (the classic overtype error, detected with near-zero false positives). (α.6–α.7)
+
+### Quality bar at cut
+
+- **519 unit tests** pass; ruff + mypy clean
+- 17 audit rules across two families, all cross-referenced to the methodology and drift-guarded
+- knowledge base ships as a force-included data file (verified in the wheel) and serves as an MCP resource
+- 10x faster `iterate_cells` / `audit_model` carried over from 0.3.0's perf work
+
 ## [0.3.1-alpha.7] — 2026-05-29
 
 ### Added
