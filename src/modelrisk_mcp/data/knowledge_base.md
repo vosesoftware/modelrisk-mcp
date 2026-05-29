@@ -278,6 +278,46 @@ screening of which drivers matter at all.
 
 ---
 
+## 10. Distribution family quick-reference
+
+A condensed "what it models / when to reach for it / watch-out" for the
+most-used families. Use it with §3 (the five properties) and the
+distribution-selection guide; for the full treatment of any family see
+its ModelRisk Help article.
+
+**Continuous**
+
+| Family | Models / typical use | Watch-out |
+|---|---|---|
+| **Normal** | Symmetric, unbounded quantity; the sum of many small independent effects (Central Limit Theorem). | Unbounded both ways — leaks below zero for a positive quantity (VOSE-011); truncate or use Lognormal. |
+| **Lognormal** | Positive, right-skewed quantity that is the *product* of many factors (CLT for products); things estimated "to within a factor of 2" or by orders of magnitude (gas reserves, costs, durations). | Heavy upper tail — sanity-check extreme draws. |
+| **PERT / ModPERT** | Subjective 3-point estimate (min, mode, max); a smooth Beta-based shape. ModPERT sharpens the peak vs classic PERT. | Encodes a specific mean assumption from the mode; if the expert disagrees with that weighting, reconsider. |
+| **Triangle** | Simplest 3-point estimate when you have nothing beyond min/mode/max. | Linear sides overweight the extremes vs PERT — tends to overstate tail risk. |
+| **Uniform** | Every value in a range equally likely — genuine "no preference" within bounds. | Rarely realistic for a real quantity; usually a placeholder, not a considered choice. |
+| **Beta** | Proportions and probabilities on [0, 1]; the uncertainty about a probability `p`. | Reparameterisations abound (Beta4, BetaSubjective) — pick the parameterisation matching your inputs. |
+| **Gamma** | Positive, right-skewed; waiting time for several events, sums of exponentials. | Flexible — let data or theory, not habit, justify it over Lognormal. |
+| **Weibull** | Lifetimes / time-to-failure; reliability with a wear-in or wear-out hazard. | The shape parameter encodes the hazard pattern — choose it deliberately. |
+| **Exponential** | Time *between* independent events at a constant rate (memoryless). | Memorylessness is a strong assumption; real inter-event times often aren't. |
+| **Pareto** | Heavy-tailed quantities — large losses, wealth, city sizes. | Very heavy tail; mean/variance may be undefined for some parameters. |
+| **Student-t** | Symmetric but heavier-tailed than Normal — returns, errors with outliers. | Use when tails matter; the degrees-of-freedom parameter sets tail weight. |
+
+**Discrete**
+
+| Family | Models / typical use | Watch-out |
+|---|---|---|
+| **Bernoulli** | A single yes/no trial with probability `p`. | For an event *with an impact*, wrap in `VoseRiskEvent` (§2). |
+| **Binomial** | Number of successes in `n` fixed independent trials, fixed `p`. | Requires a known, fixed `n` and constant `p`. |
+| **Poisson** | Count of events in a period at an expected rate λ (events arrive as a Poisson process). | Forces variance = mean; if counts are over-dispersed, use Negative Binomial. |
+| **Negative Binomial** | Over-dispersed counts (variance > mean) — clustering, contagion, heterogeneity. | The over-dispersion is the reason to pick it over Poisson — confirm it's present. |
+| **Geometric** | Number of trials until the first success. | Memoryless like the Exponential; check that assumption. |
+| **Hypergeometric** | Successes when drawing *without replacement* from a finite population. | Different from Binomial precisely because of no replacement (small populations). |
+| **Discrete** | An explicit list of values each with its own probability. | Probabilities should reflect real belief, not convenience; they're rescaled to sum to 1. |
+
+*Source: ModelRisk Help — Continuous distributions and Discrete
+distributions (per-family "Uses" sections).*
+
+---
+
 ## How to use this knowledge base
 
 - When **building**: work down §3's five properties for every input;
@@ -287,6 +327,8 @@ screening of which drivers matter at all.
   §2's two-forms distinction front of mind.
 - When **interpreting**: use §9 to choose and read the right sensitivity
   view for the question (mean vs tail vs screening).
+- For a fast **family pick**: scan §10's quick-reference, then confirm
+  against §3's five properties.
 - When **auditing**: these principles are the *why* behind the audit
   rules — see `modelrisk://methodology` for the principle-to-rule map.
 - For the **mechanics** (which exact function, how to compose

@@ -11,7 +11,7 @@ To keep a single source of truth, the substance ships as a package **data file**
 
 ## What's in it
 
-Nine sections, each distilled from a ModelRisk Help article:
+Ten sections, each distilled from a ModelRisk Help article:
 
 | Section | Source article |
 |---|---|
@@ -24,6 +24,7 @@ Nine sections, each distilled from a ModelRisk Help article:
 | Fitting distributions to data (MLE, information criteria, the uncertainty parameter) | *Fitting in ModelRisk* |
 | Choosing an aggregation method (Monte Carlo / Panjer / De Pril / FFT) | *Aggregate modeling in ModelRisk* |
 | Interpreting sensitivity (tornado types) | *Tornado plot* |
+| Distribution family quick-reference (~18 families) | *Continuous / Discrete distributions* (per-family Uses) |
 
 ## How it relates to the other knowledge docs
 

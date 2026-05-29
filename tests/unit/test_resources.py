@@ -91,6 +91,7 @@ def test_knowledge_base_resource_returns_cited_markdown() -> None:
         "Fitting distributions to data",
         "aggregation method",
         "Interpreting sensitivity",
+        "family quick-reference",
     ):
         assert topic.lower() in md.lower(), f"knowledge base missing: {topic}"
 

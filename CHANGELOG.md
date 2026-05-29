@@ -4,6 +4,16 @@ All notable changes to ModelRisk MCP. Follows [Keep a Changelog](https://keepach
 
 ## [Unreleased]
 
+## [0.3.1-alpha.5] — 2026-05-29
+
+### Changed
+
+- **Added a distribution-family quick-reference (§10) to the `modelrisk://knowledge` resource** — a "what it models / when to reach for it / watch-out" table for ~18 of the most-used families (Normal, Lognormal, PERT/ModPERT, Triangle, Uniform, Beta, Gamma, Weibull, Exponential, Pareto, Student-t; Bernoulli, Binomial, Poisson, Negative Binomial, Geometric, Hypergeometric, Discrete). Distilled from the per-family "Uses" sections in the ModelRisk Help's Continuous and Discrete distribution articles. Gives Claude family-level selection guidance at build time to pair with the five-properties framework (§3). Knowledge base is now ten sections; still all from the corpus already on hand, attributed, our own words.
+
+### Tests
+
+The knowledge-base resource test asserts the family quick-reference is present. 502 unit tests pass.
+
 ## [0.3.1-alpha.4] — 2026-05-29
 
 ### Changed
