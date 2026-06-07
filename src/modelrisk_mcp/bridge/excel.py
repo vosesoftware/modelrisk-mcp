@@ -5,7 +5,10 @@ it via the typed methods below. See spec §8.1.
 
 Design notes:
 - Lazy connect on first use. The bridge attaches to a running Excel
-  instance (`xw.apps.active`); it does not launch Excel itself in v0.1.
+  instance (`xw.apps.active`); if none is running it starts ModelRisk
+  via Vose's `modelrisk.exe` launcher (so Excel comes up with the
+  add-in loaded natively). Auto-launch is on by default; disable with
+  `MODELRISK_AUTO_LAUNCH=0`.
 - All COM errors are caught and re-raised as typed exceptions from
   `modelrisk_mcp.errors`. Raw COM HRESULTs never leak.
 - Workbook references are by name, never index — indices change when
@@ -45,20 +48,31 @@ class ExcelBridge:
     enforces this by giving each request handler its own bridge.
     """
 
-    def __init__(self, *, visible: bool = True) -> None:
+    def __init__(
+        self, *, visible: bool = True, auto_launch: bool | None = None
+    ) -> None:
         self._visible = visible
         self._app: Any | None = None
         # Lazy-imported so non-Windows test environments can import this
         # module without crashing.
         self._xlwings: Any | None = None
+        # When no Excel is running, start ModelRisk via Vose's own
+        # `modelrisk.exe` launcher (which opens Excel WITH the add-in
+        # loaded natively — avoiding the COM-launch xlAutoOpen-skip of
+        # bug #29). On by default; disable with MODELRISK_AUTO_LAUNCH=0.
+        if auto_launch is None:
+            import os
+
+            auto_launch = os.environ.get(
+                "MODELRISK_AUTO_LAUNCH", "1"
+            ).strip().lower() not in ("0", "false", "no", "off")
+        self._auto_launch = auto_launch
 
     # ------------------------------------------------------------------
     # Connection lifecycle
     # ------------------------------------------------------------------
 
-    def connect(self) -> None:
-        if self._app is not None:
-            return
+    def _load_xlwings(self) -> None:
         if self._xlwings is None:
             try:
                 import xlwings as xw
@@ -67,18 +81,40 @@ class ExcelBridge:
                     "xlwings is not installed; ExcelBridge cannot operate."
                 ) from exc
             self._xlwings = xw
+
+    def _attach_active(self) -> Any | None:
+        """Return the active Excel app if one is running, else None.
+        `xlwings.apps.active` either returns None or raises when no
+        Excel is up — normalise both to None."""
+        if self._xlwings is None:
+            return None
         try:
-            self._app = self._xlwings.apps.active
-        except Exception as exc:
-            raise ExcelNotRunningError(
-                "No running Excel instance found. Open Excel and load the "
-                "workbook before calling MCP tools."
-            ) from exc
-        if self._app is None:
-            raise ExcelNotRunningError(
-                "No running Excel instance found. Open Excel and load the "
-                "workbook before calling MCP tools."
+            return self._xlwings.apps.active
+        except Exception:
+            return None
+
+    def connect(self) -> None:
+        if self._app is not None:
+            return
+        self._load_xlwings()
+        app = self._attach_active()
+        # No Excel running → optionally start ModelRisk for the user.
+        if app is None and self._auto_launch:
+            if self.launch_modelrisk():
+                app = self._attach_active()
+        if app is None:
+            hint = (
+                ""
+                if self._auto_launch
+                else " (auto-launch is disabled via MODELRISK_AUTO_LAUNCH)"
             )
+            raise ExcelNotRunningError(
+                "No running Excel instance found and ModelRisk could not "
+                "be started automatically" + hint + ". Open Excel (or start "
+                "ModelRisk from its shortcut) and load the workbook, then "
+                "retry."
+            )
+        self._app = app
 
     def disconnect(self) -> None:
         # We never own the Excel process — disconnecting just drops the
@@ -735,6 +771,60 @@ class ExcelBridge:
         except Exception:
             return done
         return done
+
+    def _find_modelrisk_launcher(self) -> str | None:
+        """Locate Vose's `modelrisk.exe` launcher in the standard install
+        dirs. Launching this (rather than `xw.App()`) starts Excel with
+        the ModelRisk add-in loaded natively — running its normal
+        `xlAutoOpen`, so the XLL commands are reachable without the
+        RegisterXLL workaround."""
+        import os
+        from pathlib import Path
+
+        for env in ("ProgramFiles", "ProgramW6432", "ProgramFiles(x86)"):
+            base = os.environ.get(env)
+            if not base:
+                continue
+            root = Path(base) / "Vose Software"
+            if not root.exists():
+                continue
+            try:
+                for p in root.rglob("modelrisk.exe"):
+                    if p.is_file():
+                        return str(p)
+            except Exception:
+                continue
+        return None
+
+    def launch_modelrisk(self, *, timeout_s: float = 45.0) -> bool:
+        """Start ModelRisk (which opens Excel with the add-in loaded) and
+        wait up to `timeout_s` for Excel to come up. Returns True once an
+        Excel instance is attachable, False if the launcher can't be
+        found, fails to start, or Excel doesn't appear in time.
+
+        This is the "nothing is running" counterpart to
+        `ModelRiskBridge.ensure_modelrisk_functional()` (which handles
+        the "Excel up but add-in dead" case)."""
+        import subprocess
+        import time
+
+        self._load_xlwings()
+        exe = self._find_modelrisk_launcher()
+        if exe is None:
+            return False
+        try:
+            # Detached so the launcher's lifetime isn't tied to ours.
+            subprocess.Popen([exe], close_fds=True)
+        except Exception:
+            return False
+        deadline = time.monotonic() + timeout_s
+        while time.monotonic() < deadline:
+            app = self._attach_active()
+            if app is not None:
+                self._app = app
+                return True
+            time.sleep(1.0)
+        return False
 
     def find_modelrisk_xll_paths(self) -> list[str]:
         """Best-effort search of the standard Vose Software install

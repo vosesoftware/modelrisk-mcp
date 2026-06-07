@@ -4,6 +4,24 @@ All notable changes to ModelRisk MCP. Follows [Keep a Changelog](https://keepach
 
 ## [Unreleased]
 
+## [0.3.2-alpha.2] — 2026-05-29
+
+### Added
+
+- **The server now starts ModelRisk itself when no Excel is running.** Previously the bridge only attached to an already-running Excel and errored otherwise ("No running Excel instance found") — the user had to open Excel + ModelRisk by hand first. Now `connect()` launches Vose's own **`modelrisk.exe`** when nothing is running, waits for Excel to appear, and attaches.
+
+  Using Vose's launcher (rather than `xw.App()`) is deliberate: it starts Excel with the add-in loaded **natively** — running its normal `xlAutoOpen` — so the XLL commands are reachable without the RegisterXLL workaround (it sidesteps bug #29 entirely). Together with the 0.3.2-alpha.1 activation ladder, the full matrix is now covered: *nothing running* → launch ModelRisk; *Excel up but add-in dead* → activate it; *both fine* → just attach.
+
+  Auto-launch is **on by default**; disable with `MODELRISK_AUTO_LAUNCH=0`. The launcher is found by searching the standard `Program Files\Vose Software\**\modelrisk.exe` install paths.
+
+- `ExcelBridge.launch_modelrisk()` and `_find_modelrisk_launcher()`.
+
+### Tests
+
+`test_auto_launch.py` — 8 cases: launcher-not-found, launch-and-attach, timeout, connect auto-launches when no Excel, connect raises when disabled, connect skips launch when Excel already present, and the env toggle. 538 unit tests pass.
+
+> Replaces the manual/`computer-use` workaround for getting ModelRisk running — the server does it in-process now.
+
 ## [0.3.2-alpha.1] — 2026-05-29
 
 ### Fixed
