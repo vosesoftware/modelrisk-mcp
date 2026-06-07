@@ -190,6 +190,7 @@ def diagnose_workbook(
     out: dict[str, Any] = {
         "excel_connected": False,
         "modelrisk_loaded": False,
+        "addin_functional": False,
         "active_workbook": None,
         "workbook_path": "",
         "sheets": [],
@@ -254,16 +255,37 @@ def diagnose_workbook(
         out["issues"] = issues
         return out
 
-    # 2. MRService.dll activation
+    # 2. MRService.dll activation (results-reading) — independent of the
+    #    in-Excel add-in below.
     try:
         out["modelrisk_loaded"] = bridge.is_modelrisk_loaded()
         if not out["modelrisk_loaded"]:
             issues.append(
-                "MRService.dll not activated. Set MRSERVICE_ACTIVATION_KEY "
-                "or rely on the bundled key."
+                "MRService.dll not activated (results reading). Set "
+                "MRSERVICE_ACTIVATION_KEY or rely on the bundled key."
             )
     except Exception as exc:
         issues.append(f"MRService check failed: {exc!s}")
+
+    # 2b. ModelRisk add-in liveness (building + simulation). Bug #38:
+    #     reported separately from MRService because they fail
+    #     independently — the add-in can be dead (Vose functions return
+    #     #NAME?, sims can't run) while the results DLL is fine. Probe
+    #     only; never mutates the add-in state from a diagnostic.
+    out["addin_functional"] = False
+    try:
+        out["addin_functional"] = bridge.probe_addin_functional()
+        if not out["addin_functional"]:
+            issues.append(
+                "ModelRisk add-in not live in Excel — Vose functions "
+                "return #NAME? and simulations can't run. Click the "
+                "ModelRisk ribbon tab (or start ModelRisk via its "
+                "shortcut) to load it. run_simulation will also try to "
+                "auto-activate it. Enabling ModelRisk's 'Start with "
+                "Excel' setting loads it automatically each session."
+            )
+    except Exception as exc:
+        issues.append(f"ModelRisk add-in probe failed: {exc!s}")
 
     # 3. Workbook content summary
     try:

@@ -10,6 +10,16 @@ class ModelRiskNotLoadedError(ModelRiskMCPError):
     pass
 
 
+class ModelRiskNotFunctionalError(ModelRiskNotLoadedError):
+    """The ModelRisk add-in is not live in the running Excel — Vose
+    functions don't resolve (cells show #NAME?) and simulations can't
+    run. Distinct from ModelRiskNotLoadedError's broader sense: this is
+    specifically 'Excel is here but the add-in didn't load', which the
+    bridge tries to auto-correct before raising this."""
+
+    pass
+
+
 class WorkbookNotFoundError(ModelRiskMCPError):
     pass
 

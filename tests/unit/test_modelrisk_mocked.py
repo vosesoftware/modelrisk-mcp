@@ -44,6 +44,21 @@ class FakeExcelBridge:
     def __init__(self, cells: list[CellInfo]) -> None:
         self._cells = cells
 
+    # bug #38: run_simulation now probes add-in liveness via
+    # ensure_modelrisk_functional → evaluate(). Report the add-in as
+    # live (Evaluate returns a number) so these tests, which exercise
+    # the sim post-conditions rather than activation, short-circuit
+    # past the activation ladder. Activation itself is covered in
+    # test_addin_activation.py.
+    def is_connected(self) -> bool:
+        return True
+
+    def connect(self) -> None:
+        pass
+
+    def evaluate(self, expr: str) -> Any:
+        return 0.0
+
     def iterate_cells(
         self,
         workbook: str,

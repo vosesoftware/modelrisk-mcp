@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import json
 import re
+from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
 from typing import Any
@@ -41,7 +42,11 @@ from modelrisk_mcp.bridge.simulation import (
     SimulationRunResult,
 )
 from modelrisk_mcp.config import Settings
-from modelrisk_mcp.errors import CellReferenceError, SimulationFailedError
+from modelrisk_mcp.errors import (
+    CellReferenceError,
+    ModelRiskNotFunctionalError,
+    SimulationFailedError,
+)
 from modelrisk_mcp.safety import (
     WriterMutex,
     append_write_log,
@@ -84,6 +89,38 @@ _DISTRIBUTION_CATEGORIES: frozenset[str] = frozenset({
 })
 
 
+@dataclass(frozen=True)
+class ModelRiskHealth:
+    """Two-state view of whether ModelRisk is usable, plus what the
+    bridge did to get there.
+
+    - `addin_functional`: the in-Excel add-in is live — Vose worksheet
+      functions resolve and simulations can run. (The thing that was
+      silently failing before 0.3.2.)
+    - `mrservice_ready`: MRService.dll loads — `.vmrs` result files can
+      be read. Independent of the add-in.
+    """
+
+    addin_functional: bool
+    mrservice_ready: bool
+    action_taken: str | None = None  # what activation step fixed it
+    detail: str = ""
+
+
+# A cheap, always-present Vose function used to probe whether the
+# add-in is live. Returns its static value (~0) when loaded; #NAME?
+# (a COM CVErr int) when not.
+_ADDIN_PROBE_EXPR = "VoseNormal(0,1)"
+
+_ADDIN_DEAD_MESSAGE = (
+    "The ModelRisk add-in isn't loaded in Excel — Vose functions return "
+    "#NAME? and simulations can't run. Open Excel and click the ModelRisk "
+    "ribbon tab (or launch ModelRisk from its Start-menu shortcut) to load "
+    "it, then retry. Tip: in ModelRisk's settings, enabling 'Start with "
+    "Excel' makes it load automatically every session."
+)
+
+
 class ModelRiskBridge:
     def __init__(
         self,
@@ -124,6 +161,113 @@ class ModelRiskBridge:
         return self._simulation
 
     # ------------------------------------------------------------------
+    # ModelRisk add-in liveness (bug #38)
+    # ------------------------------------------------------------------
+
+    def probe_addin_functional(self) -> bool:
+        """True if the ModelRisk add-in is live in the running Excel —
+        i.e. a Vose worksheet function actually resolves rather than
+        returning #NAME?. This is the real test of "is ModelRisk
+        loaded", distinct from `is_modelrisk_loaded()` (which only
+        checks the results-reading DLL)."""
+        from modelrisk_mcp.bridge.excel import _coerce_error_value
+
+        try:
+            result = self._excel.evaluate(_ADDIN_PROBE_EXPR)
+        except Exception:
+            return False
+        # #NAME? (function unknown → add-in not loaded) comes back as a
+        # COM CVErr integer; a live add-in returns the distribution's
+        # static numeric value.
+        if _coerce_error_value(result) is not None:
+            return False
+        return isinstance(result, (int, float)) and not isinstance(result, bool)
+
+    def ensure_modelrisk_functional(
+        self, *, activate: bool = True
+    ) -> ModelRiskHealth:
+        """Make sure the ModelRisk add-in is live before a build or
+        simulation, escalating only as far as needed:
+
+        1. Probe — if a Vose function already resolves, done.
+        2. Re-register installed ModelRisk XLLs (fixes the
+           "installed but xlAutoOpen skipped" state — bug #29).
+        3. Enable any ModelRisk add-in that's present but switched off
+           (the "Start with Excel = off" case), then register it.
+        4. Locate `ModelRisk*.xll` on disk and RegisterXLL it (the
+           "never loaded this session / started via shortcut" case).
+        5. Still dead → raise `ModelRiskNotFunctionalError` with an
+           actionable message rather than letting a later step fail
+           with an opaque COM error.
+
+        `mrservice_ready` is reported alongside but never blocks — it's
+        only needed for *reading* results, not building/simulating.
+        """
+        if not self._excel.is_connected():
+            self._excel.connect()
+        mrservice_ready = self.is_modelrisk_loaded()
+
+        if self.probe_addin_functional():
+            return ModelRiskHealth(True, mrservice_ready, None, "already live")
+
+        if not activate:
+            raise ModelRiskNotFunctionalError(_ADDIN_DEAD_MESSAGE)
+
+        steps: list[str] = []
+
+        # 2. Re-register XLLs that are installed but unreachable.
+        registered = self._excel.register_modelrisk_xlls()
+        if registered:
+            steps.append(f"re-registered {', '.join(registered)}")
+            if self.probe_addin_functional():
+                return ModelRiskHealth(
+                    True, mrservice_ready, "; ".join(steps),
+                    "add-in was installed but its commands were unregistered",
+                )
+
+        # 3. Enable a ModelRisk add-in that's present but switched off.
+        flipped = self._excel.enable_excel_addin(
+            lambda info: "modelrisk" in info["name"].lower()
+        )
+        if flipped:
+            steps.append(f"enabled add-in {', '.join(flipped)}")
+            self._excel.register_modelrisk_xlls()
+            if self.probe_addin_functional():
+                return ModelRiskHealth(
+                    True, mrservice_ready, "; ".join(steps),
+                    "add-in was present but not set to load with Excel",
+                )
+
+        # 4. Last resort — find the XLL on disk and register it.
+        for path in self._excel.find_modelrisk_xll_paths():
+            if self._excel.register_xll(path):
+                steps.append(f"registered {path}")
+                if self.probe_addin_functional():
+                    return ModelRiskHealth(
+                        True, mrservice_ready, "; ".join(steps),
+                        "add-in was not loaded; registered it from disk",
+                    )
+
+        # 5. Couldn't make it functional.
+        raise ModelRiskNotFunctionalError(
+            _ADDIN_DEAD_MESSAGE
+            + (f" (attempted: {'; '.join(steps)})" if steps else "")
+        )
+
+    def health(self) -> ModelRiskHealth:
+        """Non-mutating health snapshot — probe only, no activation.
+        Used by diagnostics so a report never side-effects the add-in
+        state."""
+        if not self._excel.is_connected():
+            self._excel.connect()
+        return ModelRiskHealth(
+            addin_functional=self.probe_addin_functional(),
+            mrservice_ready=self.is_modelrisk_loaded(),
+            action_taken=None,
+            detail="probe only",
+        )
+
+    # ------------------------------------------------------------------
     # Run sim — wraps SimulationController + auto-pins the resulting
     # .vmrs as the active source so subsequent get_simulation_results
     # finds it without further setup.
@@ -147,6 +291,12 @@ class ModelRiskBridge:
         resolved_workbook = (
             workbook if workbook else self._excel.get_active_workbook().name
         )
+        # Bug #38: make sure the ModelRisk add-in is actually live before
+        # we trigger the XLL simulation command. If it isn't loaded (e.g.
+        # "Start with Excel" is off), this auto-activates it or raises a
+        # clear, actionable error instead of failing later with an opaque
+        # "macro may not be available".
+        self.ensure_modelrisk_functional()
         expected_output_names: list[str] = []
         try:
             expected_output_names = [

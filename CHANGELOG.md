@@ -4,6 +4,32 @@ All notable changes to ModelRisk MCP. Follows [Keep a Changelog](https://keepach
 
 ## [Unreleased]
 
+## [0.3.2-alpha.1] — 2026-05-29
+
+### Fixed
+
+- **Bug #38 — the server assumed the ModelRisk add-in was already loaded, and failed opaquely when it wasn't.** If ModelRisk's "Start with Excel" setting is off (so the add-in is loaded only via its shortcut), or Excel was started programmatically, Vose functions return `#NAME?` and `run_simulation` failed with an unhelpful "macro may not be available". Worse, `is_modelrisk_loaded()` only checked the results-reading DLL (MRService.dll), so the server could report ModelRisk as "loaded" while the in-Excel add-in was dead.
+
+  Now there's a real liveness check and an auto-activation ladder, run automatically before every simulation:
+  1. **Probe** — `Application.Evaluate("VoseNormal(0,1)")`; a number means the add-in is live, `#NAME?` means it isn't. This is the missing source of truth.
+  2. **Re-register installed XLLs** (fixes "installed but `xlAutoOpen` skipped").
+  3. **Enable an add-in that's present but switched off** (the "Start with Excel = off" case), then register it.
+  4. **Locate `ModelRisk*.xll` on disk** (standard Vose install dirs) and register it — the "never loaded this session" case.
+  5. If still dead, raise a **clear, actionable error** ("open Excel and click the ModelRisk ribbon tab, or start ModelRisk via its shortcut… enabling 'Start with Excel' loads it automatically") instead of an opaque COM failure.
+
+- **`diagnose_workbook` now reports add-in liveness separately from MRService.** New `addin_functional` field (probe-only, never mutates state) distinguishes "the add-in can build/simulate" from "the results DLL can read .vmrs" — so a confused user gets told *which* half is broken, with the fix.
+
+### Added
+
+- `ModelRiskBridge.probe_addin_functional()`, `ensure_modelrisk_functional()`, `health()`, the `ModelRiskHealth` result, and `ModelRiskNotFunctionalError`.
+- `ExcelBridge.evaluate()`, `register_xll()`, `register_modelrisk_xlls()`, `find_modelrisk_xll_paths()`.
+
+### Tests
+
+`test_addin_activation.py` — 11 cases: probe (live / #NAME? / raises / bool-guard) and the full escalation ladder (already-live short-circuit, recover-by-register, recover-by-enable, recover-from-disk, actionable raise, `activate=False`). 530 unit tests pass.
+
+> **Validation note:** the ladder logic is fully unit-tested with mocks, but the live escalation paths (installed-but-off, never-loaded-via-shortcut) should be confirmed on a real Excel + ModelRisk in those states.
+
 ## [0.3.1] — 2026-05-29
 
 First stable release of the 0.3.1 line. Promotion from `0.3.1-alpha.7` with no functional changes beyond the version bump. The line adds three substantial things on top of 0.3.0, all without changing the tool surface:

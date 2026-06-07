@@ -683,6 +683,93 @@ class ExcelBridge:
             return flipped
         return flipped
 
+    # ------------------------------------------------------------------
+    # ModelRisk add-in activation support (bug #38 — "add-in not loaded")
+    # ------------------------------------------------------------------
+
+    def evaluate(self, expr: str) -> Any:
+        """Evaluate an Excel expression via `Application.Evaluate` and
+        return the raw result (a number, string, or a COM CVErr integer
+        for an error like `#NAME?`). Used to probe whether the ModelRisk
+        add-in is actually live — `Evaluate("VoseNormal(0,1)")` returns
+        a number when the XLL is loaded and `#NAME?` (a CVErr int) when
+        it isn't. Raises only if the COM call itself fails."""
+        app = self._ensure()
+        return app.api.Evaluate(expr)
+
+    def register_xll(self, path: str) -> bool:
+        """`Application.RegisterXLL(path)` — re-runs the XLL's
+        `xlAutoOpen`, which is what actually wires up its commands and
+        UDFs. Idempotent. Returns True on success, False on failure."""
+        app = self._ensure()
+        try:
+            app.api.RegisterXLL(str(path))
+            return True
+        except Exception:
+            return False
+
+    def register_modelrisk_xlls(self) -> list[str]:
+        """RegisterXLL every *installed* ModelRisk `.xll` in the AddIns
+        collection. Fixes the "installed but commands/UDFs unreachable"
+        state that occurs when Excel was started programmatically (its
+        normal startup skips `xlAutoOpen`). Returns the XLL names
+        re-registered."""
+        app = self._ensure()
+        done: list[str] = []
+        try:
+            addins = app.api.AddIns
+            for i in range(1, int(addins.Count) + 1):
+                try:
+                    addin = addins(i)
+                    name = str(getattr(addin, "Name", "") or "")
+                    if not name.lower().endswith(".xll"):
+                        continue
+                    if "modelrisk" not in name.lower():
+                        continue
+                    if not bool(getattr(addin, "Installed", False)):
+                        continue
+                    if self.register_xll(str(addin.FullName)):
+                        done.append(name)
+                except Exception:
+                    continue
+        except Exception:
+            return done
+        return done
+
+    def find_modelrisk_xll_paths(self) -> list[str]:
+        """Best-effort search of the standard Vose Software install
+        directories for a `ModelRisk*.xll` on disk. Used as the last
+        resort when the add-in isn't even in the AddIns collection
+        (ModelRisk set to NOT 'Start with Excel' and never opened this
+        session). Returns existing absolute paths, 64-bit-named first."""
+        import os
+        from pathlib import Path
+
+        roots: list[Path] = []
+        for env in ("ProgramFiles", "ProgramFiles(x86)", "ProgramW6432"):
+            base = os.environ.get(env)
+            if base:
+                roots.append(Path(base) / "Vose Software")
+        found: list[str] = []
+        seen: set[str] = set()
+        for root in roots:
+            if not root.exists():
+                continue
+            try:
+                for p in root.rglob("*.xll"):
+                    if "modelrisk" not in p.name.lower():
+                        continue
+                    key = str(p).lower()
+                    if key in seen:
+                        continue
+                    seen.add(key)
+                    found.append(str(p))
+            except Exception:
+                continue
+        # Prefer the 64-bit build (commonly suffixed 64) when present.
+        found.sort(key=lambda s: (("64" not in Path(s).stem), s))
+        return found
+
 
 # ----------------------------------------------------------------------
 # Helpers

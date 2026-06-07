@@ -76,6 +76,11 @@ class _FakeBridge:
     def connect(self) -> None:
         pass
 
+    def evaluate(self, expr: str) -> Any:
+        # bug #38: report the add-in as live so run_simulation's
+        # ensure_modelrisk_functional() short-circuits.
+        return 0.0
+
 
 # ---------------------------------------------------------------------------
 # SimulationOptions packing
