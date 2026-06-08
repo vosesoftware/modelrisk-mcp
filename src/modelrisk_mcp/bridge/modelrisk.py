@@ -44,6 +44,7 @@ from modelrisk_mcp.bridge.simulation import (
 from modelrisk_mcp.config import Settings
 from modelrisk_mcp.errors import (
     CellReferenceError,
+    ModelRiskComputationError,
     ModelRiskNotFunctionalError,
     SimulationFailedError,
 )
@@ -266,6 +267,112 @@ class ModelRiskBridge:
             action_taken=None,
             detail="probe only",
         )
+
+    # ------------------------------------------------------------------
+    # Analytic distribution math — evaluate Vose worksheet functions
+    # without running a simulation. `VoseProb` / `VosePercentile` /
+    # `VoseMean` etc. are deterministic, so `Application.Evaluate`
+    # returns the exact value for an inline distribution-object
+    # expression. No cells are written (read-only, non-destructive).
+    # ------------------------------------------------------------------
+    def evaluate_number(self, expr: str) -> float:
+        """Evaluate a Vose worksheet expression and return a float.
+
+        Ensures the add-in is live first, then evaluates. Raises
+        `ModelRiskComputationError` if ModelRisk returns an Excel error
+        (`#VALUE!`, `#NAME?`) or a non-numeric result (e.g. an error
+        string like 'parameter must be a valid Fit Object')."""
+        from modelrisk_mcp.bridge.excel import _coerce_error_value
+
+        self.ensure_modelrisk_functional()
+        raw = self._excel.evaluate(expr)
+        err = _coerce_error_value(raw)
+        if err is not None:
+            raise ModelRiskComputationError(f"{expr} -> {err}")
+        if isinstance(raw, bool) or not isinstance(raw, (int, float)):
+            raise ModelRiskComputationError(f"{expr} -> {raw!r}")
+        return float(raw)
+
+    def fit_and_rank(
+        self,
+        data_range: str,
+        families: list[str],
+        *,
+        workbook: str | None = None,
+        uncertainty: bool = False,
+    ) -> tuple[list[dict[str, Any]], list[dict[str, str]], int]:
+        """Fit each family to `data_range` and return its AIC/SIC/HQIC.
+
+        `data_range` must be sheet-qualified (e.g. `Sheet1!$A$1:$A$60`)
+        because the scoring runs on a transient scratch sheet. A fit
+        object is not a plain value — `VoseAIC` needs it *referenced
+        from a cell* — so we write `Vose<Family>FitObject(range)` into a
+        throwaway sheet, score it, and delete the sheet.
+
+        Returns `(scored, skipped, sample_size)`; `scored` is a list of
+        `{family, aic, sic, hqic}` dicts (unranked), `skipped` is a list
+        of `{family, reason}`."""
+        self.ensure_modelrisk_functional()
+        unc = "TRUE" if uncertainty else "FALSE"
+
+        valid: list[str] = []
+        skipped: list[dict[str, str]] = []
+        for fam in families:
+            if f"Vose{fam}FitObject" in self._catalogue:
+                valid.append(fam)
+            else:
+                skipped.append(
+                    {"family": fam, "reason": "no Vose<Family>FitObject in catalogue"}
+                )
+
+        scored: list[dict[str, Any]] = []
+        sample_size = 0
+        if valid:
+            app = self._excel._ensure()
+            book = app.books[workbook] if workbook else app.books.active
+            prev_alerts = app.api.DisplayAlerts
+            app.api.DisplayAlerts = False
+            sht = book.sheets.add("_mrmcp_fit")
+            try:
+                sht.range("F1").formula = f"=COUNT({data_range})"
+                for i, fam in enumerate(valid):
+                    r = i + 1
+                    sht.range((r, 1)).formula = (
+                        f"=Vose{fam}FitObject({data_range},{unc})"
+                    )
+                    sht.range((r, 2)).formula = f"=VoseAIC(A{r})"
+                    sht.range((r, 3)).formula = f"=VoseSIC(A{r})"
+                    sht.range((r, 4)).formula = f"=VoseHQIC(A{r})"
+                app.api.CalculateFull()
+                try:
+                    sample_size = int(sht.range("F1").value or 0)
+                except (TypeError, ValueError):
+                    sample_size = 0
+                for i, fam in enumerate(valid):
+                    r = i + 1
+                    aic = sht.range((r, 2)).value
+                    sic = sht.range((r, 3)).value
+                    hqic = sht.range((r, 4)).value
+                    if all(isinstance(v, (int, float)) for v in (aic, sic, hqic)):
+                        scored.append(
+                            {
+                                "family": fam,
+                                "aic": float(aic),
+                                "sic": float(sic),
+                                "hqic": float(hqic),
+                            }
+                        )
+                    else:
+                        reason = next(
+                            (str(v) for v in (aic, sic, hqic) if not isinstance(v, (int, float))),
+                            "fit failed",
+                        )
+                        skipped.append({"family": fam, "reason": reason})
+            finally:
+                sht.delete()
+                app.api.DisplayAlerts = prev_alerts
+
+        return scored, skipped, sample_size
 
     # ------------------------------------------------------------------
     # Run sim — wraps SimulationController + auto-pins the resulting

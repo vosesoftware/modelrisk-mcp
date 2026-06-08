@@ -4,6 +4,24 @@ All notable changes to ModelRisk MCP. Follows [Keep a Changelog](https://keepach
 
 ## [Unreleased]
 
+## [0.3.2-alpha.4] — 2026-06-08
+
+### Added
+
+Three **quantitative-analysis tools** (`tools/analysis.py`) — the server could build formulas and read results but was thin on *interpreting distributions and results*, the part an LLM assistant adds the most value to. All three are read-only.
+
+- **`compute_distribution`** — an analytic distribution calculator with **no simulation**. Give a `family` + `parameters` (or point at an `object_cell` holding a fitted distribution) and ask for `pdf`, `cdf`, `exceedance` (P(X>x)), `quantile` (inverse-CDF), `mean`, `stdev`, `variance`, `skewness`, `kurtosis`, `cov`, or `summary` (all moments + a P1–P99 percentile ladder in one call). Backed by `VoseProb(x, object, cumulative)` for density/CDF, `VosePercentile(object, u)` for quantiles, and `VoseMean`/`VoseVariance`/`VoseSkewness`/`VoseKurtosis`/`VoseCofV` for moments — evaluated inline via `Application.Evaluate`, so it's exact and writes nothing.
+
+- **`fit_and_rank_distributions`** — fit *many* families to a data range and rank them by ModelRisk's own goodness-of-fit scores (**AIC, SIC/BIC, HQIC**, lower = better), instead of naming a single family and hoping (as `fit_distribution_to_data` requires). Families that can't fit are returned under `skipped` with a reason. A distribution fit object isn't a plain value — `VoseAIC` needs it *referenced from a cell* — so scoring runs on a transient scratch sheet that is always deleted; the data is untouched.
+
+- **`get_tail_risk`** — Value-at-Risk and Conditional VaR / expected shortfall (`VoseCVARp` semantics) at each confidence level, plus optional threshold probabilities P(X>t) / P(X≤t), computed in pure Python from a simulation output's per-iteration samples. `tail='upper'` (cost/claims) or `'lower'` (NPV/profit). VaR is the α-quantile; CVaR is the mean of the worst (1−α) tail.
+
+Tool count 40 → **43**. New schemas in `schemas/analysis.py`; new `ModelRiskComputationError`; bridge gains `evaluate_number()` and `fit_and_rank()`.
+
+### Tests
+
+`test_tools_analysis_mocked.py` — 18 cases: metric→expression mapping, summary ladder, object-cell path, fit ranking + criterion-switching + range qualification, and exact VaR/CVaR/threshold arithmetic (e.g. on samples 1…100: VaR₉₅=95.05, CVaR=98.0, P(X>90)=0.10). All three verified live against a running ModelRisk. 556 unit tests pass; ruff + mypy clean.
+
 ## [0.3.2-alpha.3] — 2026-06-08
 
 ### Changed

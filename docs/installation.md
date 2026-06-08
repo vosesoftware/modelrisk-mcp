@@ -43,6 +43,6 @@ uv run mcp dev src/modelrisk_mcp/__main__.py   # for the MCP Inspector
 modelrisk-mcp --help
 ```
 
-If you see the transport / port / token options, the entry point is wired correctly. Beyond that, the fastest way to verify the full server works is to point MCP Inspector at it (`uv run mcp dev src/modelrisk_mcp/__main__.py`) and check that `tools/list` returns 40 tools — `list_open_workbooks`, `get_active_workbook`, `audit_model`, `run_simulation`, etc.
+If you see the transport / port / token options, the entry point is wired correctly. Beyond that, the fastest way to verify the full server works is to point MCP Inspector at it (`uv run mcp dev src/modelrisk_mcp/__main__.py`) and check that `tools/list` returns 43 tools — `list_open_workbooks`, `get_active_workbook`, `audit_model`, `run_simulation`, etc.
 
 If `run_simulation` fails with "macro may not be available", make sure Excel was started interactively (taskbar / Start menu / double-click `.xlsx`) *before* the MCP server tried to drive it. The ModelRisk XLL skips part of its initialisation when Excel is launched programmatically; see the **Known caveats** section in the README.

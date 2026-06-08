@@ -50,3 +50,11 @@ class ConcurrentWriterError(ModelRiskMCPError):
 
 class CatalogueError(ModelRiskMCPError):
     pass
+
+
+class ModelRiskComputationError(ModelRiskMCPError):
+    """A ModelRisk worksheet computation returned an error or a
+    non-numeric result — e.g. a distribution property evaluated to
+    `#VALUE!`, or a fit returned 'parameter must be a valid Fit
+    Object'. Carries the offending expression so the caller can see
+    what ModelRisk rejected."""
