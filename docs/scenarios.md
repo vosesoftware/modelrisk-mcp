@@ -128,7 +128,9 @@ Claude calls `create_aggregate_mc` — this is a true compound distribution (`Vo
 
 > Wrap the total as an output, run 50,000 iterations. Give me the mean, the P95, the P99, and the average loss in the worst 1% of years.
 
-`run_simulation` → `get_simulation_results` for percentiles, then `get_samples` so Claude can compute the **TVaR(99)** (average beyond P99) directly from the raw samples. (Glossary: [VaR / TVaR](glossary.md#var--tvar--value-at-risk--tail-value-at-risk).)
+`run_simulation` → `get_tail_risk` returns the **VaR** (P95/P99) and **CVaR** (average loss beyond it, a.k.a. TVaR / expected shortfall) in one call. (Glossary: [VaR / CVaR](glossary.md#var--cvar--tvar--value-at-risk--conditional-tail-var).)
+
+> Tip — fast path without a simulation: build the FFT aggregate as an object (`create_aggregate(..., method="FFT", as_object=True)`) and read its mean and percentiles analytically with `compute_distribution`. And if you have raw loss data, `fit_tail` (GPD) fits the heavy tail directly.
 
 ### What you learn
 Not just the expected annual loss, but the shape of a bad year — the number that sets your capital reserve or insurance limit. The aggregate + risk-event combination is the foundation of operational-risk and insurance modelling.
@@ -253,9 +255,40 @@ Whether the model is sound enough to base a decision on — and a clean bill of 
 
 ---
 
+## Scenario 7 — Choose between two strategies, and check the model is trustworthy
+
+**You have:** two options on the table — Plan A (aggressive) vs Plan B (conservative), each modelled as an output — and a stakeholder asking "which one, and how sure are we?" You'd also like to know the model itself is calibrated before you bet on it.
+
+**You want:** a defensible decision, the uncertainty broken down into what you *could* reduce vs what you can't, and a reality check against history.
+
+### Steps
+
+**1. Compare the two outputs head-to-head.**
+
+> I've run the model with both Plan_A and Plan_B as outputs. Which is better, and how confident should I be?
+
+`compare_distributions(Plan_A, Plan_B)` returns `P(A > B)`, the mean/percentile gaps, and **stochastic dominance** — whether one plan beats the other at *every* probability level (first-order) or for any risk-averse decision-maker (second-order). That's a far stronger statement than "A has a higher average." (Glossary: [stochastic dominance](glossary.md#stochastic-dominance).)
+
+**2. Split the uncertainty into reducible vs irreducible.**
+
+> For the chosen plan, how much of the spread is parameter uncertainty I could cut with more data, vs natural variability I can't?
+
+Run the model twice — once full, once with the *parameter* inputs frozen at their point estimates — and hand both outputs to `decompose_uncertainty`. It reports the **epistemic** (reducible) vs **aleatory** (irreducible) variance share, so you know whether to spend on better data or on hedging. (Glossary: [aleatory vs epistemic](glossary.md#aleatory-vs-epistemic-uncertainty).)
+
+**3. Backtest against what actually happened.**
+
+> Here are the last 24 months of realised outcomes. Is the model calibrated?
+
+`backtest_output` runs the **PIT** calibration and prediction-interval coverage against your actuals, and tells you in plain English whether the model runs high, runs low, or is well calibrated. (Glossary: [PIT / backtest](glossary.md#pit--backtest--probability-integral-transform).)
+
+### What you learn
+A decision you can defend (dominance, not just a higher mean), where to spend to narrow the answer, and the confidence that the model has matched reality before — not just that it produces a tidy distribution.
+
+---
+
 ## Where to go next
 
-- **[User manual](user-manual.md)** — the eight capabilities in depth, plus what the server does and doesn't do
+- **[User manual](user-manual.md)** — the nine capabilities in depth, plus what the server does and doesn't do
 - **[Quick-start](quick-start.md)** — the 15-minute first-simulation tutorial
 - **[Methodology](methodology.md)** — the principles behind every model
 - **[Distribution selection](distribution-selection.md)** — which distribution for which quantity

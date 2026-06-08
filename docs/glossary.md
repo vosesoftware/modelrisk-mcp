@@ -103,9 +103,21 @@ A distribution whose value at one period depends on its value in the previous pe
 
 A 3-parameter distribution defined by minimum, most-likely, and maximum, like PERT but with sharper corners. Useful when you genuinely believe values near the extremes are roughly as likely as values near the most-likely point. Built via `VoseTriangle`.
 
-### VaR / TVaR — Value at Risk / Tail Value at Risk
+### VaR / CVaR / TVaR — Value at Risk / Conditional (Tail) VaR
 
-VaR(99) = the P99 of a loss distribution. TVaR(99) = the *average* loss conditional on the loss exceeding the P99. TVaR captures the tail; VaR only captures the cliff. Both terms come up in insurance / finance risk reporting; both are derivable from `get_samples` for any output.
+VaR(99) = the P99 of a loss distribution. CVaR(99) (a.k.a. TVaR, expected shortfall) = the *average* loss conditional on the loss exceeding the P99. CVaR captures the tail; VaR only captures the cliff. Both come up in insurance / finance risk reporting. `get_tail_risk` computes VaR and CVaR at any confidence level (plus threshold probabilities) directly from an output's samples.
+
+### Aleatory vs epistemic uncertainty
+
+Two kinds of "we don't know." **Aleatory** is natural variability — the irreducible randomness of the thing itself (one die roll differs from the next); more data won't shrink it. **Epistemic** is knowledge / parameter uncertainty — you don't know the true mean, the true probability; collecting more data *does* shrink it. Separating them tells you whether the lever is *gathering information* or *hedging the variability*. `decompose_uncertainty` splits an output's variance into the two via the law of total variance.
+
+### Stochastic dominance
+
+A rigorous way to say one option is better than another across *all* outcomes, not just on average. **First-order**: option A's distribution is everywhere to the right of B's (better at every probability level). **Second-order**: A is preferred by any risk-averse decision-maker (it adds the case where A and B have similar means but A is less spread). `compare_distributions` reports both between two outputs.
+
+### PIT / backtest — Probability Integral Transform
+
+A calibration check: feed each realised actual through the model's predicted CDF. If the model is well calibrated, those transformed values are uniformly spread over 0–1 (and ~X% of actuals fall inside the X% prediction interval). Systematic skew means the model runs high or low. `backtest_output` runs this against a list of historical actuals.
 
 ### Variance / variance contribution
 

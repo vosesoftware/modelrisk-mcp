@@ -4,6 +4,20 @@ All notable changes to ModelRisk MCP. Follows [Keep a Changelog](https://keepach
 
 ## [Unreleased]
 
+## [0.3.2-alpha.8] — 2026-06-08
+
+Release-readiness pass for the 10 tools added across alpha.4–alpha.7 — no new tools, just the test + documentation coverage a stable release needs.
+
+### Tests
+
+- **Gated integration suite for the new tools** (`tests/integration/test_analysis.py`) — exercises the *real* ModelRisk evaluation paths (inline `Application.Evaluate`, the scratch-sheet array / fit-object dance, formula building) against a live add-in: `compute_distribution` (CDF/summary), `fit_and_rank_distributions`, `fit_tail` (GPD), `compute_correlation_matrix`, `create_aggregate` (FFT object read analytically), and `plan_risk_model`. All test data is written into a throwaway workbook that is created and closed, so the user's open workbooks are never touched; each test soft-skips if the add-in isn't functional. **7/7 pass live.**
+
+### Docs
+
+- The 10 new tools are now documented for users: a new "Interrogate distributions and decide between options" section in the user manual (the calculator, tail risk, comparison, backtest, decomposition), plus fit-and-rank / `fit_tail` under fitting, `create_aggregate` (FFT/Panjer) and `compute_correlation_matrix` under structures, and `plan_risk_model` under the conversion workflow.
+- New **Scenario 7 — choose between two strategies, and check the model is trustworthy** (`compare_distributions` → `decompose_uncertainty` → `backtest_output`).
+- New glossary entries: VaR/CVaR (updated), aleatory vs epistemic uncertainty, stochastic dominance, PIT / backtest.
+
 ## [0.3.2-alpha.7] — 2026-06-08
 
 ### Added

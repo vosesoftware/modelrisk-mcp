@@ -25,7 +25,7 @@ You don't need to be a ModelRisk power user. The server pushes the methodology �
 
 ---
 
-## The eight things you can do
+## The nine things you can do
 
 ### 1. Build a new probabilistic model from a description
 
@@ -47,7 +47,7 @@ Most real Excel models start out as point estimates. "Year-3 revenue = $4.2M" li
 
 > Look at the active workbook. Identify the inputs that are obviously uncertain (round numbers referenced by formulas) and propose appropriate distributions for each.
 
-Claude calls `find_hard_coded_inputs` to find the candidates, `propose_distributions_for_inputs` to suggest distribution families based on the context (a "Discount Rate" cell gets a different proposal than "Quantity Sold"), then `replace_constant_with_distribution` one cell at a time. After each replacement you can decline, accept, or refine.
+Start with `plan_risk_model` — one call returns the whole blueprint: the cells already wrapped as outputs, the ranked hard-coded inputs that look uncertain, a readiness verdict (`empty` / `needs-outputs` / `needs-inputs` / `ready`), and an ordered checklist. Then Claude works the plan: `find_hard_coded_inputs` for candidates, `propose_distributions_for_inputs` to suggest families from context (a "Discount Rate" cell gets a different proposal than "Quantity Sold"), then `replace_constant_with_distribution` one cell at a time. After each replacement you can decline, accept, or refine.
 
 ![The same workbook after `replace_constant_with_distribution` — each input is now a Vose distribution wrapped with VoseInput; the output cell is wrapped with VoseOutput](img/02-after-probabilistic.png)
 
@@ -61,13 +61,18 @@ You have actual data — five years of weekly sales, two years of incident count
 
 Claude calls `fit_distribution_to_data`, which uses ModelRisk's own fitting routines under the hood. It returns the best-fit distribution with `uncertainty=TRUE` enabled — meaning the simulation samples through the *parameter uncertainty* on top of the natural variability, not just the best-fit point estimate. That's the difference between "we're 90% confident demand will be 800–1200" and "best-fit says it's exactly 1000 give or take" — the second number is wrong.
 
+Two upgrades over "name one family and hope":
+
+- **`fit_and_rank_distributions`** fits *many* families at once and ranks them by ModelRisk's own goodness-of-fit scores (AIC, SIC/BIC, HQIC, lower = better), so the recommendation is data-driven rather than a guess. Families that can't fit are returned with a reason.
+- **`fit_tail`** fits a heavy tail — Generalised Pareto (peaks-over-threshold), GEV, or extreme-value — to loss/claim data and reads its high percentiles (P95–P99.9) *analytically*, no simulation needed. The standard tail model for insurance and operational risk.
+
 ### 4. Build correlated, multi-period, or aggregate structures
 
 Real risk models rarely have independent inputs. Demand and price correlate. Default rates cluster. Project schedule and budget bleed into each other.
 
-- **Correlated inputs**: `create_copula` builds Gaussian, t, Clayton, Frank, Gumbel copulas linking multiple inputs into a single dependency structure.
+- **Correlated inputs**: `create_copula` builds Gaussian, t, Clayton, Frank, Gumbel copulas linking multiple inputs into a single dependency structure. To derive the dependency from history, `compute_correlation_matrix` computes the rank-order correlation matrix of a data range (and its nearest valid form) — feed that straight into the copula.
 - **Time series**: `create_time_series` builds AR(1), GBM, mean-reverting, jump-diffusion, and Vasicek processes — for things that have memory across periods (commodity prices, customer churn, interest rates).
-- **Aggregates (frequency × severity)**: `create_aggregate_mc` builds compound distributions for "N losses each of size X" — the foundational structure for operational risk, insurance losses, fraud, equipment failures.
+- **Aggregates (frequency × severity)**: `create_aggregate` builds compound distributions for "N losses each of size X" with your choice of engine — **FFT** or **Panjer** (fast analytic methods) or **MC** (sampling). With `as_object=True` the FFT/Panjer aggregate loss distribution is readable *analytically* — its mean, percentiles, and tail risk without a simulation. The foundational structure for operational risk, insurance losses, fraud, equipment failures. (`create_aggregate_mc` remains as the MC-sampling shortcut.)
 - **Risk events**: `create_risk_event` builds binary "fires-or-doesn't" wrappers around an impact distribution — `VoseRiskEvent(p, impact)`. Not `p × impact`; the bimodal structure matters.
 
 You ask in plain English ("link demand growth and bean price with a 0.4 Clayton copula"); the server writes the right multi-cell pattern.
@@ -116,6 +121,16 @@ The reads go through ModelRisk's official SDK (MRService.dll) reading `.vmrs` fi
 ![Post-simulation results sheet — KPI table, percentiles, sensitivity ranking, executive narrative](img/03-results-summary.png)
 
 `generate_executive_summary` emits the narrative as Markdown for pasting into a doc, a deck, or a board pack.
+
+### 9. Interrogate distributions and decide between options
+
+This is the layer where a conversational assistant earns its keep — turning a distribution or a result into an answer.
+
+- **`compute_distribution`** — an analytic calculator with **no simulation**. Ask for the density, CDF (`P(X ≤ x)`), exceedance (`P(X > x)`), a quantile (the inverse), any moment, or a one-call `summary` (mean, stdev, skew, kurtosis + a P1–P99 ladder). Point it at a family + parameters, or at a cell already holding a fitted distribution. "What's the 99th percentile of this fitted lognormal?" comes back instantly.
+- **`get_tail_risk`** — Value-at-Risk and Conditional VaR / expected shortfall at each confidence level, plus `P(X > threshold)`, from a simulated output. `tail='upper'` for costs/claims, `'lower'` for NPV/profit.
+- **`compare_distributions`** — two outputs head-to-head: `P(A > B)`, mean/percentile deltas, and **first- and second-order stochastic dominance**. The "is strategy A better than B, and how sure are we?" tool.
+- **`backtest_output`** — validate a model against realised history: PIT calibration (are the actuals uniformly spread through the predicted distribution?), prediction-interval coverage, and bias, with a plain verdict ("well calibrated" / "model runs low").
+- **`decompose_uncertainty`** — split an output's variance into **epistemic** (parameter uncertainty — reducible by collecting more data) and **aleatory** (natural variability — irreducible). Tells you whether the lever is *more data* or *hedging*. (Run the model twice — full, then with the parameter inputs frozen — and hand both outputs to the tool.)
 
 ---
 

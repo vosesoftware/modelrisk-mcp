@@ -50,7 +50,7 @@ This server turns Claude (or any MCP client) into a methodology-aware co-pilot f
 
 Every formula written to Excel is validated against the ModelRisk function catalogue first — there's no path to a hallucinated function name reaching your workbook.
 
-**See the [user manual](docs/user-manual.md)** for a walkthrough of the eight things you can do, a realistic end-to-end example, and what the server explicitly does and doesn't do. New to Monte Carlo or to the ModelRisk MCP toolchain? Start with the **[15-minute quick-start tutorial](docs/quick-start.md)**, then pick a **[walk-through scenario](docs/scenarios.md)** matching your problem (budgets, data fitting, loss aggregation, correlated inputs, stress tests, model audits); unfamiliar with a term, see the **[glossary](docs/glossary.md)**.
+**See the [user manual](docs/user-manual.md)** for a walkthrough of the nine things you can do, a realistic end-to-end example, and what the server explicitly does and doesn't do. New to Monte Carlo or to the ModelRisk MCP toolchain? Start with the **[15-minute quick-start tutorial](docs/quick-start.md)**, then pick a **[walk-through scenario](docs/scenarios.md)** matching your problem (budgets, data fitting, loss aggregation, correlated inputs, stress tests, model audits); unfamiliar with a term, see the **[glossary](docs/glossary.md)**.
 
 ---
 
@@ -294,7 +294,7 @@ MIT. See [LICENSE](LICENSE).
 |---|---|
 | [Quick-start tutorial](docs/quick-start.md) | 15 minutes, zero to your first simulation |
 | [Walk-through scenarios](docs/scenarios.md) | Six problem-shaped recipes — budgets, data fitting, loss aggregation, correlated inputs, stress tests, audits |
-| [User manual](docs/user-manual.md) | The eight things you can do, in depth; what the server does and doesn't do |
+| [User manual](docs/user-manual.md) | The nine things you can do, in depth; what the server does and doesn't do |
 | [Methodology](docs/methodology.md) | The principles behind every model, each tied to the audit rule that enforces it |
 | [Knowledge base](docs/knowledge-base.md) | Risk-analysis guidance distilled from the ModelRisk Help — served to the LLM at build time (`modelrisk://knowledge`) |
 | [Distribution selection](docs/distribution-selection.md) | Which distribution for which uncertain quantity |
