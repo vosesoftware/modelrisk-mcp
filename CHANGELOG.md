@@ -4,6 +4,39 @@ All notable changes to ModelRisk MCP. Follows [Keep a Changelog](https://keepach
 
 ## [Unreleased]
 
+## [0.3.2] — 2026-06-08
+
+Stable release of the 0.3.2 line (promotion from `0.3.2-alpha.8`). Two themes, both validated live end-to-end against a real ModelRisk install.
+
+### The server starts ModelRisk itself
+
+If no Excel is running when a tool is called, the server now brings up an attachable Excel via `xw.App(add_book=True)` and registers the ModelRisk XLL into it — so Vose functions resolve and simulations run without the user opening Excel + ModelRisk by hand first. If Excel is up but the add-in is dead (e.g. "Start with Excel" is off), an activation ladder auto-loads it or returns a clear instruction. Disable with `MODELRISK_AUTO_LAUNCH=0`. (The earlier `modelrisk.exe`-launcher approach was found to produce an unattachable start-screen Excel and was replaced; see alpha.1–alpha.3.)
+
+### A quantitative analysis & decision layer (40 → 50 tools)
+
+The server could build formulas and read results but was thin on *interpreting* distributions and results — the part an LLM assistant adds the most value to. Ten new tools close that:
+
+- **`compute_distribution`** — analytic calculator (pdf / cdf / exceedance / quantile / moments / summary), no simulation.
+- **`fit_and_rank_distributions`** — fit many families, rank by AIC / SIC / HQIC.
+- **`fit_tail`** — fit a GPD / GEV / extreme-value tail; read its high percentiles analytically.
+- **`create_aggregate`** — fast frequency-severity engines (FFT / Panjer) with an analytic-object form, alongside MC.
+- **`compute_correlation_matrix`** — rank-order correlation (+ nearest-valid) of a data range, for `create_copula`.
+- **`get_tail_risk`** — VaR / CVaR / threshold probabilities from an output's samples.
+- **`compare_distributions`** — P(A>B) and first/second-order stochastic dominance between two outputs.
+- **`backtest_output`** — PIT calibration, prediction-interval coverage, and bias vs realised actuals.
+- **`decompose_uncertainty`** — split variance into epistemic (reducible) vs aleatory (irreducible).
+- **`plan_risk_model`** — one-call deterministic→stochastic blueprint (readiness + ranked input candidates + ordered checklist).
+
+The `add-uncertainty` prompt routes through these. Full per-tool detail is in the alpha.4–alpha.8 entries below.
+
+### Known limitation
+
+Time-series *fitting* (`VoseTime*Fit`, e.g. AR1/GARCH projection from history) is **not** exposed: those functions require ModelRisk's time-series-wizard data context rather than a plain formula write, so they don't evaluate through the headless path. Tracked for a future release.
+
+### Quality
+
+588 unit tests + a gated live-Excel integration suite for the new tools (7/7 pass against a real add-in); the full simulate→interpret loop validated on a real model. ruff + mypy clean.
+
 ## [0.3.2-alpha.8] — 2026-06-08
 
 Release-readiness pass for the 10 tools added across alpha.4–alpha.7 — no new tools, just the test + documentation coverage a stable release needs.

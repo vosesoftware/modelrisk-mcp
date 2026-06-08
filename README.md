@@ -8,7 +8,7 @@ Use it with Claude Desktop, Claude Code, Cursor, Zed, or any MCP-compliant clien
 
 > ModelRisk MCP is an open MCP server on the standard Anthropic Model Context Protocol. No proprietary layer, no lock-in. The 1417-entry function catalogue, the Vose methodology principles, and the audit rule set are all included in the package — and editable.
 
-**Stable: `0.3.0`** — programmatic simulation via the `run_simulation` tool wired end-to-end (XLL command surface, no fragile COM dispatch); `.vmrs` results read via the official ModelRisk SDK; activation ships bundled so no environment configuration is required. 50 tools across reading, building, simulation, scenario-sweep, restore, charting, audit, and workflow surfaces.
+**Stable: `0.3.2`** — the server starts ModelRisk itself when no Excel is running (auto-launch + add-in activation); programmatic simulation via `run_simulation` (XLL command surface, no fragile COM dispatch); `.vmrs` results read via the official ModelRisk SDK; activation ships bundled so no environment configuration is required. 50 tools across reading, building, fitting, simulation, scenario-sweep, restore, charting, audit, **a quantitative analysis & decision layer** (distribution calculator, tail risk, fit-and-rank, fast aggregates, correlation matrix, distribution comparison, backtest, uncertainty decomposition), and workflow surfaces.
 
 ---
 
