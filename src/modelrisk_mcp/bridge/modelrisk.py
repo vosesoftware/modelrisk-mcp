@@ -15,6 +15,8 @@ from __future__ import annotations
 
 import json
 import re
+from collections.abc import Iterator
+from contextlib import contextmanager
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
@@ -293,6 +295,99 @@ class ModelRiskBridge:
             raise ModelRiskComputationError(f"{expr} -> {raw!r}")
         return float(raw)
 
+    @contextmanager
+    def _scratch_sheet(self, workbook: str | None = None) -> Iterator[tuple[Any, Any]]:
+        """Add a throwaway worksheet, yield `(app, sheet)`, and always
+        delete it. Used for computations that need real cells (array
+        functions, fit-object references) without touching the user's
+        data. Suppresses the delete-confirmation alert."""
+        app = self._excel._ensure()
+        book = app.books[workbook] if workbook else app.books.active
+        prev_alerts = app.api.DisplayAlerts
+        app.api.DisplayAlerts = False
+        sht = book.sheets.add("_mrmcp_tmp")
+        try:
+            yield app, sht
+        finally:
+            sht.delete()
+            app.api.DisplayAlerts = prev_alerts
+
+    def evaluate_object_metrics(
+        self,
+        object_formula: str,
+        metric_templates: list[str],
+        *,
+        workbook: str | None = None,
+    ) -> list[float | None]:
+        """Write a distribution-object formula into a scratch cell, then
+        evaluate each metric template against it. Templates use `{obj}`
+        for the object cell, e.g. `"VoseMean({obj})"` or
+        `"VosePercentile({obj},0.99)"`. A fit object is not a plain
+        value — it must be referenced from a cell — so the inline
+        `evaluate_number` path can't be used here. Returns one value per
+        template (None where the metric didn't evaluate to a number)."""
+        self.ensure_modelrisk_functional()
+        obj_f = object_formula if object_formula.startswith("=") else "=" + object_formula
+        with self._scratch_sheet(workbook) as (app, sht):
+            sht.range("A1").formula = obj_f
+            cells = []
+            for i, tmpl in enumerate(metric_templates):
+                cell = sht.range((i + 1, 2))
+                cell.formula = "=" + tmpl.format(obj="A1")
+                cells.append(cell)
+            app.api.CalculateFull()
+            out: list[float | None] = []
+            for cell in cells:
+                v = cell.value
+                out.append(float(v) if isinstance(v, (int, float)) and not isinstance(v, bool) else None)
+        return out
+
+    def correlation_matrix_of_data(
+        self,
+        data_range: str,
+        n_vars: int,
+        *,
+        data_in_rows: bool = False,
+        workbook: str | None = None,
+    ) -> tuple[list[list[float]], list[list[float]], bool]:
+        """Compute the rank-order correlation matrix of a data range via
+        `VoseCorrMatrix`, and its nearest valid (positive-semidefinite)
+        matrix via `VoseValidCorrmat`.
+
+        `data_range` is sheet-qualified; `n_vars` is the number of
+        variables (columns when data is in columns). Both are array
+        functions, so they are entered CSE-style into a scratch sheet.
+        Returns `(matrix, nearest_valid, is_valid)` where `is_valid` is
+        True when the data matrix already equals its nearest valid one
+        (within tolerance)."""
+        self.ensure_modelrisk_functional()
+        dir_flag = "TRUE" if data_in_rows else "FALSE"
+
+        def _as_matrix(raw: Any) -> list[list[float]]:
+            # xlwings returns a scalar for 1x1, a flat list for a single
+            # row/col, and a list-of-lists for n>=2 x n>=2.
+            if not isinstance(raw, list):
+                return [[float(raw)]]
+            if raw and not isinstance(raw[0], list):
+                return [[float(x) for x in raw]]
+            return [[float(x) for x in row] for row in raw]
+
+        with self._scratch_sheet(workbook) as (app, sht):
+            corr = sht.range((1, 1), (n_vars, n_vars))
+            corr.api.FormulaArray = f"=VoseCorrMatrix({data_range},{dir_flag})"
+            valid = sht.range((1, n_vars + 2), (n_vars, 2 * n_vars + 1))
+            valid.api.FormulaArray = f"=VoseValidCorrmat({corr.address})"
+            app.api.CalculateFull()
+            matrix = _as_matrix(corr.value)
+            nearest = _as_matrix(valid.value)
+
+        is_valid = all(
+            abs(matrix[i][j] - nearest[i][j]) < 1e-9
+            for i in range(len(matrix))
+            for j in range(len(matrix[i]))
+        )
+        return matrix, nearest, is_valid
+
     def fit_and_rank(
         self,
         data_range: str,
@@ -328,12 +423,7 @@ class ModelRiskBridge:
         scored: list[dict[str, Any]] = []
         sample_size = 0
         if valid:
-            app = self._excel._ensure()
-            book = app.books[workbook] if workbook else app.books.active
-            prev_alerts = app.api.DisplayAlerts
-            app.api.DisplayAlerts = False
-            sht = book.sheets.add("_mrmcp_fit")
-            try:
+            with self._scratch_sheet(workbook) as (app, sht):
                 sht.range("F1").formula = f"=COUNT({data_range})"
                 for i, fam in enumerate(valid):
                     r = i + 1
@@ -368,9 +458,6 @@ class ModelRiskBridge:
                             "fit failed",
                         )
                         skipped.append({"family": fam, "reason": reason})
-            finally:
-                sht.delete()
-                app.api.DisplayAlerts = prev_alerts
 
         return scored, skipped, sample_size
 

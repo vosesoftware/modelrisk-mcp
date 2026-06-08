@@ -17,9 +17,12 @@ import pytest
 from modelrisk_mcp.bridge.catalogue import load_catalogue
 from modelrisk_mcp.errors import ModelRiskComputationError
 from modelrisk_mcp.schemas.analysis import (
+    CorrelationMatrixResult,
+    DistributionComparison,
     DistributionProperty,
     DistributionSummary,
     FitRanking,
+    TailFit,
     TailRiskResult,
 )
 from modelrisk_mcp.tools import analysis, reading
@@ -212,3 +215,138 @@ class TestGetTailRisk:
     def test_bad_alpha_raises(self, bridge: MagicMock) -> None:
         with pytest.raises(ModelRiskComputationError):
             analysis.get_tail_risk(output_name="NPV", alphas=[1.5])
+
+
+# ----------------------------------------------------------------------
+# compute_correlation_matrix
+# ----------------------------------------------------------------------
+
+
+class TestCorrelationMatrix:
+    def test_valid_matrix_no_nearest(self, bridge: MagicMock) -> None:
+        bridge.excel.get_range_shape.return_value = (80, 3)
+        m = [[1.0, 0.5, -0.2], [0.5, 1.0, 0.1], [-0.2, 0.1, 1.0]]
+        bridge.correlation_matrix_of_data.return_value = (m, m, True)
+        r = analysis.compute_correlation_matrix(
+            workbook="m.xlsx", sheet="Sheet1", data_range="A1:C80"
+        )
+        assert isinstance(r, CorrelationMatrixResult)
+        assert r.variable_count == 3 and r.is_valid
+        assert r.nearest_valid_matrix is None
+        # qualified range threaded through
+        assert bridge.correlation_matrix_of_data.call_args.args[0] == "'Sheet1'!A1:C80"
+
+    def test_invalid_matrix_returns_nearest(self, bridge: MagicMock) -> None:
+        bridge.excel.get_range_shape.return_value = (80, 2)
+        m = [[1.0, 0.99], [0.99, 1.0]]
+        nearest = [[1.0, 0.95], [0.95, 1.0]]
+        bridge.correlation_matrix_of_data.return_value = (m, nearest, False)
+        r = analysis.compute_correlation_matrix(
+            workbook="m.xlsx", sheet="Sheet1", data_range="A1:B80"
+        )
+        assert r.is_valid is False
+        assert r.nearest_valid_matrix == nearest
+
+    def test_single_variable_raises(self, bridge: MagicMock) -> None:
+        bridge.excel.get_range_shape.return_value = (80, 1)
+        with pytest.raises(ModelRiskComputationError):
+            analysis.compute_correlation_matrix(
+                workbook="m.xlsx", sheet="Sheet1", data_range="A1:A80"
+            )
+
+    def test_data_in_rows_counts_rows(self, bridge: MagicMock) -> None:
+        bridge.excel.get_range_shape.return_value = (3, 80)
+        m = [[1.0, 0.5, -0.2], [0.5, 1.0, 0.1], [-0.2, 0.1, 1.0]]
+        bridge.correlation_matrix_of_data.return_value = (m, m, True)
+        r = analysis.compute_correlation_matrix(
+            workbook="m.xlsx", sheet="Sheet1", data_range="A1:CB3", data_in_rows=True
+        )
+        assert r.variable_count == 3
+
+
+# ----------------------------------------------------------------------
+# fit_tail
+# ----------------------------------------------------------------------
+
+
+class TestFitTail:
+    def test_gpd_dry_run_returns_tail(self, bridge: MagicMock) -> None:
+        bridge.evaluate_object_metrics.return_value = [68.4, 172.7, 237.8, 262.1, 311.0]
+        r = analysis.fit_tail(
+            workbook="m.xlsx", sheet="Sheet1", target_cell="M1", data_range="K1:K150"
+        )
+        assert isinstance(r, TailFit)
+        assert r.family == "GPD" and r.written is False
+        assert r.mean == 68.4
+        assert r.object_formula == "=VoseGPDFitObject('Sheet1'!K1:K150,TRUE)"
+        assert set(r.percentiles) == {"P95", "P99", "P99.5", "P99.9"}
+        assert r.percentiles["P99.9"] == 311.0
+
+    def test_commit_writes_object(self, bridge: MagicMock) -> None:
+        bridge.evaluate_object_metrics.return_value = [10.0, 1, 2, 3, 4]
+        r = analysis.fit_tail(
+            workbook="m.xlsx", sheet="Sheet1", target_cell="M1",
+            data_range="K1:K150", dry_run=False,
+        )
+        assert r.written is True
+        bridge.safe_write_cell.assert_called_once()
+
+    def test_bad_family_raises(self, bridge: MagicMock) -> None:
+        with pytest.raises(ModelRiskComputationError):
+            analysis.fit_tail(
+                workbook="m.xlsx", sheet="S", target_cell="M1",
+                data_range="K1:K9", family="Normal",
+            )
+
+    def test_invalid_fit_raises(self, bridge: MagicMock) -> None:
+        bridge.evaluate_object_metrics.return_value = [None, None, None, None, None]
+        with pytest.raises(ModelRiskComputationError):
+            analysis.fit_tail(
+                workbook="m.xlsx", sheet="S", target_cell="M1", data_range="K1:K9"
+            )
+
+
+# ----------------------------------------------------------------------
+# compare_distributions / compare_samples
+# ----------------------------------------------------------------------
+
+
+class TestCompareSamples:
+    def test_first_order_dominance(self) -> None:
+        a = [float(i) for i in range(1, 101)]
+        b = [x - 10 for x in a]  # A uniformly higher, paired
+        c = analysis.compare_samples(a, b)
+        assert c["paired"] is True
+        assert c["mean_difference"] == pytest.approx(10.0)
+        assert c["p_a_greater"] == pytest.approx(1.0)
+        assert c["first_order_dominance"] == "A"
+
+    def test_second_order_dominance_equal_mean(self) -> None:
+        # A is certain at 50; B has the same mean but spreads to 0/100.
+        a = [50.0] * 1000
+        b = [0.0] * 500 + [100.0] * 500
+        c = analysis.compare_samples(a, b)
+        assert c["first_order_dominance"] == "none"
+        assert c["second_order_dominance"] == "A"  # risk-averse prefers the certain one
+
+    def test_unpaired_lengths_no_pairwise_prob(self) -> None:
+        c = analysis.compare_samples([1.0, 2.0, 3.0], [0.0, 1.0])
+        assert c["paired"] is False
+        assert c["p_a_greater"] is None
+
+    def test_empty_raises(self) -> None:
+        with pytest.raises(ModelRiskComputationError):
+            analysis.compare_samples([], [1.0])
+
+
+class TestCompareDistributions:
+    def test_reads_both_outputs(self, bridge: MagicMock) -> None:
+        a = [float(i) for i in range(1, 101)]
+        b = [x - 10 for x in a]
+        bridge.get_samples.side_effect = [a, b]
+        r = analysis.compare_distributions(output_a="Plan_A", output_b="Plan_B")
+        assert isinstance(r, DistributionComparison)
+        assert r.first_order_dominance == "A"
+        assert r.p_a_greater == pytest.approx(1.0)
+        assert {d.label for d in r.percentile_deltas} == {"P5", "P25", "P50", "P75", "P95"}
+        assert bridge.get_samples.call_count == 2

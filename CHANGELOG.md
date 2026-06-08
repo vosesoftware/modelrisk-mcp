@@ -4,6 +4,28 @@ All notable changes to ModelRisk MCP. Follows [Keep a Changelog](https://keepach
 
 ## [Unreleased]
 
+## [0.3.2-alpha.6] — 2026-06-08
+
+### Added
+
+Three more high-value tools (43 → **47** total), filling gaps in dependency modelling, tail fitting, and decision support. All read-only / dry-run-default and verified live.
+
+- **`compute_correlation_matrix`** — the rank-order (Spearman) correlation matrix of a data range via `VoseCorrMatrix`, plus its nearest valid (positive-semidefinite) form via `VoseValidCorrmat`. Turns historical data into the correlation matrix you feed to `create_copula`, closing the "correlate inputs that move together" gap (previously only copulas could express dependency, with no way to derive the matrix). Runs on a transient scratch sheet (the matrices are CSE array functions); the data is untouched. Verified live: a 3-variable set recovered correlations 0.92 / −0.84 / −0.88.
+
+- **`fit_tail`** — fit a Generalised-Pareto (`GPD`, peaks-over-threshold), `GEV`, or extreme-value tail to data and read its risk. Writes a `Vose<Family>FitObject` (dry-run previews) and returns the fitted tail's mean and high percentiles (P95–P99.9) **computed analytically — tail risk without a simulation**. Pairs with `get_tail_risk` and `compute_distribution`. Verified live (GPD): mean 68.4, P99 237.8, P99.9 311.0.
+
+- **`compare_distributions`** — head-to-head comparison of two simulation outputs from their per-iteration samples: mean/stdev/percentile deltas, P(A > B), and **first- and second-order stochastic dominance** (convention: larger is better). The decision-support tool — "is strategy A better than B, and how sure are we?" Pure Python over the samples. Verified: a uniformly-higher output is correctly flagged first-order dominant; an equal-mean lower-variance output is second-order dominant.
+
+The `add-uncertainty` prompt now routes through these (fit-and-rank / fit_tail for data, `compute_correlation_matrix` + `create_copula` for dependency, `get_tail_risk` + `compare_distributions` for interpretation). New bridge helpers: a reusable `_scratch_sheet` context, `evaluate_object_metrics`, `correlation_matrix_of_data`; `ExcelBridge.get_range_shape`.
+
+### Deferred
+
+- **Time-series *fitting*** (`VoseTime*Fit`, e.g. AR1/GARCH projection from history) was investigated and held back: the functions reject the uncertainty argument in every form and the fit object reports "not valid" through the COM/array-formula path, indicating they need ModelRisk's time-series-wizard data context rather than a plain formula write. Not shipped rather than ship something unverified.
+
+### Tests
+
+13 new cases in `test_tools_analysis_mocked.py` (correlation valid/invalid/orientation, GPD fit dry-run/commit/guards, and exact stochastic-dominance arithmetic — first-order, equal-mean second-order, unpaired). 576 unit tests pass; ruff + mypy clean.
+
 ## [0.3.2-alpha.5] — 2026-06-08
 
 ### Added

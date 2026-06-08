@@ -32,21 +32,38 @@ Workflow:
    - If yes: what's your best estimate of the range (min / most
      likely / max), or do you have data to fit?
 
-4. **Propose distributions.** Call
-   `propose_distributions_for_inputs` with each user description.
-   Walk through the top recommendation. Commit with
-   `replace_constant_with_distribution` (dry_run first, then
-   commit).
+4. **Propose or fit distributions.**
+   - *No data, just a range:* call
+     `propose_distributions_for_inputs` with the user's
+     description and walk through the top recommendation.
+   - *Has data:* call `fit_and_rank_distributions` on the data
+     range — it fits many families and ranks them by AIC/SIC/HQIC,
+     so you recommend the best fit rather than guessing one. For a
+     heavy tail (losses, claims), use `fit_tail` (GPD) on the
+     exceedances.
+   - Sanity-check a proposed distribution before committing with
+     `compute_distribution(metric="summary", ...)` — confirm its
+     mean/percentiles match the user's intent.
+   - Commit with `replace_constant_with_distribution` (dry_run
+     first, then commit).
 
-5. **Mark outputs.** For each of the user's chosen output cells,
+5. **Correlate inputs that move together.** If two or more inputs
+   are dependent, don't leave them independent (a classic
+   methodology trap). With historical data, call
+   `compute_correlation_matrix` on it, then `create_copula` with
+   that matrix; otherwise ask the user for a correlation estimate.
+
+6. **Mark outputs.** For each of the user's chosen output cells,
    `wrap_with_output(name=...)` so they appear in the Results
    Viewer.
 
-6. **Audit, then run.** `audit_model` → fix any errors →
+7. **Audit, then run.** `audit_model` → fix any errors →
    `run_simulation(iterations=10000)`.
 
-7. **Interpret.** Hand off to the same drill-down menu as
-   `/interpret-results`.
+8. **Interpret.** Read the tail with `get_tail_risk` (VaR / CVaR);
+   if you're comparing strategies, use `compare_distributions`
+   (P(A>B), stochastic dominance). Then hand off to the same
+   drill-down menu as `/interpret-results`.
 
 Pace: this is a coaching conversation. Don't commit a distribution
 until the user has explicitly confirmed both the family and the

@@ -26,16 +26,24 @@ from pydantic import Field
 from modelrisk_mcp.bridge.formulas import build_distribution_formula
 from modelrisk_mcp.errors import ModelRiskComputationError
 from modelrisk_mcp.schemas.analysis import (
+    CorrelationMatrixResult,
+    DistributionComparison,
     DistributionProperty,
     DistributionSummary,
     FitCandidate,
     FitRanking,
+    PercentileDelta,
+    TailFit,
     TailMetric,
     TailRiskResult,
     ThresholdProbability,
 )
+from modelrisk_mcp.schemas.workbook import CellRef
 from modelrisk_mcp.server import mcp
 from modelrisk_mcp.tools.reading import get_bridge
+
+# Tail families that fit an extreme-value / Generalised-Pareto tail.
+_TAIL_FAMILIES = {"GPD", "GEV", "ExtValueMax", "ExtValueMin"}
 
 # Default candidate families for fit-and-rank: a broad continuous set.
 # Families whose Vose<Family>FitObject is missing, or that can't fit the
@@ -380,9 +388,243 @@ def get_tail_risk(
     )
 
 
+@mcp.tool(
+    description=(
+        "ModelRisk: Compute the rank-order (Spearman) correlation matrix of a "
+        "data range via VoseCorrMatrix, and its nearest valid "
+        "(positive-semidefinite) form via VoseValidCorrmat. Use this to turn "
+        "historical data into the correlation matrix you feed to create_copula "
+        "for correlated inputs. Variables are columns by default (set "
+        "`data_in_rows=True` if each row is a variable). Read-only: runs on a "
+        "transient scratch sheet that is always deleted."
+    )
+)
+def compute_correlation_matrix(
+    workbook: Annotated[str, Field(description="Workbook file name.")],
+    sheet: Annotated[str, Field(description="Sheet holding the data.")],
+    data_range: Annotated[
+        str, Field(description="A1-style range of the data, e.g. 'A1:D200'.")
+    ],
+    data_in_rows: Annotated[
+        bool, Field(description="True if each variable is a row. Default: columns.")
+    ] = False,
+) -> CorrelationMatrixResult:
+    bridge = get_bridge()
+    rng = bridge.excel.get_range_shape(workbook, sheet, data_range)
+    rows, cols = rng
+    n_vars = rows if data_in_rows else cols
+    if n_vars < 2:
+        raise ModelRiskComputationError(
+            f"Need at least 2 variables to correlate; got {n_vars}. "
+            "Check `data_range` orientation / `data_in_rows`."
+        )
+    qualified = f"'{sheet}'!{data_range}"
+    matrix, nearest, is_valid = bridge.correlation_matrix_of_data(
+        qualified, n_vars, data_in_rows=data_in_rows, workbook=workbook
+    )
+    return CorrelationMatrixResult(
+        data_range=qualified,
+        variable_count=n_vars,
+        matrix=matrix,
+        is_valid=is_valid,
+        nearest_valid_matrix=None if is_valid else nearest,
+    )
+
+
+@mcp.tool(
+    description=(
+        "ModelRisk: Fit an extreme-value / Generalised-Pareto tail to data and "
+        "read its risk. `family` is 'GPD' (peaks-over-threshold, the standard "
+        "tail model), 'GEV' (block maxima), 'ExtValueMax', or 'ExtValueMin'. "
+        "For GPD peaks-over-threshold, pass the range of exceedances above your "
+        "threshold as `data_range`. Writes a Vose<Family>FitObject (dry_run "
+        "previews) and returns the fitted tail's mean and high percentiles "
+        "(P95 / P99 / P99.5 / P99.9) computed analytically — the tail risk "
+        "without a simulation. Feed the written object cell to "
+        "compute_distribution / get_tail_risk for more."
+    )
+)
+def fit_tail(
+    workbook: str,
+    sheet: str,
+    target_cell: str,
+    data_range: Annotated[str, Field(description="A1-style range of the tail data.")],
+    family: Annotated[
+        str, Field(description="'GPD' (default), 'GEV', 'ExtValueMax', or 'ExtValueMin'.")
+    ] = "GPD",
+    uncertainty: Annotated[
+        bool, Field(description="Fit with parameter uncertainty. Default True.")
+    ] = True,
+    dry_run: bool = True,
+) -> TailFit:
+    if family not in _TAIL_FAMILIES:
+        raise ModelRiskComputationError(
+            f"Unknown tail family {family!r}; use one of {sorted(_TAIL_FAMILIES)}."
+        )
+    bridge = get_bridge()
+    func = f"Vose{family}FitObject"
+    if func not in bridge.catalogue:
+        raise ModelRiskComputationError(
+            f"No fit function {func!r} in the ModelRisk catalogue."
+        )
+    qualified = f"'{sheet}'!{data_range}"
+    unc = "TRUE" if uncertainty else "FALSE"
+    object_formula = f"={func}({qualified},{unc})"
+
+    ladder = [("P95", 0.95), ("P99", 0.99), ("P99.5", 0.995), ("P99.9", 0.999)]
+    templates = ["VoseMean({obj})"] + [
+        f"VosePercentile({{obj}},{u})" for _, u in ladder
+    ]
+    values = bridge.evaluate_object_metrics(object_formula, templates, workbook=workbook)
+    if values[0] is None:
+        raise ModelRiskComputationError(
+            f"{family} fit did not produce a valid distribution for {qualified}."
+        )
+    percentiles = {
+        label: v
+        for (label, _), v in zip(ladder, values[1:], strict=True)
+        if v is not None
+    }
+
+    written = False
+    if not dry_run:
+        ref = CellRef(workbook=workbook, sheet=sheet, cell=target_cell)
+        get_bridge().safe_write_cell(ref, object_formula)
+        written = True
+
+    return TailFit(
+        family=family,
+        data_range=qualified,
+        object_formula=object_formula,
+        written=written,
+        mean=values[0],
+        percentiles=percentiles,
+    )
+
+
+def _empirical_cdf(sorted_xs: list[float], grid: list[float]) -> list[float]:
+    """F(x) = fraction of samples <= x, evaluated at each grid point.
+    `sorted_xs` must be ascending."""
+    import bisect
+
+    n = len(sorted_xs)
+    return [bisect.bisect_right(sorted_xs, g) / n for g in grid]
+
+
+def compare_samples(a: list[float], b: list[float]) -> dict[str, Any]:
+    """Pure-Python head-to-head comparison of two sample sets. Dominance
+    uses the convention that larger outcomes are preferred. Separated
+    from the tool for unit testing without Excel."""
+    if not a or not b:
+        raise ModelRiskComputationError("Both outputs need samples to compare.")
+    sa, sb = sorted(a), sorted(b)
+    na, nb = len(a), len(b)
+    mean_a, mean_b = math.fsum(a) / na, math.fsum(b) / nb
+    sd_a = math.sqrt(math.fsum((x - mean_a) ** 2 for x in a) / na)
+    sd_b = math.sqrt(math.fsum((x - mean_b) ** 2 for x in b) / nb)
+
+    paired = na == nb
+    p_a_greater = (
+        sum(1 for x, y in zip(a, b, strict=True) if x > y) / na if paired else None
+    )
+
+    grid = sorted(set(sa) | set(sb))
+    fa = _empirical_cdf(sa, grid)
+    fb = _empirical_cdf(sb, grid)
+    tol = 1e-9
+    # First-order: A preferred (stochastically larger) if F_A(x) <= F_B(x) for all x.
+    a_fo = all(x <= y + tol for x, y in zip(fa, fb, strict=True))
+    b_fo = all(y <= x + tol for x, y in zip(fa, fb, strict=True))
+    fo = "A" if a_fo and not b_fo else "B" if b_fo and not a_fo else "none"
+    # Second-order: cumulative area of (F_B - F_A); A preferred if always >= 0.
+    so = "none"
+    if fo == "none":
+        cum = 0.0
+        a_dom = b_dom = True
+        for i in range(1, len(grid)):
+            width = grid[i] - grid[i - 1]
+            cum += (fb[i - 1] - fa[i - 1]) * width
+            if cum < -tol:
+                a_dom = False
+            if cum > tol:
+                b_dom = False
+        so = "A" if a_dom and not b_dom else "B" if b_dom and not a_dom else "none"
+
+    ladder = [("P5", 0.05), ("P25", 0.25), ("P50", 0.50), ("P75", 0.75), ("P95", 0.95)]
+    deltas = [
+        {
+            "label": label,
+            "a": _quantile(sa, u),
+            "b": _quantile(sb, u),
+            "difference": _quantile(sa, u) - _quantile(sb, u),
+        }
+        for label, u in ladder
+    ]
+
+    return {
+        "sample_size": min(na, nb),
+        "paired": paired,
+        "mean_a": mean_a,
+        "mean_b": mean_b,
+        "mean_difference": mean_a - mean_b,
+        "stdev_a": sd_a,
+        "stdev_b": sd_b,
+        "p_a_greater": p_a_greater,
+        "first_order_dominance": fo,
+        "second_order_dominance": so,
+        "percentile_deltas": deltas,
+    }
+
+
+@mcp.tool(
+    description=(
+        "ModelRisk: Compare two simulation outputs head-to-head from their "
+        "per-iteration samples — mean/stdev/percentile differences, P(A > B), "
+        "and first- and second-order stochastic dominance (under the "
+        "convention that larger outcomes are preferred). First-order dominance "
+        "means one option is better at every probability level; second-order "
+        "adds risk-aversion. Use it to decide between strategies. Run a "
+        "simulation that records both outputs first."
+    )
+)
+def compare_distributions(
+    output_a: Annotated[str, Field(description="First output (VoseOutput) name.")],
+    output_b: Annotated[str, Field(description="Second output name.")],
+    workbook_name: Annotated[
+        str | None, Field(description="Workbook name. Omit for the active workbook.")
+    ] = None,
+    max_n: Annotated[
+        int, Field(ge=1, le=1_000_000, description="Max samples per output (default 100 000).")
+    ] = 100_000,
+) -> DistributionComparison:
+    bridge = get_bridge()
+    a = bridge.get_samples(output_a, workbook_name, max_n=max_n)
+    b = bridge.get_samples(output_b, workbook_name, max_n=max_n)
+    c = compare_samples(list(a), list(b))
+    return DistributionComparison(
+        output_a=output_a,
+        output_b=output_b,
+        sample_size=c["sample_size"],
+        paired=c["paired"],
+        mean_a=c["mean_a"],
+        mean_b=c["mean_b"],
+        mean_difference=c["mean_difference"],
+        stdev_a=c["stdev_a"],
+        stdev_b=c["stdev_b"],
+        p_a_greater=c["p_a_greater"],
+        first_order_dominance=c["first_order_dominance"],
+        second_order_dominance=c["second_order_dominance"],
+        percentile_deltas=[PercentileDelta(**d) for d in c["percentile_deltas"]],
+    )
+
+
 __all__ = [
+    "compare_distributions",
+    "compare_samples",
+    "compute_correlation_matrix",
     "compute_distribution",
     "compute_tail_risk",
     "fit_and_rank_distributions",
+    "fit_tail",
     "get_tail_risk",
 ]

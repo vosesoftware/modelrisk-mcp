@@ -108,3 +108,73 @@ class TailRiskResult(BaseModel):
         default_factory=list,
         description="P(X>t) / P(X<=t) for each requested threshold.",
     )
+
+
+class CorrelationMatrixResult(BaseModel):
+    """Rank-order correlation matrix of a data range, plus its nearest
+    valid (positive-semidefinite) form."""
+
+    data_range: str
+    variable_count: int
+    matrix: list[list[float]] = Field(
+        description="Spearman rank-order correlation matrix (VoseCorrMatrix)."
+    )
+    is_valid: bool = Field(
+        description="True if the matrix is already a valid (PSD) correlation matrix."
+    )
+    nearest_valid_matrix: list[list[float]] | None = Field(
+        default=None,
+        description="Nearest valid matrix (VoseValidCorrmat) — null when already valid.",
+    )
+
+
+class TailFit(BaseModel):
+    """A fitted extreme-value / GPD tail and its analytic risk metrics."""
+
+    family: str = Field(description="Tail family fitted, e.g. 'GPD' or 'GEV'.")
+    data_range: str
+    object_formula: str = Field(
+        description="The Vose<Family>FitObject formula written (or previewed)."
+    )
+    written: bool
+    mean: float
+    percentiles: dict[str, float] = Field(
+        description="Fitted-tail percentiles, e.g. {'P95': ..., 'P99': ..., 'P99.5': ...}."
+    )
+
+
+class PercentileDelta(BaseModel):
+    label: str
+    a: float
+    b: float
+    difference: float = Field(description="a - b at this percentile.")
+
+
+class DistributionComparison(BaseModel):
+    """Head-to-head comparison of two simulation outputs from their
+    per-iteration samples. Dominance is reported under the convention
+    that LARGER outcomes are preferred."""
+
+    output_a: str
+    output_b: str
+    sample_size: int
+    paired: bool = Field(
+        description="True if equal-length samples were compared iteration-by-iteration."
+    )
+    mean_a: float
+    mean_b: float
+    mean_difference: float = Field(description="mean(A) - mean(B).")
+    stdev_a: float
+    stdev_b: float
+    p_a_greater: float | None = Field(
+        description="P(A > B). Paired if samples align, else null.",
+    )
+    first_order_dominance: str = Field(
+        description="'A', 'B', or 'none' — first-order stochastic dominance (larger=better)."
+    )
+    second_order_dominance: str = Field(
+        description="'A', 'B', or 'none' — second-order stochastic dominance (risk-averse)."
+    )
+    percentile_deltas: list[PercentileDelta] = Field(
+        description="A vs B at a percentile ladder."
+    )

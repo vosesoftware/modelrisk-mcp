@@ -53,7 +53,7 @@ From a checkout of the modelrisk-mcp repo:
 uv run mcp dev src/modelrisk_mcp/__main__.py
 ```
 
-Opens the MCP Inspector at <http://localhost:5173>. You should see **44 tools** listed under `tools/list` — `list_open_workbooks`, `get_active_workbook`, `audit_model`, `run_simulation`, `build_drivers_report`, and so on. Every description starts with `"ModelRisk: ..."`.
+Opens the MCP Inspector at <http://localhost:5173>. You should see **47 tools** listed under `tools/list` — `list_open_workbooks`, `get_active_workbook`, `audit_model`, `run_simulation`, `build_drivers_report`, and so on. Every description starts with `"ModelRisk: ..."`.
 
 ## Slash commands
 

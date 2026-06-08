@@ -272,6 +272,20 @@ class ExcelBridge:
             error=error,
         )
 
+    def get_range_shape(
+        self, workbook: str, sheet: str, range_ref: str
+    ) -> tuple[int, int]:
+        """Return `(n_rows, n_cols)` of a range without reading values."""
+        sh = self._get_sheet(workbook, sheet)
+        try:
+            r = sh.range(range_ref)
+        except Exception as exc:
+            raise CellReferenceError(
+                f"Invalid range reference {range_ref!r} on {workbook}!{sheet}."
+            ) from exc
+        shape = r.shape
+        return int(shape[0]), int(shape[1])
+
     def read_range(
         self, workbook: str, sheet: str, range_ref: str
     ) -> RangeInfo:
