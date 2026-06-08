@@ -4,6 +4,24 @@ All notable changes to ModelRisk MCP. Follows [Keep a Changelog](https://keepach
 
 ## [Unreleased]
 
+## [0.3.2-alpha.7] — 2026-06-08
+
+### Added
+
+Three workflow/analysis tools (47 → **50**) closing the deterministic→stochastic, validation, and uncertainty-decomposition gaps.
+
+- **`plan_risk_model`** — one read-only call that produces the blueprint for turning a deterministic workbook into a risk model: declared outputs, existing distributions, the ranked hard-coded cells that look like uncertain inputs, a `readiness` verdict (`empty` / `needs-outputs` / `needs-inputs` / `ready`), and an ordered, state-aware checklist (wrap outputs → fit/propose → correlate → audit → simulate → interpret). Run it first when asked to "add uncertainty" or "make this a risk model." Composes `discover_inputs` + `list_outputs` + `list_distributions`.
+
+- **`backtest_output`** — validate a simulation output against realised actuals: the Probability Integral Transform (PIT, mean ~0.5 and uniform when calibrated), empirical coverage of central prediction intervals (≈90% of actuals should land in the 90% interval), and bias, with a plain-English verdict. Answers "did the model's predicted distribution actually match what happened?" Pure Python over the output's samples. Verified: a same-distribution actual set reads "well calibrated"; an upper-tail set reads "model runs low — under-forecasting."
+
+- **`decompose_uncertainty`** — split an output's variance into **epistemic** (parameter/knowledge uncertainty — reducible with more data) and **aleatory** (natural variability — irreducible), via the law of total variance. ModelRisk has no two-dimensional-simulation worksheet function (it's a simulation *mode* we can't trigger), so this approximates it from two runs you provide: a full run and a run with the epistemic inputs frozen at point estimates. Tells you whether collecting data or hedging variability is the lever. Verified: total 100 = aleatory 36 + epistemic 64 → shares 0.64 / 0.36.
+
+The `add-uncertainty` prompt already routes through the fit/correlate/tail tools from previous alphas; `plan_risk_model` is the matching one-call entry point.
+
+### Tests
+
+19 new cases — `test_tools_analysis_mocked.py` (PIT calibration incl. under-forecast detection, exact variance-split arithmetic) and `test_tools_workflows_mocked.py` (the four `plan_risk_model` readiness states). 588 unit tests pass; ruff + mypy clean.
+
 ## [0.3.2-alpha.6] — 2026-06-08
 
 ### Added

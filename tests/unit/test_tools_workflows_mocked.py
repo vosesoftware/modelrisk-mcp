@@ -232,6 +232,72 @@ class TestDiscoverInputs:
 
 
 # ----------------------------------------------------------------------
+# plan_risk_model — deterministic -> stochastic blueprint
+# ----------------------------------------------------------------------
+
+
+class TestPlanRiskModel:
+    def _output(self, name: str) -> Any:
+        from types import SimpleNamespace
+
+        return SimpleNamespace(name=name)
+
+    def test_empty_workbook_is_empty_readiness(self, bridge: MagicMock) -> None:
+        bridge.list_outputs.return_value = []
+        bridge.list_distributions.return_value = []
+        bridge.find_hard_coded_inputs.return_value = []
+        bridge.excel.iterate_cells.return_value = iter([])
+        p = workflows.plan_risk_model("m.xlsx")
+        assert p.readiness == "empty"
+        assert p.output_count == 0 and p.input_candidate_count == 0
+        assert "wrap_with_output" in p.steps[0]
+
+    def test_outputs_but_no_inputs_needs_inputs(self, bridge: MagicMock) -> None:
+        bridge.list_outputs.return_value = [self._output("NPV")]
+        bridge.list_distributions.return_value = []
+        bridge.find_hard_coded_inputs.return_value = []
+        bridge.excel.iterate_cells.return_value = iter([])
+        p = workflows.plan_risk_model("m.xlsx")
+        assert p.readiness == "needs-inputs"
+        assert p.outputs == ["NPV"]
+
+    def test_ready_when_outputs_and_candidates(self, bridge: MagicMock) -> None:
+        bridge.list_outputs.return_value = [self._output("NPV")]
+        bridge.list_distributions.return_value = [object()]
+        bridge.find_hard_coded_inputs.return_value = [
+            CellRef(workbook="m.xlsx", sheet="In", cell="A1")
+        ]
+        bridge.excel.iterate_cells.return_value = iter([
+            CellInfo(
+                ref=CellRef(workbook="m.xlsx", sheet="In", cell="A1"),
+                formula="", value=1000, cell_type="number",
+            ),
+        ])
+        p = workflows.plan_risk_model("m.xlsx")
+        assert p.readiness == "ready"
+        assert p.input_candidate_count == 1
+        assert p.distribution_count == 1
+        # No "declare outputs" step when outputs already exist.
+        assert not any("wrap_with_output" in s for s in p.steps)
+
+    def test_no_outputs_needs_outputs_first_step(self, bridge: MagicMock) -> None:
+        bridge.list_outputs.return_value = []
+        bridge.list_distributions.return_value = []
+        bridge.find_hard_coded_inputs.return_value = [
+            CellRef(workbook="m.xlsx", sheet="In", cell="A1")
+        ]
+        bridge.excel.iterate_cells.return_value = iter([
+            CellInfo(
+                ref=CellRef(workbook="m.xlsx", sheet="In", cell="A1"),
+                formula="", value=500, cell_type="number",
+            ),
+        ])
+        p = workflows.plan_risk_model("m.xlsx")
+        assert p.readiness == "needs-outputs"
+        assert "wrap_with_output" in p.steps[0]
+
+
+# ----------------------------------------------------------------------
 # audit_model — delegates to audit.engine.run_audit
 # ----------------------------------------------------------------------
 

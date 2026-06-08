@@ -17,6 +17,7 @@ import pytest
 from modelrisk_mcp.bridge.catalogue import load_catalogue
 from modelrisk_mcp.errors import ModelRiskComputationError
 from modelrisk_mcp.schemas.analysis import (
+    BacktestResult,
     CorrelationMatrixResult,
     DistributionComparison,
     DistributionProperty,
@@ -24,6 +25,7 @@ from modelrisk_mcp.schemas.analysis import (
     FitRanking,
     TailFit,
     TailRiskResult,
+    UncertaintyDecomposition,
 )
 from modelrisk_mcp.tools import analysis, reading
 
@@ -350,3 +352,80 @@ class TestCompareDistributions:
         assert r.p_a_greater == pytest.approx(1.0)
         assert {d.label for d in r.percentile_deltas} == {"P5", "P25", "P50", "P75", "P95"}
         assert bridge.get_samples.call_count == 2
+
+
+# ----------------------------------------------------------------------
+# backtest_output / backtest_samples
+# ----------------------------------------------------------------------
+
+
+class TestBacktestSamples:
+    def test_calibrated_model_passes(self) -> None:
+        # Samples and actuals both 1..1000 -> perfectly calibrated.
+        xs = [float(i) for i in range(1, 1001)]
+        actuals = [float(i) for i in range(5, 1000, 17)]
+        r = analysis.backtest_samples(xs, actuals, [0.5, 0.9])
+        assert 0.4 < r["mean_pit"] < 0.6
+        assert r["pit_uniformity_ks"] < 0.15
+        assert r["verdict"] == "well calibrated"
+
+    def test_actuals_high_flags_under_forecast(self) -> None:
+        xs = [float(i) for i in range(1, 1001)]
+        actuals = [950.0, 960.0, 970.0, 980.0, 990.0]  # all in the upper tail
+        r = analysis.backtest_samples(xs, actuals, [0.9])
+        assert r["mean_pit"] > 0.6
+        assert "runs low" in r["verdict"]
+        assert r["bias"] > 0
+
+    def test_empty_samples_or_actuals_raise(self) -> None:
+        with pytest.raises(ModelRiskComputationError):
+            analysis.backtest_samples([], [1.0], [0.9])
+        with pytest.raises(ModelRiskComputationError):
+            analysis.backtest_samples([1.0], [], [0.9])
+
+    def test_tool_reads_samples(self, bridge: MagicMock) -> None:
+        bridge.get_samples.return_value = [float(i) for i in range(1, 1001)]
+        r = analysis.backtest_output(output_name="Demand", actuals=[100.0, 500.0, 900.0])
+        assert isinstance(r, BacktestResult)
+        assert r.n_actuals == 3 and r.sample_size == 1000
+        bridge.get_samples.assert_called_once()
+
+    def test_bad_interval_raises(self, bridge: MagicMock) -> None:
+        with pytest.raises(ModelRiskComputationError):
+            analysis.backtest_output(output_name="X", actuals=[1.0], intervals=[1.2])
+
+
+# ----------------------------------------------------------------------
+# decompose_uncertainty
+# ----------------------------------------------------------------------
+
+
+class TestDecomposeUncertainty:
+    def test_variance_split(self, bridge: MagicMock) -> None:
+        # total ~ var 100, conditional (epistemic frozen) ~ var 36.
+        total = [(-10.0 if i % 2 else 10.0) for i in range(1000)]  # var 100
+        cond = [(-6.0 if i % 2 else 6.0) for i in range(1000)]  # var 36
+        bridge.get_samples.side_effect = [total, cond]
+        r = analysis.decompose_uncertainty(
+            total_output="Total", conditional_output="Frozen"
+        )
+        assert isinstance(r, UncertaintyDecomposition)
+        assert r.total_variance == pytest.approx(100.0)
+        assert r.aleatory_variance == pytest.approx(36.0)
+        assert r.epistemic_variance == pytest.approx(64.0)
+        assert r.epistemic_share == pytest.approx(0.64)
+        assert r.aleatory_share == pytest.approx(0.36)
+        assert "Epistemic" in r.interpretation
+
+    def test_aleatory_dominates_interpretation(self, bridge: MagicMock) -> None:
+        total = [(-10.0 if i % 2 else 10.0) for i in range(1000)]  # var 100
+        cond = [(-9.0 if i % 2 else 9.0) for i in range(1000)]  # var 81
+        bridge.get_samples.side_effect = [total, cond]
+        r = analysis.decompose_uncertainty(total_output="T", conditional_output="C")
+        assert r.aleatory_share > 0.6
+        assert "Aleatory" in r.interpretation
+
+    def test_empty_raises(self, bridge: MagicMock) -> None:
+        bridge.get_samples.side_effect = [[], [1.0]]
+        with pytest.raises(ModelRiskComputationError):
+            analysis.decompose_uncertainty(total_output="T", conditional_output="C")

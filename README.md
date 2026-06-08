@@ -8,7 +8,7 @@ Use it with Claude Desktop, Claude Code, Cursor, Zed, or any MCP-compliant clien
 
 > ModelRisk MCP is an open MCP server on the standard Anthropic Model Context Protocol. No proprietary layer, no lock-in. The 1417-entry function catalogue, the Vose methodology principles, and the audit rule set are all included in the package — and editable.
 
-**Stable: `0.3.0`** — programmatic simulation via the `run_simulation` tool wired end-to-end (XLL command surface, no fragile COM dispatch); `.vmrs` results read via the official ModelRisk SDK; activation ships bundled so no environment configuration is required. 47 tools across reading, building, simulation, scenario-sweep, restore, charting, audit, and workflow surfaces.
+**Stable: `0.3.0`** — programmatic simulation via the `run_simulation` tool wired end-to-end (XLL command surface, no fragile COM dispatch); `.vmrs` results read via the official ModelRisk SDK; activation ships bundled so no environment configuration is required. 50 tools across reading, building, simulation, scenario-sweep, restore, charting, audit, and workflow surfaces.
 
 ---
 
@@ -216,7 +216,7 @@ The server can both read *and* modify your workbook — that's the central diffe
 
 ## What's inside
 
-- **47 tools** — 12 reading, 14 building (incl. `create_aggregate` for FFT / Panjer / MC frequency-severity methods), 5 simulation (incl. `run_simulation`, `run_scenarios`, `get_samples`, `restore_cell`, `restore_deterministic_state`), 6 analysis (`compute_distribution`, `fit_and_rank_distributions`, `get_tail_risk`, `fit_tail`, `compute_correlation_matrix`, `compare_distributions`), 7 workflow / reporting (incl. `audit_model`, `diagnose_workbook`, `create_tornado_chart`, `build_drivers_report`, `build_executive_report`, `generate_executive_summary`, `save_workbook_as`), 3 VMRS (`read_vmrs`, `set_active_vmrs`, `list_vmrs_variables`)
+- **50 tools** — 12 reading, 14 building (incl. `create_aggregate` for FFT / Panjer / MC frequency-severity methods), 5 simulation (incl. `run_simulation`, `run_scenarios`, `get_samples`, `restore_cell`, `restore_deterministic_state`), 8 analysis (`compute_distribution`, `fit_and_rank_distributions`, `get_tail_risk`, `fit_tail`, `compute_correlation_matrix`, `compare_distributions`, `backtest_output`, `decompose_uncertainty`), 8 workflow / reporting (incl. `plan_risk_model`, `audit_model`, `diagnose_workbook`, `create_tornado_chart`, `build_drivers_report`, `build_executive_report`, `generate_executive_summary`, `save_workbook_as`), 3 VMRS (`read_vmrs`, `set_active_vmrs`, `list_vmrs_variables`)
 - **5 resources** — `modelrisk://functions`, `modelrisk://distributions`, `modelrisk://methodology`, `modelrisk://workbook/current`, `modelrisk://audit-rules`
 - **5 slash-command prompts** — `/build-risk-model`, `/audit-model`, `/interpret-results`, `/add-uncertainty`, `/import-legacy-model`
 - **1417-entry function catalogue** extracted directly from the ModelRisk IDL + XLL header

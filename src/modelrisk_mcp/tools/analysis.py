@@ -26,17 +26,20 @@ from pydantic import Field
 from modelrisk_mcp.bridge.formulas import build_distribution_formula
 from modelrisk_mcp.errors import ModelRiskComputationError
 from modelrisk_mcp.schemas.analysis import (
+    BacktestResult,
     CorrelationMatrixResult,
     DistributionComparison,
     DistributionProperty,
     DistributionSummary,
     FitCandidate,
     FitRanking,
+    IntervalCoverage,
     PercentileDelta,
     TailFit,
     TailMetric,
     TailRiskResult,
     ThresholdProbability,
+    UncertaintyDecomposition,
 )
 from modelrisk_mcp.schemas.workbook import CellRef
 from modelrisk_mcp.server import mcp
@@ -618,12 +621,202 @@ def compare_distributions(
     )
 
 
+def backtest_samples(
+    samples: list[float], actuals: list[float], intervals: list[float]
+) -> dict[str, Any]:
+    """Pure-Python backtest of a predictive sample set against realised
+    actuals: PIT calibration, central-interval coverage, and bias.
+    Separated from the tool for unit testing without Excel."""
+    if not samples:
+        raise ModelRiskComputationError("No model samples to validate against.")
+    if not actuals:
+        raise ModelRiskComputationError("No actuals provided.")
+    xs = sorted(samples)
+    n = len(xs)
+    import bisect
+
+    model_mean = math.fsum(xs) / n
+    actuals_mean = math.fsum(actuals) / len(actuals)
+    median = _quantile(xs, 0.5)
+
+    # PIT: F_model(actual) for each actual; ~Uniform(0,1) if calibrated.
+    pit = [bisect.bisect_right(xs, a) / n for a in actuals]
+    mean_pit = math.fsum(pit) / len(pit)
+    frac_below_median = sum(1 for a in actuals if a < median) / len(actuals)
+
+    # KS distance of the PIT values from Uniform(0,1).
+    sp = sorted(pit)
+    m = len(sp)
+    ks = 0.0
+    for i, p in enumerate(sp):
+        ks = max(ks, abs((i + 1) / m - p), abs(p - i / m))
+
+    coverage = []
+    for nominal in intervals:
+        lo_q = (1.0 - nominal) / 2.0
+        lower = _quantile(xs, lo_q)
+        upper = _quantile(xs, 1.0 - lo_q)
+        inside = sum(1 for a in actuals if lower <= a <= upper) / len(actuals)
+        coverage.append(
+            {"nominal": nominal, "lower": lower, "upper": upper, "empirical": inside}
+        )
+
+    if ks < 0.1:
+        verdict = "well calibrated"
+    elif mean_pit > 0.6:
+        verdict = "model runs low — actuals fall in the upper tail (under-forecasting)"
+    elif mean_pit < 0.4:
+        verdict = "model runs high — actuals fall in the lower tail (over-forecasting)"
+    else:
+        verdict = "miscalibrated spread — coverage deviates from nominal"
+
+    return {
+        "sample_size": n,
+        "n_actuals": len(actuals),
+        "model_mean": model_mean,
+        "actuals_mean": actuals_mean,
+        "bias": actuals_mean - model_mean,
+        "mean_pit": mean_pit,
+        "pit_uniformity_ks": ks,
+        "frac_below_median": frac_below_median,
+        "coverage": coverage,
+        "verdict": verdict,
+    }
+
+
+@mcp.tool(
+    description=(
+        "ModelRisk: Backtest a simulation output against realised actuals — "
+        "does the model's predicted distribution match what actually happened? "
+        "Reports the Probability Integral Transform (PIT, ~0.5 mean and "
+        "uniform if calibrated), the empirical coverage of central prediction "
+        "intervals (e.g. ~90% of actuals should fall in the 90% interval), and "
+        "bias. Pass the historical `actuals` you want to validate against. "
+        "Reads the output's per-iteration samples — run the simulation first."
+    )
+)
+def backtest_output(
+    output_name: Annotated[str, Field(description="VoseOutput name to validate.")],
+    actuals: Annotated[
+        list[float], Field(min_length=1, description="Realised historical values.")
+    ],
+    intervals: Annotated[
+        list[float] | None,
+        Field(description="Central intervals to check coverage of. Default [0.5,0.8,0.9,0.95]."),
+    ] = None,
+    workbook_name: Annotated[
+        str | None, Field(description="Workbook name. Omit for the active workbook.")
+    ] = None,
+    max_n: Annotated[
+        int, Field(ge=1, le=1_000_000, description="Max samples to read (default 100 000).")
+    ] = 100_000,
+) -> BacktestResult:
+    ivals = intervals or [0.5, 0.8, 0.9, 0.95]
+    if any(not 0.0 < v < 1.0 for v in ivals):
+        raise ModelRiskComputationError("Each interval must be strictly between 0 and 1.")
+    samples = get_bridge().get_samples(output_name, workbook_name, max_n=max_n)
+    r = backtest_samples(list(samples), list(actuals), ivals)
+    return BacktestResult(
+        output_name=output_name,
+        sample_size=r["sample_size"],
+        n_actuals=r["n_actuals"],
+        model_mean=r["model_mean"],
+        actuals_mean=r["actuals_mean"],
+        bias=r["bias"],
+        mean_pit=r["mean_pit"],
+        pit_uniformity_ks=r["pit_uniformity_ks"],
+        frac_below_median=r["frac_below_median"],
+        coverage=[IntervalCoverage(**c) for c in r["coverage"]],
+        verdict=r["verdict"],
+    )
+
+
+def _variance(xs: list[float]) -> tuple[float, float]:
+    """Return (mean, population variance)."""
+    n = len(xs)
+    mean = math.fsum(xs) / n
+    var = math.fsum((x - mean) ** 2 for x in xs) / n
+    return mean, var
+
+
+@mcp.tool(
+    description=(
+        "ModelRisk: Split an output's uncertainty into EPISTEMIC (parameter / "
+        "knowledge uncertainty — reducible with more data) and ALEATORY "
+        "(natural variability — irreducible), via the law of total variance. "
+        "ModelRisk has no two-dimensional-simulation worksheet function, so "
+        "this approximates it from two runs you provide as two outputs: "
+        "`total_output` from a full run (everything varying), and "
+        "`conditional_output` from a run with the epistemic/parameter inputs "
+        "FROZEN at point estimates (only natural variability left). "
+        "Epistemic variance = total - aleatory. Tells you whether collecting "
+        "more data (cuts epistemic) or hedging variability (aleatory) is the "
+        "lever."
+    )
+)
+def decompose_uncertainty(
+    total_output: Annotated[
+        str, Field(description="Output name from the full run (all inputs varying).")
+    ],
+    conditional_output: Annotated[
+        str,
+        Field(description="Output name from the run with epistemic inputs frozen."),
+    ],
+    workbook_name: Annotated[
+        str | None, Field(description="Workbook name. Omit for the active workbook.")
+    ] = None,
+    max_n: Annotated[
+        int, Field(ge=1, le=1_000_000, description="Max samples to read (default 100 000).")
+    ] = 100_000,
+) -> UncertaintyDecomposition:
+    bridge = get_bridge()
+    total = bridge.get_samples(total_output, workbook_name, max_n=max_n)
+    cond = bridge.get_samples(conditional_output, workbook_name, max_n=max_n)
+    if not total or not cond:
+        raise ModelRiskComputationError("Both outputs need samples.")
+    _, total_var = _variance(list(total))
+    _, aleatory_var = _variance(list(cond))
+    epistemic_var = total_var - aleatory_var
+    share_e = epistemic_var / total_var if total_var > 0 else 0.0
+    share_a = aleatory_var / total_var if total_var > 0 else 0.0
+
+    if share_e > 0.6:
+        interp = (
+            "Epistemic (parameter) uncertainty dominates — collecting more data "
+            "to pin down the inputs is the highest-leverage way to narrow the output."
+        )
+    elif share_a > 0.6:
+        interp = (
+            "Aleatory (natural variability) dominates — this is largely "
+            "irreducible; more data won't help much, so focus on hedging or capacity."
+        )
+    else:
+        interp = "Epistemic and aleatory uncertainty are comparable; both levers matter."
+
+    return UncertaintyDecomposition(
+        total_output=total_output,
+        conditional_output=conditional_output,
+        total_variance=total_var,
+        aleatory_variance=aleatory_var,
+        epistemic_variance=epistemic_var,
+        epistemic_share=share_e,
+        aleatory_share=share_a,
+        total_stdev=math.sqrt(total_var),
+        aleatory_stdev=math.sqrt(aleatory_var),
+        epistemic_stdev=math.sqrt(max(epistemic_var, 0.0)),
+        interpretation=interp,
+    )
+
+
 __all__ = [
+    "backtest_output",
+    "backtest_samples",
     "compare_distributions",
     "compare_samples",
     "compute_correlation_matrix",
     "compute_distribution",
     "compute_tail_risk",
+    "decompose_uncertainty",
     "fit_and_rank_distributions",
     "fit_tail",
     "get_tail_risk",

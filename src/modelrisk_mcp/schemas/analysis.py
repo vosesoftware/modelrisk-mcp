@@ -10,6 +10,8 @@
 
 from __future__ import annotations
 
+from typing import Any
+
 from pydantic import BaseModel, Field
 
 
@@ -177,4 +179,76 @@ class DistributionComparison(BaseModel):
     )
     percentile_deltas: list[PercentileDelta] = Field(
         description="A vs B at a percentile ladder."
+    )
+
+
+class RiskModelPlan(BaseModel):
+    """A blueprint for converting a deterministic workbook into a Monte
+    Carlo risk model: where it stands and the ordered next actions."""
+
+    workbook: str
+    output_count: int
+    outputs: list[str] = Field(description="Names of cells already wrapped with VoseOutput.")
+    distribution_count: int = Field(description="Vose distribution cells already present.")
+    input_candidate_count: int
+    input_candidates: list[dict[str, Any]] = Field(
+        description="Ranked hard-coded numeric cells that look like uncertain inputs."
+    )
+    readiness: str = Field(
+        description="'ready', 'needs-outputs', 'needs-inputs', or 'empty'."
+    )
+    steps: list[str] = Field(description="Ordered, state-aware next actions.")
+
+
+class IntervalCoverage(BaseModel):
+    nominal: float = Field(description="Nominal central interval, e.g. 0.90.")
+    lower: float
+    upper: float
+    empirical: float = Field(description="Fraction of actuals that fell inside.")
+
+
+class BacktestResult(BaseModel):
+    """Validation of a simulation output against realised actuals."""
+
+    output_name: str
+    sample_size: int
+    n_actuals: int
+    model_mean: float
+    actuals_mean: float
+    bias: float = Field(description="actuals_mean - model_mean.")
+    mean_pit: float = Field(
+        description="Mean Probability Integral Transform; ~0.5 if calibrated."
+    )
+    pit_uniformity_ks: float = Field(
+        description="KS distance of the PIT values from Uniform(0,1); 0 = perfectly calibrated."
+    )
+    frac_below_median: float = Field(
+        description="Fraction of actuals below the model median; ~0.5 if calibrated."
+    )
+    coverage: list[IntervalCoverage] = Field(
+        description="Empirical vs nominal coverage of central prediction intervals."
+    )
+    verdict: str = Field(description="Short calibration verdict.")
+
+
+class UncertaintyDecomposition(BaseModel):
+    """Epistemic-vs-aleatory variance split of an output, via the law of
+    total variance from a full run and an epistemic-frozen run."""
+
+    total_output: str
+    conditional_output: str
+    total_variance: float
+    aleatory_variance: float = Field(
+        description="Variability remaining when epistemic (parameter) inputs are frozen."
+    )
+    epistemic_variance: float = Field(
+        description="total - aleatory; the part driven by parameter uncertainty."
+    )
+    epistemic_share: float = Field(description="Epistemic fraction of total variance (0-1).")
+    aleatory_share: float = Field(description="Aleatory fraction of total variance (0-1).")
+    total_stdev: float
+    aleatory_stdev: float
+    epistemic_stdev: float = Field(description="sqrt(max(epistemic_variance, 0)).")
+    interpretation: str = Field(
+        description="Which uncertainty dominates and what reduces it."
     )

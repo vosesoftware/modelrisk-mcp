@@ -17,6 +17,7 @@ from pydantic import Field
 from modelrisk_mcp.audit.engine import run_audit
 from modelrisk_mcp.bridge.charts import TornadoChartResult
 from modelrisk_mcp.bridge.reports import DriversReportResult, ExecutiveReportResult
+from modelrisk_mcp.schemas.analysis import RiskModelPlan
 from modelrisk_mcp.schemas.results import AuditReport, SimulationResult
 from modelrisk_mcp.schemas.workbook import CellRef
 from modelrisk_mcp.server import mcp
@@ -150,6 +151,66 @@ def discover_inputs(
     scored.sort(key=lambda kv: kv[0], reverse=True)
     candidates = [entry for _, entry in scored[:limit]]
     return {"candidates": candidates, "count": len(candidates)}
+
+
+@mcp.tool(
+    description=(
+        "ModelRisk: One-call blueprint for turning a deterministic workbook "
+        "into a Monte Carlo risk model. Reports what's already there (declared "
+        "outputs, existing distributions), the ranked hard-coded cells that "
+        "look like uncertain inputs, and an ordered, state-aware checklist of "
+        "next actions (wrap outputs, fit/propose distributions, correlate, "
+        "audit, simulate, interpret). Read-only — it plans, it doesn't modify. "
+        "Run this first when asked to 'add uncertainty' or 'make this a risk "
+        "model'."
+    )
+)
+def plan_risk_model(workbook_name: str) -> RiskModelPlan:
+    bridge = get_bridge()
+    outputs = bridge.list_outputs(workbook_name)
+    distributions = bridge.list_distributions(workbook_name)
+    candidates = discover_inputs(workbook_name, limit=15)["candidates"]
+
+    has_outputs = len(outputs) > 0
+    has_candidates = len(candidates) > 0
+    if not has_outputs and not has_candidates:
+        readiness = "empty"
+    elif not has_outputs:
+        readiness = "needs-outputs"
+    elif not has_candidates and not distributions:
+        readiness = "needs-inputs"
+    else:
+        readiness = "ready"
+
+    steps: list[str] = []
+    if not has_outputs:
+        steps.append(
+            "Declare the result cell(s) you care about with wrap_with_output — "
+            "nothing can be simulated until at least one output exists."
+        )
+    if has_candidates:
+        steps.append(
+            "For each uncertain input candidate, fit_and_rank_distributions "
+            "(if you have data) or propose_distributions_for_inputs (from a "
+            "range), then replace_constant_with_distribution."
+        )
+    steps.append(
+        "Correlate inputs that move together: compute_correlation_matrix on "
+        "historical data, then create_copula."
+    )
+    steps.append("Run audit_model and fix any errors before simulating.")
+    steps.append("run_simulation, then read the tail with get_tail_risk.")
+
+    return RiskModelPlan(
+        workbook=workbook_name,
+        output_count=len(outputs),
+        outputs=[o.name for o in outputs],
+        distribution_count=len(distributions),
+        input_candidate_count=len(candidates),
+        input_candidates=candidates,
+        readiness=readiness,
+        steps=steps,
+    )
 
 
 @mcp.tool(
