@@ -20,6 +20,7 @@ from typing import Annotated, Any
 from pydantic import Field
 
 from modelrisk_mcp.bridge.formulas import (
+    build_aggregate,
     build_aggregate_mc,
     build_copula,
     build_distribution_formula,
@@ -248,6 +249,79 @@ def create_aggregate_mc(
         frequency_object_cell,
         severity_object_cell,
         bridge.catalogue,
+        min_limit=min_limit,
+        max_limit=max_limit,
+        distribution_shift=distribution_shift,
+    )
+    return _dry_or_write(ref, formula, dry_run)
+
+
+@mcp.tool(
+    description=(
+        "ModelRisk: Build a frequency-severity aggregate using the chosen "
+        "`method` — 'FFT' (Fast Fourier Transform) or 'Panjer' (Panjer "
+        "recursion) for the fast analytic methods, or 'MC' for Monte Carlo. "
+        "frequency_object_cell and severity_object_cell are references to "
+        "distribution-object cells (built with Vose<Family>Object). FFT and "
+        "Panjer support `as_object=True`, which writes the ...Object form "
+        "whose mean and percentiles can be read directly with "
+        "compute_distribution / get_tail_risk — the aggregate loss "
+        "distribution WITHOUT running a simulation. Method-specific options: "
+        "`density` (FFT), `intervals` / `max_p` (Panjer), `min_limit` / "
+        "`max_limit` / `distribution_shift` (MC). For plain MC sampling, "
+        "create_aggregate_mc is the dedicated shortcut."
+    )
+)
+def create_aggregate(
+    workbook: str,
+    sheet: str,
+    target_cell: str,
+    frequency_object_cell: str,
+    severity_object_cell: str,
+    method: Annotated[
+        str, Field(description="Aggregation engine: 'FFT', 'Panjer', or 'MC'.")
+    ] = "FFT",
+    as_object: Annotated[
+        bool,
+        Field(
+            description=(
+                "Write the analytic ...Object form (FFT/Panjer only) instead of "
+                "a per-iteration sample. Lets you read the aggregate distribution "
+                "without simulating."
+            )
+        ),
+    ] = False,
+    density: Annotated[
+        int | None, Field(description="FFT only: density discretisation flag.")
+    ] = None,
+    intervals: Annotated[
+        int | None, Field(description="Panjer only: number of discretisation intervals.")
+    ] = None,
+    max_p: Annotated[
+        float | None, Field(description="Panjer only: cumulative-probability cap.")
+    ] = None,
+    min_limit: Annotated[
+        float | None, Field(description="MC only: per-severity lower limit.")
+    ] = None,
+    max_limit: Annotated[
+        float | None, Field(description="MC only: per-severity upper limit.")
+    ] = None,
+    distribution_shift: Annotated[
+        float | None, Field(description="MC only: severity shift.")
+    ] = None,
+    dry_run: bool = True,
+) -> InsertResult:
+    ref = CellRef(workbook=workbook, sheet=sheet, cell=target_cell)
+    bridge = get_bridge()
+    formula = build_aggregate(
+        method,
+        frequency_object_cell,
+        severity_object_cell,
+        bridge.catalogue,
+        as_object=as_object,
+        density=density,
+        intervals=intervals,
+        max_p=max_p,
         min_limit=min_limit,
         max_limit=max_limit,
         distribution_shift=distribution_shift,

@@ -4,6 +4,20 @@ All notable changes to ModelRisk MCP. Follows [Keep a Changelog](https://keepach
 
 ## [Unreleased]
 
+## [0.3.2-alpha.5] — 2026-06-08
+
+### Added
+
+- **`create_aggregate` — fast frequency-severity aggregation (FFT / Panjer), not just Monte Carlo.** The server could only build `VoseAggregateMC` (slow, sampling-based); ModelRisk's fast analytic methods — **FFT** (Fast Fourier Transform) and **Panjer** (Panjer recursion) — were unreachable, despite being the standard tools for insurance/actuarial aggregate-loss models. The new tool takes a `method` ('FFT', 'Panjer', or 'MC'), a frequency object cell and a severity object cell, with method-specific options (`density` for FFT; `intervals` / `max_p` for Panjer; `min_limit` / `max_limit` / `distribution_shift` for MC).
+
+  The payoff is **`as_object=True`** (FFT/Panjer only): it writes the `Vose...Object` form, so the aggregate **loss distribution can be read analytically** — `compute_distribution` / `get_tail_risk` give its mean, percentiles, VaR and CVaR **with no simulation at all**. Verified live: a Poisson(5) × Lognormal(1000,400) aggregate via FFT returns mean 5000.0 (exact), P95 9315, P99 11527, and P(loss > 10000) = 3.13%, computed instantly. (De Pril is intentionally not exposed — its probability-array input shape differs from the freq/severity-object pattern.)
+
+  `create_aggregate_mc` remains as the dedicated MC-sampling shortcut. Tool count 43 → **44**; new `build_aggregate()` builder backs it.
+
+### Tests
+
+7 new cases across `test_formulas.py` (FFT/Panjer/MC formula shapes, the MC-has-no-object guard, unknown-method guard) and `test_tools_building_mocked.py` (FFT-object and Panjer-sample dry runs). Verified live end-to-end against a running ModelRisk. 563 unit tests pass; ruff + mypy clean.
+
 ## [0.3.2-alpha.4] — 2026-06-08
 
 ### Added

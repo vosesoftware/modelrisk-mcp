@@ -224,6 +224,84 @@ def build_aggregate_mc(
     return build_distribution_formula("VoseAggregateMC", params, catalogue)
 
 
+_AGGREGATE_METHODS = {
+    "MC": "VoseAggregateMC",
+    "FFT": "VoseAggregateFFT",
+    "PANJER": "VoseAggregatePanjer",
+}
+
+
+def build_aggregate(
+    method: str,
+    frequency_obj_cell: str,
+    severity_obj_cell: str,
+    catalogue: FunctionCatalogue,
+    *,
+    as_object: bool = False,
+    density: int | str | None = None,
+    intervals: int | str | None = None,
+    max_p: float | str | None = None,
+    min_limit: float | str | None = None,
+    max_limit: float | str | None = None,
+    distribution_shift: float | str | None = None,
+) -> str:
+    """Build a frequency-severity aggregate formula for the chosen
+    `method` (MC, FFT, or Panjer).
+
+    - **MC** is Monte Carlo: per-iteration sampling, no analytic object.
+    - **FFT** (Fast Fourier Transform) and **Panjer** (Panjer recursion)
+      are fast analytic methods — set `as_object=True` to write the
+      `...Object` form whose mean / percentiles can then be read
+      directly (no simulation) via the analysis tools.
+
+    `frequency_obj_cell` / `severity_obj_cell` are cell references to
+    distribution objects (built with a `Vose<Family>Object` function).
+    Method-specific optionals (`density` for FFT; `intervals` / `max_p`
+    for Panjer; `min_limit` / `max_limit` / `distribution_shift` for MC)
+    are applied only where they belong."""
+    key = method.upper()
+    if key not in _AGGREGATE_METHODS:
+        raise ParameterMismatchError(
+            f"Unknown aggregate method {method!r}; use MC, FFT, or Panjer."
+        )
+    if key == "MC" and as_object:
+        raise ParameterMismatchError(
+            "Monte Carlo aggregation has no analytic object form. Use "
+            "method='FFT' or 'Panjer' for an aggregate object, or "
+            "as_object=False to sample."
+        )
+
+    func = _AGGREGATE_METHODS[key]
+    if as_object:
+        func += "Object"
+
+    if key == "MC":
+        params: dict[str, Any] = {
+            "n": frequency_obj_cell,
+            "distribution": severity_obj_cell,
+        }
+        if min_limit is not None:
+            params["MinLimit"] = min_limit
+        if max_limit is not None:
+            params["MaxLimit"] = max_limit
+        if distribution_shift is not None:
+            params["DistributionShift"] = distribution_shift
+    else:
+        params = {
+            "frequency distribution": frequency_obj_cell,
+            "severity distribution": severity_obj_cell,
+        }
+        if key == "FFT" and density is not None:
+            params["density"] = density
+        if key == "PANJER":
+            if intervals is not None:
+                params["Intervals"] = intervals
+            if max_p is not None:
+                params["MaxP"] = max_p
+
+    return build_distribution_formula(func, params, catalogue)
+
+
 def build_risk_event(
     probability: float | str,
     impact_function_name: str,

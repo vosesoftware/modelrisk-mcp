@@ -169,7 +169,7 @@ Out comes a multi-sheet Excel report and a Markdown brief. The whole sequence to
 
 - **Doesn't pick the risk for you.** Claude can suggest distribution families based on the data and the cell label, but you still own the model. The server enforces *methodology*; it doesn't replace *judgment*.
 - **Doesn't run on Mac or Linux.** ModelRisk is Windows-only, so the server is too. Excel for Mac doesn't have ModelRisk available.
-- **Doesn't replace ModelRisk's UI for everything.** ModelRisk has GUI flows for cross-section fitting, Bayesian network design, custom-distribution authoring that aren't exposed via MCP yet. The 43 tools cover the typical model-build → simulate → interpret loop; advanced flows still happen in the ribbon.
+- **Doesn't replace ModelRisk's UI for everything.** ModelRisk has GUI flows for cross-section fitting, Bayesian network design, custom-distribution authoring that aren't exposed via MCP yet. The 44 tools cover the typical model-build → simulate → interpret loop; advanced flows still happen in the ribbon.
 - **Doesn't bypass ModelRisk licensing.** You need ModelRisk installed and licensed. The MCP server is a bridge, not a clone.
 
 ---

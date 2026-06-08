@@ -240,6 +240,35 @@ class TestDryRunDoesNotMutate:
         assert result.written is False
         assert result.formula == "=VoseAggregateMC(A1,B1)"
 
+    def test_create_aggregate_fft_object_dry_run(
+        self,
+        fake_excel: WritableFakeExcel,
+        bridge_with_audit: tuple[ModelRiskBridge, Path],
+    ) -> None:
+        result = building.create_aggregate(
+            "book.xlsx", "Sheet1", "C1",
+            frequency_object_cell="A1",
+            severity_object_cell="B1",
+            method="FFT",
+            as_object=True,
+        )
+        assert result.written is False
+        assert result.formula == "=VoseAggregateFFTObject(A1,B1)"
+
+    def test_create_aggregate_panjer_sample_dry_run(
+        self,
+        fake_excel: WritableFakeExcel,
+        bridge_with_audit: tuple[ModelRiskBridge, Path],
+    ) -> None:
+        result = building.create_aggregate(
+            "book.xlsx", "Sheet1", "C1",
+            frequency_object_cell="A1",
+            severity_object_cell="B1",
+            method="Panjer",
+            intervals=500,
+        )
+        assert result.formula == "=VoseAggregatePanjer(A1,B1,500)"
+
     def test_create_risk_event_dry_run(
         self,
         fake_excel: WritableFakeExcel,

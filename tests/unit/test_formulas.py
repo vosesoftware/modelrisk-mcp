@@ -11,6 +11,7 @@ import pytest
 
 from modelrisk_mcp.bridge.catalogue import load_catalogue
 from modelrisk_mcp.bridge.formulas import (
+    build_aggregate,
     build_aggregate_mc,
     build_copula,
     build_distribution_formula,
@@ -225,6 +226,31 @@ class TestCompositeBuilders:
     def test_aggregate_mc_with_limits(self, cat) -> None:
         formula = build_aggregate_mc("A1", "B1", cat, min_limit=0, max_limit=1000)
         assert formula == "=VoseAggregateMC(A1,B1,0,1000)"
+
+    def test_aggregate_fft_sample_and_object(self, cat) -> None:
+        assert build_aggregate("FFT", "A1", "B1", cat) == "=VoseAggregateFFT(A1,B1)"
+        assert (
+            build_aggregate("FFT", "A1", "B1", cat, as_object=True)
+            == "=VoseAggregateFFTObject(A1,B1)"
+        )
+
+    def test_aggregate_panjer_with_intervals(self, cat) -> None:
+        formula = build_aggregate(
+            "Panjer", "A1", "B1", cat, as_object=True, intervals=1000
+        )
+        assert formula == "=VoseAggregatePanjerObject(A1,B1,1000)"
+
+    def test_aggregate_mc_via_general_builder(self, cat) -> None:
+        assert build_aggregate("MC", "A1", "B1", cat) == "=VoseAggregateMC(A1,B1)"
+
+    def test_aggregate_mc_has_no_object_form(self, cat) -> None:
+        with pytest.raises(ParameterMismatchError) as exc:
+            build_aggregate("MC", "A1", "B1", cat, as_object=True)
+        assert "object" in str(exc.value).lower()
+
+    def test_aggregate_unknown_method_rejected(self, cat) -> None:
+        with pytest.raises(ParameterMismatchError):
+            build_aggregate("Wavelet", "A1", "B1", cat)
 
     def test_risk_event_requires_object_impact(self, cat) -> None:
         # VoseNormal is a continuous distribution, not an object — should reject.
