@@ -4,6 +4,22 @@ All notable changes to ModelRisk MCP. Follows [Keep a Changelog](https://keepach
 
 ## [Unreleased]
 
+## [0.3.2-alpha.3] — 2026-06-08
+
+### Changed
+
+- **Corrected the auto-launch mechanism (supersedes 0.3.2-alpha.2).** The α.2 approach — spawning Vose's `modelrisk.exe` and waiting for Excel to appear — does not produce an attachable instance. `modelrisk.exe` is a fire-and-forget stub: it spawns `EXCEL.EXE` and exits, and Excel comes up on the **start screen with no open workbook**. A workbook-less Excel is absent from the COM Running Object Table, so `xlwings.apps.active` stays `None` and `connect()` timed out (the very "launched but never attaches" failure α.2 set out to fix).
+
+  `connect()` now starts Excel via **`xw.App(visible=…, add_book=True)`** — which opens a blank workbook, making the instance immediately COM-attachable — and then runs the 0.3.2-alpha.1 activation ladder to load the add-in: register already-installed ModelRisk XLLs, else locate `ModelRisk*.xll` under `Program Files\Vose Software\**` and `RegisterXLL` it. Verified live end-to-end on a clean machine: no Excel running → `connect()` attaches in ~3.6 s → the `VoseNormal(0,1)` probe returns a number (add-in functional).
+
+  Auto-launch remains **on by default**; disable with `MODELRISK_AUTO_LAUNCH=0`.
+
+- `ExcelBridge.launch_modelrisk()` no longer takes a `timeout_s` argument or polls; `_find_modelrisk_launcher()` is removed (the `modelrisk.exe` path is gone).
+
+### Tests
+
+`test_auto_launch.py` rewritten for the `xw.App` mechanism (starts-attachable-Excel, Excel-fails-to-start, loads-add-in-after-start, connect auto-launch / disabled-raises / skip-when-present, env toggle). 538 unit tests pass; ruff + mypy clean.
+
 ## [0.3.2-alpha.2] — 2026-05-29
 
 ### Added

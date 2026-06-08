@@ -5,10 +5,10 @@ it via the typed methods below. See spec §8.1.
 
 Design notes:
 - Lazy connect on first use. The bridge attaches to a running Excel
-  instance (`xw.apps.active`); if none is running it starts ModelRisk
-  via Vose's `modelrisk.exe` launcher (so Excel comes up with the
-  add-in loaded natively). Auto-launch is on by default; disable with
-  `MODELRISK_AUTO_LAUNCH=0`.
+  instance (`xw.apps.active`); if none is running it starts an
+  attachable Excel (`xw.App(add_book=True)`) and loads the ModelRisk
+  add-in into it by registering the XLL. Auto-launch is on by default;
+  disable with `MODELRISK_AUTO_LAUNCH=0`.
 - All COM errors are caught and re-raised as typed exceptions from
   `modelrisk_mcp.errors`. Raw COM HRESULTs never leak.
 - Workbook references are by name, never index — indices change when
@@ -772,59 +772,41 @@ class ExcelBridge:
             return done
         return done
 
-    def _find_modelrisk_launcher(self) -> str | None:
-        """Locate Vose's `modelrisk.exe` launcher in the standard install
-        dirs. Launching this (rather than `xw.App()`) starts Excel with
-        the ModelRisk add-in loaded natively — running its normal
-        `xlAutoOpen`, so the XLL commands are reachable without the
-        RegisterXLL workaround."""
-        import os
-        from pathlib import Path
+    def launch_modelrisk(self) -> bool:
+        """Start a fresh, attachable Excel and load the ModelRisk add-in
+        into it. Returns True if Excel is up and attachable afterwards.
 
-        for env in ("ProgramFiles", "ProgramW6432", "ProgramFiles(x86)"):
-            base = os.environ.get(env)
-            if not base:
-                continue
-            root = Path(base) / "Vose Software"
-            if not root.exists():
-                continue
-            try:
-                for p in root.rglob("modelrisk.exe"):
-                    if p.is_file():
-                        return str(p)
-            except Exception:
-                continue
-        return None
+        Why `xw.App(add_book=True)` rather than Vose's `modelrisk.exe`
+        launcher: verified on a real install, `modelrisk.exe` opens
+        Excel on the Start screen with NO workbook — and a workbook-less
+        Excel is absent from the COM Running Object Table, so it can
+        never be attached to (`xw.apps.count` stays 0). Adding a blank
+        workbook makes the instance attachable immediately.
 
-    def launch_modelrisk(self, *, timeout_s: float = 45.0) -> bool:
-        """Start ModelRisk (which opens Excel with the add-in loaded) and
-        wait up to `timeout_s` for Excel to come up. Returns True once an
-        Excel instance is attachable, False if the launcher can't be
-        found, fails to start, or Excel doesn't appear in time.
-
-        This is the "nothing is running" counterpart to
-        `ModelRiskBridge.ensure_modelrisk_functional()` (which handles
-        the "Excel up but add-in dead" case)."""
-        import subprocess
-        import time
-
+        The trade-off is that an Excel started this way skips the XLL's
+        `xlAutoOpen` (bug #29), so the add-in isn't auto-loaded. We then
+        register the ModelRisk XLL from disk to bring it live — the same
+        step the activation ladder uses, confirmed to make Vose
+        functions resolve against a real ModelRisk install."""
         self._load_xlwings()
-        exe = self._find_modelrisk_launcher()
-        if exe is None:
+        if self._xlwings is None:
             return False
         try:
-            # Detached so the launcher's lifetime isn't tied to ours.
-            subprocess.Popen([exe], close_fds=True)
+            app = self._xlwings.App(visible=self._visible, add_book=True)
         except Exception:
             return False
-        deadline = time.monotonic() + timeout_s
-        while time.monotonic() < deadline:
-            app = self._attach_active()
-            if app is not None:
-                self._app = app
-                return True
-            time.sleep(1.0)
-        return False
+        self._app = app
+        # Load the add-in into the freshly-started Excel (best-effort):
+        # an already-installed XLL just needs re-registering; otherwise
+        # register it from its install path on disk.
+        try:
+            if not self.register_modelrisk_xlls():
+                for path in self.find_modelrisk_xll_paths():
+                    if self.register_xll(path):
+                        break
+        except Exception:
+            pass
+        return self._attach_active() is not None or self._app is not None
 
     def find_modelrisk_xll_paths(self) -> list[str]:
         """Best-effort search of the standard Vose Software install
