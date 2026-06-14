@@ -155,6 +155,20 @@ jobs:
             | tar xz mcp-publisher
           chmod +x mcp-publisher
 
+      - name: Sync server.json version to the release tag
+        # server.json's version is otherwise hand-maintained and easy to
+        # forget; if it lags pyproject the registry rejects the publish as
+        # "cannot publish duplicate version" (happened on v0.3.3). Derive it
+        # from the tag (vX.Y.Z -> X.Y.Z) so the manifest always matches what
+        # PyPI just published — no manual bump required. Edits the CI
+        # workspace copy only; not committed back.
+        run: |
+          VERSION="${GITHUB_REF_NAME#v}"
+          echo "Setting server.json version to $VERSION"
+          jq --arg v "$VERSION" '.version = $v | .packages[].version = $v' server.json > server.json.tmp
+          mv server.json.tmp server.json
+          cat server.json
+
       - name: Wait for PyPI to surface the new version
         # PyPI's CDN can take 30-60s to make a freshly-published
         # version visible to the registry's verifier. Give it room.
