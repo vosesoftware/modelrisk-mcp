@@ -86,6 +86,13 @@ Every formula written to Excel is validated against the ModelRisk function catal
 
 **Activation:** None required. MRService.dll (the SDK that reads `.vmrs` files) is activated automatically by a bundled offline key. Set `MRSERVICE_ACTIVATION_KEY` only if you want to override the default with your own.
 
+### One-click (Claude Desktop) — recommended
+
+1. Download **`modelrisk-mcp.mcpb`** from the [latest release](https://github.com/vosesoftware/modelrisk-mcp/releases/latest) and open it (or drag it onto Claude Desktop's **Settings → Extensions**).
+2. **Restart Claude Desktop.**
+
+That's it — the bundle ships the server as a standalone executable, so there's no Python to install and no config file to edit. (Excel + a licensed ModelRisk add-in are still required — that's the product itself.)
+
 ### From PyPI
 
 ```powershell

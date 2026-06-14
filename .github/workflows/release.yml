@@ -97,6 +97,19 @@ jobs:
           name: windows-exe
           path: dist/modelrisk-mcp.exe
 
+      - name: Build .mcpb Desktop Extension
+        # Wrap the standalone exe in a one-click Claude Desktop Extension
+        # bundle. Version is injected from the tag so it matches the release.
+        shell: bash
+        run: |
+          uv run python scripts/build_mcpb.py dist/modelrisk-mcp.exe "${GITHUB_REF_NAME#v}" dist/modelrisk-mcp.mcpb
+
+      - name: Upload .mcpb Desktop Extension
+        uses: actions/upload-artifact@v4
+        with:
+          name: mcpb-bundle
+          path: dist/modelrisk-mcp.mcpb
+
   publish-pypi:
     needs: build-wheel
     runs-on: ubuntu-latest
@@ -221,6 +234,12 @@ jobs:
           name: windows-exe
           path: artifacts/windows
 
+      - name: Download .mcpb Desktop Extension
+        uses: actions/download-artifact@v4
+        with:
+          name: mcpb-bundle
+          path: artifacts/mcpb
+
       - name: Create GitHub release
         uses: softprops/action-gh-release@v2
         with:
@@ -230,5 +249,6 @@ jobs:
           files: |
             artifacts/python/*
             artifacts/windows/modelrisk-mcp.exe
+            artifacts/mcpb/modelrisk-mcp.mcpb
           generate_release_notes: false
           prerelease: ${{ contains(github.ref_name, '-') }}

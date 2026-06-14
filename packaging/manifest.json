@@ -1,0 +1,28 @@
+{
+  "manifest_version": "0.3",
+  "name": "modelrisk-mcp",
+  "display_name": "ModelRisk",
+  "version": "0.0.0",
+  "description": "Read, build, fit, and run Monte Carlo risk models in Excel through Vose Software's ModelRisk.",
+  "author": {
+    "name": "Vose Software",
+    "url": "https://www.vosesoftware.com"
+  },
+  "homepage": "https://github.com/vosesoftware/modelrisk-mcp",
+  "documentation": "https://github.com/vosesoftware/modelrisk-mcp",
+  "keywords": ["excel", "monte-carlo", "risk", "modelrisk", "simulation", "distributions"],
+  "server": {
+    "type": "binary",
+    "entry_point": "server/modelrisk-mcp.exe",
+    "mcp_config": {
+      "command": "${__dirname}${/}server${/}modelrisk-mcp.exe",
+      "args": [],
+      "env": {}
+    }
+  },
+  "tools_generated": true,
+  "prompts_generated": true,
+  "compatibility": {
+    "platforms": ["win32"]
+  }
+}

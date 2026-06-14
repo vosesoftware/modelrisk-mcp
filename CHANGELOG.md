@@ -4,6 +4,12 @@ All notable changes to ModelRisk MCP. Follows [Keep a Changelog](https://keepach
 
 ## [Unreleased]
 
+## [0.3.5] — 2026-06-14
+
+### One-click install: Claude Desktop Extension (`.mcpb`)
+
+The release now also builds a **`.mcpb` Desktop Extension** and attaches it to the GitHub release. It wraps the standalone Windows `.exe` (no Python needed) behind a `manifest.json`, so installing into Claude Desktop is two steps: **1. open `modelrisk-mcp.mcpb`  2. restart Claude** — no `pip`, no editing `claude_desktop_config.json`. Built CLI-free in CI (`scripts/build_mcpb.py` zips `manifest.json` + `server/modelrisk-mcp.exe`); the bundle version is injected from the release tag. Excel + a licensed ModelRisk are still required (that's the product, not the connector).
+
 ## [0.3.4] — 2026-06-14
 
 ### `close_workbook` — close an open model
