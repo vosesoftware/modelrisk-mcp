@@ -201,6 +201,26 @@ class ExcelBridge:
             ) from exc
         return self._workbook_info(book)
 
+    def close_workbook(self, workbook: str, save: bool = False) -> dict[str, Any]:
+        """Close an open workbook. If ``save`` is False (default) UNSAVED CHANGES
+        ARE DISCARDED; pass save=True to write them first. Raises
+        WorkbookNotFoundError if the workbook isn't open. Returns the closed
+        name, whether it was saved, and the names still open."""
+        app = self._ensure()
+        book = self._get_book(workbook)  # raises WorkbookNotFoundError if not open
+        name = str(book.name)
+        try:
+            book.api.Close(SaveChanges=bool(save))
+        except Exception as exc:
+            raise WorkbookNotFoundError(f"Could not close {workbook!r}: {exc}") from exc
+        remaining: list[str] = []
+        for b in app.books:
+            try:
+                remaining.append(str(b.name))
+            except Exception:
+                continue
+        return {"closed": name, "saved": bool(save), "open_workbooks": remaining}
+
     def _get_book(self, workbook: str) -> Any:
         app = self._ensure()
         try:

@@ -4,6 +4,12 @@ All notable changes to ModelRisk MCP. Follows [Keep a Changelog](https://keepach
 
 ## [Unreleased]
 
+## [0.3.4] — 2026-06-14
+
+### `close_workbook` — close an open model
+
+Added **`close_workbook(workbook_name, save=False)`**: closes an open workbook by file name. By default unsaved changes are **discarded** (`save=False`); pass `save=True` to write them first. Returns the closed name, whether it was saved, and the workbooks still open; raises `WorkbookNotFoundError` if the named workbook isn't open. The natural counterpart to `open_workbook` for cleaning up after a scripted session.
+
 ## [0.3.3] — 2026-06-14
 
 ### `open_workbook` — open a model from disk

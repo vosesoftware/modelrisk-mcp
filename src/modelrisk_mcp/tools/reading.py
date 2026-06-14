@@ -87,6 +87,26 @@ def open_workbook(
 
 @mcp.tool(
     description=(
+        "ModelRisk: Close an open workbook by file name. By DEFAULT unsaved "
+        "changes are DISCARDED (save=False) — pass save=True to write them "
+        "first. Returns the closed name and the workbooks still open. Raises if "
+        "the named workbook isn't open."
+    )
+)
+def close_workbook(
+    workbook_name: Annotated[
+        str, Field(description="File name of an open workbook, e.g. 'risk.xlsx'.")
+    ],
+    save: Annotated[
+        bool,
+        Field(description="Save before closing. False (default) discards unsaved changes."),
+    ] = False,
+) -> dict[str, Any]:
+    return get_bridge().excel.close_workbook(workbook_name, save)
+
+
+@mcp.tool(
+    description=(
         "ModelRisk: Aggregated summary of a workbook — sheet names plus "
         "counts of VoseInput, VoseOutput, distribution, formula, and "
         "numeric cells. One-shot alternative to running the individual "
@@ -333,6 +353,7 @@ def read_vmrs(
 
 
 __all__ = [
+    "close_workbook",
     "find_hard_coded_inputs",
     "get_active_workbook",
     "get_bridge",

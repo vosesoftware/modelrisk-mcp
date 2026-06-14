@@ -49,6 +49,45 @@ def test_open_workbook_missing_file_raises(monkeypatch: pytest.MonkeyPatch) -> N
         bridge.open_workbook(r"C:\nope\does_not_exist_4f1c9.xlsx")
 
 
+def test_close_workbook_tool_delegates() -> None:
+    class _Excel:
+        def __init__(self) -> None:
+            self.closed: tuple[str, bool] | None = None
+
+        def close_workbook(self, workbook: str, save: bool = False) -> dict[str, object]:
+            self.closed = (workbook, save)
+            return {"closed": workbook, "saved": save, "open_workbooks": []}
+
+    class _Bridge:
+        def __init__(self, excel: _Excel) -> None:
+            self.excel = excel
+
+    excel = _Excel()
+    reading.set_bridge_for_testing(_Bridge(excel))  # type: ignore[arg-type]
+    try:
+        out = reading.close_workbook("risk.xlsx", save=True)
+        assert excel.closed == ("risk.xlsx", True)
+        assert out["closed"] == "risk.xlsx" and out["saved"] is True
+    finally:
+        reading.set_bridge_for_testing(None)
+
+
+def test_close_workbook_not_open_raises(monkeypatch: pytest.MonkeyPatch) -> None:
+    bridge = ExcelBridge()
+
+    class _Books:
+        def __getitem__(self, key: str) -> object:
+            raise KeyError(key)
+
+    class _App:
+        def __init__(self) -> None:
+            self.books = _Books()
+
+    monkeypatch.setattr(bridge, "_ensure", lambda: _App())
+    with pytest.raises(WorkbookNotFoundError):
+        bridge.close_workbook("not_open.xlsx")
+
+
 def test_open_workbook_returns_already_open(monkeypatch: pytest.MonkeyPatch, tmp_path) -> None:
     # An existing file whose basename matches an already-open book is returned
     # without re-opening.
