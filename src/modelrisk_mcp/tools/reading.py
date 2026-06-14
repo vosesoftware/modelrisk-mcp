@@ -71,6 +71,22 @@ def get_active_workbook() -> WorkbookInfo:
 
 @mcp.tool(
     description=(
+        "ModelRisk: Open a workbook (.xlsx/.xlsm) from disk in the running "
+        "Excel so the other tools can act on it. Pass an absolute file path. "
+        "If a workbook with the same file name is already open, returns that "
+        "one (Excel won't open two with the same name). Requires Excel running."
+    )
+)
+def open_workbook(
+    path: Annotated[
+        str, Field(description="Absolute path to the workbook file, e.g. r'C:\\models\\risk.xlsx'.")
+    ],
+) -> WorkbookInfo:
+    return get_bridge().excel.open_workbook(path)
+
+
+@mcp.tool(
+    description=(
         "ModelRisk: Aggregated summary of a workbook — sheet names plus "
         "counts of VoseInput, VoseOutput, distribution, formula, and "
         "numeric cells. One-shot alternative to running the individual "
@@ -331,6 +347,7 @@ __all__ = [
     "list_modelrisk_outputs",
     "list_open_workbooks",
     "list_vmrs_variables",
+    "open_workbook",
     "read_range",
     "read_vmrs",
     "set_active_vmrs",

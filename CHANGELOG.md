@@ -4,6 +4,12 @@ All notable changes to ModelRisk MCP. Follows [Keep a Changelog](https://keepach
 
 ## [Unreleased]
 
+## [0.3.3] — 2026-06-14
+
+### `open_workbook` — open a model from disk
+
+Added **`open_workbook(path)`**: opens an `.xlsx`/`.xlsm` from disk in the running Excel so the other tools can act on it. Previously the server only attached to already-open workbooks (`list_open_workbooks` / `get_active_workbook`) with no way to open a model file itself. Takes an absolute path; if a workbook with the same file name is already open it returns that one (Excel won't open two with the same name); raises `WorkbookNotFoundError` for a missing file or an Excel open failure. With auto-launch on, a workbook can be opened end-to-end without touching Excel by hand.
+
 ## [0.3.2] — 2026-06-08
 
 Stable release of the 0.3.2 line (promotion from `0.3.2-alpha.8`). Two themes, both validated live end-to-end against a real ModelRisk install.

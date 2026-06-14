@@ -23,6 +23,7 @@ Design notes:
 
 from __future__ import annotations
 
+import os
 from collections.abc import Callable, Iterator
 from datetime import date, datetime
 from typing import Any
@@ -175,6 +176,29 @@ class ExcelBridge:
             return WorkbookInfo(name=name, path="", sheets=[], active_sheet=None)
         if book is None:
             raise WorkbookNotFoundError("No active workbook.")
+        return self._workbook_info(book)
+
+    def open_workbook(self, path: str) -> WorkbookInfo:
+        """Open a workbook from disk in the running Excel and return its info.
+        Excel keys workbooks by file name and won't open two with the same
+        name — if one is already open, that existing workbook is returned
+        rather than re-opened."""
+        app = self._ensure()
+        if not os.path.isfile(path):
+            raise WorkbookNotFoundError(f"File not found: {path!r}.")
+        name = os.path.basename(path)
+        for book in app.books:
+            try:
+                if str(book.name).lower() == name.lower():
+                    return self._workbook_info(book)
+            except Exception:
+                continue
+        try:
+            book = app.books.open(path)
+        except Exception as exc:
+            raise WorkbookNotFoundError(
+                f"Excel could not open {path!r}: {exc}"
+            ) from exc
         return self._workbook_info(book)
 
     def _get_book(self, workbook: str) -> Any:
