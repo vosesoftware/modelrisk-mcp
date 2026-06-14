@@ -193,13 +193,39 @@ class ExcelBridge:
                     return self._workbook_info(book)
             except Exception:
                 continue
-        try:
-            book = app.books.open(path)
-        except Exception as exc:
-            raise WorkbookNotFoundError(
-                f"Excel could not open {path!r}: {exc}"
-            ) from exc
+        book = self._open_no_prompts(app, path)
         return self._workbook_info(book)
+
+    @staticmethod
+    def _open_no_prompts(app: Any, path: str) -> Any:
+        """Workbooks.Open with the interactive prompts suppressed, so a headless
+        open never hangs on a dialog: no Update-Links, read-only-recommended, or
+        file-in-use prompts. ``update_links=False`` also means external links are
+        NOT refreshed on open (cell values stay as last saved). DisplayAlerts and
+        AskToUpdateLinks are toggled off around the call and restored after."""
+        saved: dict[str, Any] = {}
+        for attr in ("DisplayAlerts", "AskToUpdateLinks"):
+            try:
+                saved[attr] = getattr(app.api, attr)
+                setattr(app.api, attr, False)
+            except Exception:
+                pass
+        try:
+            return app.books.open(
+                path,
+                update_links=False,
+                ignore_read_only_recommended=True,
+                notify=False,
+                add_to_mru=False,
+            )
+        except Exception as exc:
+            raise WorkbookNotFoundError(f"Excel could not open {path!r}: {exc}") from exc
+        finally:
+            for attr, val in saved.items():
+                try:
+                    setattr(app.api, attr, val)
+                except Exception:
+                    pass
 
     def close_workbook(self, workbook: str, save: bool = False) -> dict[str, Any]:
         """Close an open workbook. If ``save`` is False (default) UNSAVED CHANGES

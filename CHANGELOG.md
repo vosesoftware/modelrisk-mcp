@@ -10,6 +10,8 @@ All notable changes to ModelRisk MCP. Follows [Keep a Changelog](https://keepach
 
 Added **`close_workbook(workbook_name, save=False)`**: closes an open workbook by file name. By default unsaved changes are **discarded** (`save=False`); pass `save=True` to write them first. Returns the closed name, whether it was saved, and the workbooks still open; raises `WorkbookNotFoundError` if the named workbook isn't open. The natural counterpart to `open_workbook` for cleaning up after a scripted session.
 
+`open_workbook` now also **suppresses Excel's interactive open prompts** (Update Links, read-only-recommended, file-in-use) — `Workbooks.Open` is called with `update_links=False`, `ignore_read_only_recommended=True`, `notify=False`, `add_to_mru=False` and with `DisplayAlerts`/`AskToUpdateLinks` toggled off — so a headless open can't hang on a dialog. (External links are therefore not refreshed on open; values stay as last saved.)
+
 ## [0.3.3] — 2026-06-14
 
 ### `open_workbook` — open a model from disk
