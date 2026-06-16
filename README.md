@@ -86,12 +86,20 @@ Every formula written to Excel is validated against the ModelRisk function catal
 
 **Activation:** None required. MRService.dll (the SDK that reads `.vmrs` files) is activated automatically by a bundled offline key. Set `MRSERVICE_ACTIVATION_KEY` only if you want to override the default with your own.
 
-### One-click (Claude Desktop) — recommended
+### Recommended: auto-wire from PyPI
 
-1. Download **`modelrisk-mcp.mcpb`** from the [latest release](https://github.com/vosesoftware/modelrisk-mcp/releases/latest) and open it (or drag it onto Claude Desktop's **Settings → Extensions**).
-2. **Restart Claude Desktop.**
+```powershell
+pip install modelrisk-mcp
+modelrisk-mcp install      # adds the server to Claude Desktop / Claude Code config
+```
 
-That's it — the bundle ships the server as a standalone executable, so there's no Python to install and no config file to edit. (Excel + a licensed ModelRisk add-in are still required — that's the product itself.)
+Then **restart Claude Desktop**. `modelrisk-mcp install` edits `claude_desktop_config.json` for you (backing it up first) and works on every current Claude version. (Excel + a licensed ModelRisk add-in are still required — that's the product itself.)
+
+### One-click `.mcpb` (Claude Desktop Extension)
+
+Download **`modelrisk-mcp.mcpb`** from the [latest release](https://github.com/vosesoftware/modelrisk-mcp/releases/latest), open it (Claude Desktop → **Settings → Extensions → Install Extension…**), then restart Claude. The bundle ships the server as a standalone exe — no Python, no config edit.
+
+> ⚠️ **Known issue (Claude Desktop, latest Windows MSIX builds, e.g. 1.12603.x):** the Extensions installer can silently do nothing when you pick a `.mcpb` — no error, no install. This is a **Claude Desktop installer bug** (it fails before logging), not a problem with the bundle (it validates with `mcpb` and installs fine once the client is fixed). **Until Anthropic patches it, use the `pip install` + `modelrisk-mcp install` path above** — it bypasses the Extensions UI entirely.
 
 ### From PyPI
 

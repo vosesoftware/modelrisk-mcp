@@ -4,6 +4,8 @@ All notable changes to ModelRisk MCP. Follows [Keep a Changelog](https://keepach
 
 ## [Unreleased]
 
+- **`.mcpb` now built with the official `mcpb` CLI** (`@anthropic-ai/mcpb`, which validates the manifest during pack) instead of a hand-rolled zip; falls back to a structurally-identical plain-zip when node isn't available. README reworked so `pip install` + `modelrisk-mcp install` is the recommended path, with a note that the **Claude Desktop Extensions installer silently no-ops on the latest Windows MSIX builds (e.g. 1.12603.x) — a client-side bug, not the bundle** (which validates and installs fine once the client is fixed). Use the auto-wire install until Anthropic patches it.
+
 ## [0.3.5] — 2026-06-14
 
 ### One-click install: Claude Desktop Extension (`.mcpb`)
