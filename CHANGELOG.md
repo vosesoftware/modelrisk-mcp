@@ -10,6 +10,12 @@ All notable changes to ModelRisk MCP. Follows [Keep a Changelog](https://keepach
 
 The add-in liveness probe used `Application.Evaluate("VoseNormal(0,1)")`. `Application.Evaluate` parses with the user's **locale** separators, so where the decimal separator is `,` the probe read `0,1` as the single number `0.1` — `VoseNormal` then got one argument instead of two and errored, so the server declared the add-in dead even though **Vose functions worked fine when typed in a cell**. `run_simulation` and every action were blocked with a misleading "Vose functions return #NAME?" message. The probe is now the **separator-free** `VosePoisson(5)` (one integer arg, no comma → parses identically in every locale), and the "add-in not live" messages no longer claim `#NAME?` — they tell you that if cell-typed Vose functions work, it's a detection bug to report. Affected anyone running a non-US/locale Excel (often alongside ModelChoice). A regression test asserts the probe stays comma-free.
 
+Beyond the probe, **`ExcelBridge.evaluate()` is now locale-robust for all multi-arg expressions** (e.g. `compute_distribution`, distribution-fit metrics): when `Application.Evaluate` returns an error it retries through a scratch cell's `.Formula`, which always uses US conventions (`,` separator, `.` decimal) regardless of locale. The common path (valid first result) is unchanged and never touches the workbook.
+
+### Clearer MRService activation diagnostics
+
+`diagnose_workbook` now surfaces the **specific** MRService activation error (e.g. "bundled activation key was rejected — your installed ModelRisk SDK may be too new/old; set `MRSERVICE_ACTIVATION_KEY`") instead of a generic "not activated" line, and states plainly that this affects only **reading saved `.vmrs` results** — running simulations is unaffected.
+
 ### `.mcpb` built with the official `mcpb` CLI
 
 `build_mcpb.py` now packs with `@anthropic-ai/mcpb` (validates during pack) instead of a hand-rolled zip, with a structurally-identical plain-zip fallback when node isn't present. README reworked so `pip install` + `modelrisk-mcp install` is the recommended path, with a note that the **Claude Desktop Extensions installer silently no-ops on the latest Windows MSIX builds (e.g. 1.12603.x) — a client-side bug, not the bundle**. Use the auto-wire install until Anthropic patches it.

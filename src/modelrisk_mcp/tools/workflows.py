@@ -321,9 +321,19 @@ def diagnose_workbook(
     try:
         out["modelrisk_loaded"] = bridge.is_modelrisk_loaded()
         if not out["modelrisk_loaded"]:
+            # Surface the SPECIFIC activation error (e.g. "bundled key
+            # rejected — your ModelRisk SDK may be too new/old; set
+            # MRSERVICE_ACTIVATION_KEY") rather than a generic line, and make
+            # clear this only affects READING .vmrs results — sims still run.
+            detail = ""
+            try:
+                bridge.mrservice.ensure_ready()
+            except Exception as exc:
+                detail = str(exc).strip().splitlines()[0]
             issues.append(
-                "MRService.dll not activated (results reading). Set "
-                "MRSERVICE_ACTIVATION_KEY or rely on the bundled key."
+                "MRService.dll not activated — affects READING saved .vmrs "
+                "simulation results only; running simulations is unaffected. "
+                + (detail or "Set MRSERVICE_ACTIVATION_KEY to your ModelRisk key.")
             )
     except Exception as exc:
         issues.append(f"MRService check failed: {exc!s}")

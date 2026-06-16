@@ -817,11 +817,46 @@ class ExcelBridge:
 
         ⚠️ `Application.Evaluate` parses the string with the user's LOCALE
         list/decimal separators — on a comma-decimal locale (Russian, German,
-        …) `Foo(0,1)` is read as `Foo(0.1)` (one argument). Keep any probe /
-        evaluated expression SEPARATOR-FREE (single integer arg, no comma) so
-        it parses identically everywhere — see `_ADDIN_PROBE_EXPR`."""
+        …) `Foo(0,1)` is read as `Foo(0.1)` (one argument). To stay correct for
+        MULTI-ARG expressions there, when `Application.Evaluate` returns an
+        error we retry through a scratch cell's `.Formula`, which always uses
+        US conventions (',' argument separator, '.' decimal) regardless of
+        locale — the same parse a user gets typing the localized form. The
+        common path (valid result first try) is unchanged and never touches
+        the workbook. Keeping separator-free probes (see `_ADDIN_PROBE_EXPR`)
+        avoids the retry entirely."""
         app = self._ensure()
-        return app.api.Evaluate(expr)
+        result = app.api.Evaluate(expr)
+        if _coerce_error_value(result) is None:
+            return result
+        # Errored — could be a genuine error, or a comma-decimal-locale
+        # mis-parse of a multi-arg expression. Retry via a scratch cell whose
+        # `.Formula` is locale-invariant; keep the original result if we can't.
+        ran, cell_value = self._evaluate_via_cell(app, expr)
+        return cell_value if ran else result
+
+    @staticmethod
+    def _evaluate_via_cell(app: Any, expr: str) -> tuple[bool, Any]:
+        """Evaluate ``=expr`` by writing it to the active sheet's far-corner
+        cell via `.Formula` (locale-invariant) and reading the value back,
+        restoring the cell afterwards. Returns ``(ran, value)`` — ``ran`` is
+        False (and value None) if there's no usable worksheet or the write
+        failed, so the caller falls back to the Application.Evaluate result."""
+        try:
+            wb = app.api.ActiveWorkbook
+            if wb is None:
+                return False, None
+            ws = wb.ActiveSheet
+            cell = ws.Cells(ws.Rows.Count, ws.Columns.Count)  # bottom-right corner
+            prev = cell.Formula
+            try:
+                cell.Formula = "=" + expr
+                value = cell.Value
+            finally:
+                cell.Formula = prev if prev not in (None, "") else ""
+            return True, value
+        except Exception:
+            return False, None
 
     def register_xll(self, path: str) -> bool:
         """`Application.RegisterXLL(path)` — re-runs the XLL's
