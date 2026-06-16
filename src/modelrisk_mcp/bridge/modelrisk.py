@@ -110,17 +110,26 @@ class ModelRiskHealth:
     detail: str = ""
 
 
-# A cheap, always-present Vose function used to probe whether the
-# add-in is live. Returns its static value (~0) when loaded; #NAME?
-# (a COM CVErr int) when not.
-_ADDIN_PROBE_EXPR = "VoseNormal(0,1)"
+# A cheap, always-present Vose function used to probe whether the add-in is
+# live. Returns a number when loaded; an Excel error (a COM CVErr int) when not.
+# MUST be SEPARATOR-FREE: a single integer argument, no comma. `Application.
+# Evaluate` parses the string with the user's LOCALE separators, so a probe
+# like `VoseNormal(0,1)` breaks where the decimal separator is "," (e.g.
+# Russian/German): "0,1" is read as the single number 0.1, VoseNormal then
+# gets one argument instead of two and errors — a false "add-in dead" even
+# though Vose functions work fine when typed in a cell (bug: dual ModelChoice/
+# ModelRisk machines on comma-decimal locales). `VosePoisson(5)` has one
+# integer arg and no separator, so it parses identically in every locale.
+_ADDIN_PROBE_EXPR = "VosePoisson(5)"
 
 _ADDIN_DEAD_MESSAGE = (
-    "The ModelRisk add-in isn't loaded in Excel — Vose functions return "
-    "#NAME? and simulations can't run. Open Excel and click the ModelRisk "
-    "ribbon tab (or launch ModelRisk from its Start-menu shortcut) to load "
-    "it, then retry. Tip: in ModelRisk's settings, enabling 'Start with "
-    "Excel' makes it load automatically every session."
+    "ModelRisk doesn't appear to be live in Excel — a Vose probe function "
+    "didn't return a number, and the server couldn't auto-activate the add-in. "
+    "If Vose functions DO work when you type one into a cell (e.g. "
+    "=VosePoisson(5)), the add-in is loaded and this is a detection problem — "
+    "please report it. Otherwise, open Excel and load ModelRisk (its ribbon "
+    "tab, or the Start-menu shortcut), then retry. Tip: enabling ModelRisk's "
+    "'Start with Excel' setting loads it automatically every session."
 )
 
 

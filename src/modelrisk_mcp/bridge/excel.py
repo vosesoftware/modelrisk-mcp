@@ -811,9 +811,15 @@ class ExcelBridge:
         """Evaluate an Excel expression via `Application.Evaluate` and
         return the raw result (a number, string, or a COM CVErr integer
         for an error like `#NAME?`). Used to probe whether the ModelRisk
-        add-in is actually live — `Evaluate("VoseNormal(0,1)")` returns
-        a number when the XLL is loaded and `#NAME?` (a CVErr int) when
-        it isn't. Raises only if the COM call itself fails."""
+        add-in is live — a Vose function returns a number when the XLL is
+        loaded and an error CVErr int when it isn't. Raises only if the COM
+        call itself fails.
+
+        ⚠️ `Application.Evaluate` parses the string with the user's LOCALE
+        list/decimal separators — on a comma-decimal locale (Russian, German,
+        …) `Foo(0,1)` is read as `Foo(0.1)` (one argument). Keep any probe /
+        evaluated expression SEPARATOR-FREE (single integer arg, no comma) so
+        it parses identically everywhere — see `_ADDIN_PROBE_EXPR`."""
         app = self._ensure()
         return app.api.Evaluate(expr)
 

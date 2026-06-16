@@ -338,12 +338,14 @@ def diagnose_workbook(
         out["addin_functional"] = bridge.probe_addin_functional()
         if not out["addin_functional"]:
             issues.append(
-                "ModelRisk add-in not live in Excel — Vose functions "
-                "return #NAME? and simulations can't run. Click the "
-                "ModelRisk ribbon tab (or start ModelRisk via its "
-                "shortcut) to load it. run_simulation will also try to "
-                "auto-activate it. Enabling ModelRisk's 'Start with "
-                "Excel' setting loads it automatically each session."
+                "ModelRisk add-in not detected as live — a Vose probe "
+                "function didn't return a number. If typing a Vose function "
+                "into a cell (e.g. =VosePoisson(5)) DOES work, the add-in is "
+                "loaded and this is a detection problem worth reporting; "
+                "otherwise click the ModelRisk ribbon tab (or start ModelRisk "
+                "via its shortcut) to load it. run_simulation will also try to "
+                "auto-activate it. Enabling ModelRisk's 'Start with Excel' "
+                "setting loads it automatically each session."
             )
     except Exception as exc:
         issues.append(f"ModelRisk add-in probe failed: {exc!s}")

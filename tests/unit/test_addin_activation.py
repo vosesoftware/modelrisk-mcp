@@ -51,7 +51,7 @@ class _FakeExcel:
 
     def evaluate(self, expr: str) -> Any:
         if self._live:
-            return 0.0  # live add-in: VoseNormal(0,1) static value
+            return 0.0  # live add-in: the Vose probe returns a number
         if len(self._evaluate_results) > 1:
             return self._evaluate_results.pop(0)
         return self._evaluate_results[0]
@@ -149,7 +149,7 @@ class TestEnsureLadder:
         with pytest.raises(ModelRiskNotFunctionalError) as ei:
             _bridge(excel).ensure_modelrisk_functional()
         msg = str(ei.value)
-        assert "ModelRisk add-in isn't loaded" in msg
+        assert "ModelRisk" in msg and "live" in msg
         assert "ribbon" in msg  # actionable guidance present
 
     def test_activate_false_raises_without_attempting(self) -> None:
@@ -157,6 +157,17 @@ class TestEnsureLadder:
         with pytest.raises(ModelRiskNotFunctionalError):
             _bridge(excel).ensure_modelrisk_functional(activate=False)
         assert excel.calls == []
+
+
+def test_probe_expr_is_locale_safe() -> None:
+    """The add-in probe must be separator-free: Application.Evaluate parses
+    with the user's locale separators, so a comma in the probe breaks
+    comma-decimal locales (Russian/German) — VoseNormal(0,1) reads as
+    VoseNormal(0.1). Keep it a single integer arg, no comma."""
+    from modelrisk_mcp.bridge.modelrisk import _ADDIN_PROBE_EXPR
+
+    assert "," not in _ADDIN_PROBE_EXPR
+    assert _ADDIN_PROBE_EXPR.startswith("Vose")
 
 
 class TestHealthSnapshot:
