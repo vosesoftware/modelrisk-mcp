@@ -135,11 +135,23 @@ _DEFAULT_DLL_CANDIDATES: tuple[str, ...] = (
 
 
 def find_mrservice_dll() -> str | None:
-    """Locate MRService.dll. Honours the `MRSERVICE_DLL` env var first,
-    then the standard ModelRisk install paths."""
-    override = os.environ.get("MRSERVICE_DLL")
-    if override and Path(override).is_file():
-        return override
+    """Locate MRService.dll, in priority order:
+
+    1. `MRSERVICE_DLL_PATH` env var — the canonical override. Point it at the
+       full path of an MRService.dll whose version matches your activation key
+       (e.g. the copy under `…\\Vose Software\\Tamara\\MRLibrary\\MRService.dll`,
+       which the bundled key activates). Its sibling DLLs resolve from that same
+       folder (see `_load`'s `add_dll_directory`), so you don't copy the file
+       out — point at it in place.
+    2. `MRSERVICE_DLL` — back-compat alias for the same thing.
+    3. The standard ModelRisk install paths.
+
+    A path that's set but missing is skipped (we fall through), so a stale
+    override never hard-fails discovery."""
+    for var in ("MRSERVICE_DLL_PATH", "MRSERVICE_DLL"):
+        override = os.environ.get(var)
+        if override and Path(override).is_file():
+            return override
     for candidate in _DEFAULT_DLL_CANDIDATES:
         if Path(candidate).is_file():
             return candidate
@@ -209,8 +221,11 @@ class MrServiceBridge:
         path = self._dll_path or find_mrservice_dll()
         if path is None:
             raise ModelRiskNotLoadedError(
-                "MRService.dll not found. Set MRSERVICE_DLL to the full "
-                "path of the DLL, or install ModelRisk."
+                "MRService.dll not found in the standard ModelRisk install "
+                "paths. Set MRSERVICE_DLL_PATH to the full path of an "
+                "MRService.dll on this machine (e.g. one under "
+                r"'…\Vose Software\Tamara\MRLibrary\') — only needed to READ "
+                ".vmrs results; running simulations is unaffected."
             )
         # add_dll_directory makes License.dll resolvable.
         if hasattr(os, "add_dll_directory"):
@@ -325,10 +340,13 @@ class MrServiceBridge:
             # Bundled key rejected — fall through to the clear error
             # rather than silently leaving the bridge unactivated.
             raise SimulationFailedError(
-                "Bundled activation key was rejected by MRService.dll. "
-                "Your installed ModelRisk SDK may be too new/old for this "
-                "key. Set MRSERVICE_ACTIVATION_KEY to override, or "
-                "report this to the modelrisk-mcp maintainers."
+                "Bundled activation key was rejected by MRService.dll — the "
+                "loaded DLL's version is outside what the bundled key covers. "
+                "Two fixes: (a) point MRSERVICE_DLL_PATH at a version-matched "
+                r"MRService.dll you already have (e.g. under '…\Vose Software\\"
+                r"Tamara\MRLibrary\'), which the bundled key activates; or "
+                "(b) set MRSERVICE_ACTIVATION_KEY to your own ModelRisk key. "
+                "Only affects READING .vmrs results — simulations still run."
             )
         raise SimulationFailedError(
             "MRService.dll requires activation, but no key was supplied.\n\n"

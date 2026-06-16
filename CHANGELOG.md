@@ -12,6 +12,10 @@ The add-in liveness probe used `Application.Evaluate("VoseNormal(0,1)")`. `Appli
 
 Beyond the probe, **`ExcelBridge.evaluate()` is now locale-robust for all multi-arg expressions** (e.g. `compute_distribution`, distribution-fit metrics): when `Application.Evaluate` returns an error it retries through a scratch cell's `.Formula`, which always uses US conventions (`,` separator, `.` decimal) regardless of locale. The common path (valid first result) is unchanged and never touches the workbook.
 
+### `MRSERVICE_DLL_PATH` override for `.vmrs` reading
+
+New env override `MRSERVICE_DLL_PATH` (canonical; `MRSERVICE_DLL` kept as an alias) points the server at a specific MRService.dll. Use it when the DLL isn't in ModelRisk's own folder, **or** when ModelRisk ships an MRService version the bundled offline key doesn't cover (e.g. ModelRisk's `8.1.4.x` vs the key's `7.3.2.1`): point it at a version-matched copy you already have — e.g. `…\Vose Software\Tamara\MRLibrary\MRService.dll` — and the bundled key activates it. Its sibling DLLs resolve from that folder (the loader adds it via `add_dll_directory`), so you point at the file in place rather than copying it out. Avoids bundling MRService.dll, which isn't standalone (it lives in a ~516 MB / 336-DLL distribution). The "not found" / "key rejected" messages now name this override.
+
 ### Clearer MRService activation diagnostics
 
 `diagnose_workbook` now surfaces the **specific** MRService activation error (e.g. "bundled activation key was rejected — your installed ModelRisk SDK may be too new/old; set `MRSERVICE_ACTIVATION_KEY`") instead of a generic "not activated" line, and states plainly that this affects only **reading saved `.vmrs` results** — running simulations is unaffected.

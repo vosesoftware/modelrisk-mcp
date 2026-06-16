@@ -84,7 +84,10 @@ Every formula written to Excel is validated against the ModelRisk function catal
   - Python 3.11+ (recommended via [`uv`](https://docs.astral.sh/uv/))
   - Or the standalone `modelrisk-mcp.exe` from the [latest release](https://github.com/vosesoftware/modelrisk-mcp/releases/latest) — no Python knowledge required
 
-**Activation:** None required. MRService.dll (the SDK that reads `.vmrs` files) is activated automatically by a bundled offline key. Set `MRSERVICE_ACTIVATION_KEY` only if you want to override the default with your own.
+**Activation (results reading):** None required — MRService.dll (the SDK that reads `.vmrs` files) is activated automatically by a bundled offline key. Two env overrides exist for non-standard setups (both only affect *reading* `.vmrs` results; simulations run regardless):
+
+- `MRSERVICE_DLL_PATH` — full path to an MRService.dll if it isn't in the standard ModelRisk folder, **or** if your ModelRisk's MRService is a version the bundled key doesn't cover. Point it at a copy whose version the key accepts (e.g. one under `…\Vose Software\Tamara\MRLibrary\MRService.dll`); its sibling DLLs resolve from that folder, so point at it in place.
+- `MRSERVICE_ACTIVATION_KEY` — your own activation key, to override the bundled one for any MRService version.
 
 ### Recommended: auto-wire from PyPI
 

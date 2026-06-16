@@ -30,6 +30,7 @@ class TestFindDll:
     def test_returns_none_when_no_dll_found(
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
+        monkeypatch.delenv("MRSERVICE_DLL_PATH", raising=False)
         monkeypatch.delenv("MRSERVICE_DLL", raising=False)
         monkeypatch.setattr(
             "modelrisk_mcp.bridge.mrservice._DEFAULT_DLL_CANDIDATES",
@@ -42,14 +43,30 @@ class TestFindDll:
     ) -> None:
         fake = tmp_path / "MRService.dll"
         fake.write_bytes(b"")
+        monkeypatch.delenv("MRSERVICE_DLL_PATH", raising=False)
         monkeypatch.setenv("MRSERVICE_DLL", str(fake))
         assert find_mrservice_dll() == str(fake)
+
+    def test_dll_path_is_primary_override_and_beats_alias(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    ) -> None:
+        good = tmp_path / "MRService.dll"
+        good.write_bytes(b"")
+        # MRSERVICE_DLL_PATH wins over the MRSERVICE_DLL alias and over a
+        # missing override; a stale (missing) path is skipped.
+        monkeypatch.setenv("MRSERVICE_DLL_PATH", str(good))
+        monkeypatch.setenv("MRSERVICE_DLL", str(tmp_path / "alias_missing.dll"))
+        assert find_mrservice_dll() == str(good)
+        monkeypatch.setenv("MRSERVICE_DLL_PATH", str(tmp_path / "missing.dll"))
+        monkeypatch.setenv("MRSERVICE_DLL", str(good))
+        assert find_mrservice_dll() == str(good)  # falls through to the alias
 
 
 class TestBridgeLifecycle:
     def test_missing_dll_raises_clear_error(
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
+        monkeypatch.delenv("MRSERVICE_DLL_PATH", raising=False)
         monkeypatch.delenv("MRSERVICE_DLL", raising=False)
         monkeypatch.setattr(
             "modelrisk_mcp.bridge.mrservice._DEFAULT_DLL_CANDIDATES",
@@ -60,7 +77,7 @@ class TestBridgeLifecycle:
             bridge.ensure_ready()
         msg = str(exc.value)
         assert "MRService.dll not found" in msg
-        assert "MRSERVICE_DLL" in msg
+        assert "MRSERVICE_DLL_PATH" in msg
 
     def test_bundled_key_used_when_no_env(
         self, monkeypatch: pytest.MonkeyPatch
