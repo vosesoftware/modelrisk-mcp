@@ -1,3 +1,5 @@
+import re
+
 import pytest
 
 from modelrisk_mcp import __version__
@@ -5,7 +7,13 @@ from modelrisk_mcp.server import mcp
 
 
 def test_version_is_set() -> None:
-    assert __version__ == "0.3.6"
+    # Don't hard-code the literal — that turns every release bump into a
+    # required test edit (and a red CI when it's forgotten). Assert the
+    # version is set and PEP 440-ish instead.
+    assert isinstance(__version__, str)
+    assert re.fullmatch(r"\d+\.\d+\.\d+([.-]?[A-Za-z0-9.]+)?", __version__), (
+        f"__version__ not a valid version string: {__version__!r}"
+    )
 
 
 def test_server_name() -> None:
