@@ -17,12 +17,17 @@ A real-Excel test lives in the gated `tests/integration/` directory
 
 from __future__ import annotations
 
-from typing import Any
+from typing import Any, ClassVar
 from unittest.mock import MagicMock
 
 import pytest
 
-from modelrisk_mcp.bridge.charts import TornadoChartResult, TornadoChartWriter
+from modelrisk_mcp.bridge.charts import (
+    DistributionChartResult,
+    DistributionChartWriter,
+    TornadoChartResult,
+    TornadoChartWriter,
+)
 from modelrisk_mcp.schemas.results import SensitivityEntry
 
 # ----------------------------------------------------------------------
@@ -80,6 +85,9 @@ class FakeCharts:
         chart = FakeChart(self._sheet)
         self.added.append(chart)
         return chart
+
+    def __iter__(self) -> Any:
+        return iter(self.added)
 
 
 class FakeSheet:
@@ -304,6 +312,150 @@ class TestTornadoChartMCPWrapper:
             bridge.create_tornado_chart.assert_called_once_with(
                 "X", None, sheet_name=None,
             )
+        finally:
+            reading.set_bridge_for_testing(None)
+
+
+class TestDistributionChartWriter:
+    # A simple, deterministic sample set: 0..99 (100 samples).
+    _SAMPLES: ClassVar[list[float]] = [float(i) for i in range(100)]
+
+    def test_histogram_returns_metadata(self) -> None:
+        book = FakeBook()
+        result = DistributionChartWriter.write(
+            book, "Profit", self._SAMPLES, chart_kind="histogram",
+        )
+        assert isinstance(result, DistributionChartResult)
+        assert result.sheet_name == "Histogram_Profit"
+        assert result.output_name == "Profit"
+        assert result.chart_kind == "histogram"
+        assert result.sample_count == 100
+        assert result.bin_count > 0
+        # P50 of 0..99 is ~49.5; mean is 49.5.
+        assert 49.0 <= result.p50 <= 50.0
+        assert abs(result.mean - 49.5) < 1e-9
+        assert result.p10 < result.p50 < result.p90
+
+    def test_cdf_returns_metadata_and_sheet_name(self) -> None:
+        book = FakeBook()
+        result = DistributionChartWriter.write(
+            book, "NPV", self._SAMPLES, chart_kind="cdf",
+        )
+        assert result.chart_kind == "cdf"
+        assert result.sheet_name == "CDF_NPV"
+        assert "CDF_NPV" in {s.name for s in book.sheets}
+
+    def test_data_table_written(self) -> None:
+        book = FakeBook()
+        DistributionChartWriter.write(
+            book, "Profit", self._SAMPLES, chart_kind="histogram",
+        )
+        sheet = book.sheets["Histogram_Profit"]
+        # _write_histogram_data header row.
+        assert sheet.cells["A1"] == "Bin"
+        assert sheet.cells["B1"] == "Count"
+        assert sheet.cells["C1"] == "Cumulative %"
+        # First data row populated.
+        assert sheet.cells["A2"] is not None
+        assert sheet.cells["B2"] is not None
+        # Cumulative is a monotone fraction ending at 1.0.
+        assert sheet.cells["C2"] is not None
+
+    def test_replaces_existing_sheet(self) -> None:
+        book = FakeBook()
+        book.sheets.add("Histogram_X")
+        existing = book.sheets["Histogram_X"]
+        existing.cells["A1"] = "stale"
+        DistributionChartWriter.write(
+            book, "X", self._SAMPLES, chart_kind="histogram",
+        )
+        assert existing.deleted is True
+        assert book.sheets["Histogram_X"].cells["A1"] == "Bin"
+
+    def test_custom_sheet_name_used(self) -> None:
+        book = FakeBook()
+        result = DistributionChartWriter.write(
+            book, "Profit", self._SAMPLES,
+            chart_kind="cdf", sheet_name="MyDist",
+        )
+        assert result.sheet_name == "MyDist"
+        assert "MyDist" in {s.name for s in book.sheets}
+
+    def test_sheet_name_truncated_to_31_chars(self) -> None:
+        book = FakeBook()
+        output = "This_Is_A_Very_Long_Output_Name_That_Exceeds_31_Chars"
+        result = DistributionChartWriter.write(
+            book, output, self._SAMPLES, chart_kind="histogram",
+        )
+        assert len(result.sheet_name) <= 31
+
+    def test_empty_samples_dont_crash(self) -> None:
+        book = FakeBook()
+        result = DistributionChartWriter.write(
+            book, "Profit", [], chart_kind="histogram",
+        )
+        assert result.sample_count == 0
+        assert result.bin_count == 0
+        assert result.chart_name == ""
+        assert "Histogram_Profit" in {s.name for s in book.sheets}
+
+    def test_chart_object_created(self) -> None:
+        book = FakeBook()
+        DistributionChartWriter.write(
+            book, "Profit", self._SAMPLES, chart_kind="cdf",
+        )
+        sheet = book.sheets["CDF_Profit"]
+        assert len(sheet.charts.added) == 1
+
+    def test_invalid_chart_kind_raises(self) -> None:
+        book = FakeBook()
+        with pytest.raises(ValueError, match="chart_kind"):
+            DistributionChartWriter.write(
+                book, "Profit", self._SAMPLES, chart_kind="violin",
+            )
+
+
+class TestDistributionChartMCPWrappers:
+    """Verify the histogram/CDF MCP tool wrappers delegate correctly."""
+
+    def _result(self, kind: str) -> DistributionChartResult:
+        return DistributionChartResult(
+            sheet_name=f"{kind}_X", chart_name=f"{kind}_X",
+            output_name="X", chart_kind=kind, sample_count=1000,
+            bin_count=30, mean=10.0, p10=5.0, p50=9.0, p90=15.0,
+        )
+
+    def test_create_histogram_chart_passes_args(self) -> None:
+        from modelrisk_mcp.tools import reading, workflows
+
+        bridge = MagicMock()
+        bridge.create_histogram_chart.return_value = self._result("histogram")
+        reading.set_bridge_for_testing(bridge)  # type: ignore[arg-type]
+        try:
+            out = workflows.create_histogram_chart(
+                "X", workbook_name="m.xlsx", sheet_name="MySheet",
+            )
+            bridge.create_histogram_chart.assert_called_once_with(
+                "X", "m.xlsx", sheet_name="MySheet",
+            )
+            assert out["chart_kind"] == "histogram"
+            assert out["p50"] == 9.0
+            assert out["sample_count"] == 1000
+        finally:
+            reading.set_bridge_for_testing(None)
+
+    def test_create_cdf_chart_defaults_passed_as_none(self) -> None:
+        from modelrisk_mcp.tools import reading, workflows
+
+        bridge = MagicMock()
+        bridge.create_cdf_chart.return_value = self._result("cdf")
+        reading.set_bridge_for_testing(bridge)  # type: ignore[arg-type]
+        try:
+            out = workflows.create_cdf_chart("X")
+            bridge.create_cdf_chart.assert_called_once_with(
+                "X", None, sheet_name=None,
+            )
+            assert out["chart_kind"] == "cdf"
         finally:
             reading.set_bridge_for_testing(None)
 

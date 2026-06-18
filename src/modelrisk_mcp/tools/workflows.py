@@ -15,7 +15,7 @@ import yaml
 from pydantic import Field
 
 from modelrisk_mcp.audit.engine import run_audit
-from modelrisk_mcp.bridge.charts import TornadoChartResult
+from modelrisk_mcp.bridge.charts import DistributionChartResult, TornadoChartResult
 from modelrisk_mcp.bridge.reports import DriversReportResult, ExecutiveReportResult
 from modelrisk_mcp.schemas.analysis import RiskModelPlan
 from modelrisk_mcp.schemas.results import AuditReport, SimulationResult
@@ -666,6 +666,94 @@ def create_tornado_chart(
         "top_input": result.top_input,
         "top_correlation": result.top_correlation,
     }
+
+
+def _distribution_chart_dict(result: DistributionChartResult) -> dict[str, Any]:
+    return {
+        "sheet_name": result.sheet_name,
+        "chart_name": result.chart_name,
+        "output_name": result.output_name,
+        "chart_kind": result.chart_kind,
+        "sample_count": result.sample_count,
+        "bin_count": result.bin_count,
+        "mean": result.mean,
+        "p10": result.p10,
+        "p50": result.p50,
+        "p90": result.p90,
+    }
+
+
+@mcp.tool(
+    description=(
+        "ModelRisk: Render a histogram of one output's simulation "
+        "result distribution as a new sheet in the workbook. The sheet "
+        "has a binned data table (bin centre / frequency / cumulative %) "
+        "plus a native Excel chart: frequency columns with the "
+        "cumulative-probability curve overlaid on a secondary % axis and "
+        "the central-80% (P10-P90) band highlighted — the same view as "
+        "ModelRisk's Results Viewer, persisted into the workbook. "
+        "Requires a completed simulation (reads samples from the active "
+        ".vmrs). Idempotent — a sheet with the target name is replaced."
+    )
+)
+def create_histogram_chart(
+    output_name: Annotated[
+        str, Field(description="VoseOutput name to chart.")
+    ],
+    workbook_name: Annotated[
+        str | None,
+        Field(description="Workbook name. Omit for the active workbook."),
+    ] = None,
+    sheet_name: Annotated[
+        str | None,
+        Field(
+            description=(
+                "Target sheet name. Default: `Histogram_<output_name>` "
+                "(truncated to Excel's 31-char limit)."
+            )
+        ),
+    ] = None,
+) -> dict[str, Any]:
+    result: DistributionChartResult = get_bridge().create_histogram_chart(
+        output_name, workbook_name, sheet_name=sheet_name,
+    )
+    return _distribution_chart_dict(result)
+
+
+@mcp.tool(
+    description=(
+        "ModelRisk: Render the ascending cumulative-probability curve "
+        "(CDF) of one output's simulation result distribution as a new "
+        "sheet in the workbook. The sheet has a binned data table plus a "
+        "native Excel line chart of cumulative probability (0-100%) "
+        "against the output value — the 'what's the chance the output is "
+        "below X' view. Requires a completed simulation (reads samples "
+        "from the active .vmrs). Idempotent — a sheet with the target "
+        "name is replaced."
+    )
+)
+def create_cdf_chart(
+    output_name: Annotated[
+        str, Field(description="VoseOutput name to chart.")
+    ],
+    workbook_name: Annotated[
+        str | None,
+        Field(description="Workbook name. Omit for the active workbook."),
+    ] = None,
+    sheet_name: Annotated[
+        str | None,
+        Field(
+            description=(
+                "Target sheet name. Default: `CDF_<output_name>` "
+                "(truncated to Excel's 31-char limit)."
+            )
+        ),
+    ] = None,
+) -> dict[str, Any]:
+    result: DistributionChartResult = get_bridge().create_cdf_chart(
+        output_name, workbook_name, sheet_name=sheet_name,
+    )
+    return _distribution_chart_dict(result)
 
 
 @mcp.tool(

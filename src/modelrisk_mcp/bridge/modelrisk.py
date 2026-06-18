@@ -23,7 +23,12 @@ from pathlib import Path
 from typing import Any
 
 from modelrisk_mcp.bridge.catalogue import FunctionCatalogue, load_catalogue
-from modelrisk_mcp.bridge.charts import TornadoChartResult, TornadoChartWriter
+from modelrisk_mcp.bridge.charts import (
+    DistributionChartResult,
+    DistributionChartWriter,
+    TornadoChartResult,
+    TornadoChartWriter,
+)
 from modelrisk_mcp.bridge.excel import ExcelBridge
 from modelrisk_mcp.bridge.mrservice import MrServiceBridge
 from modelrisk_mcp.bridge.name_parser import (
@@ -1005,6 +1010,64 @@ class ModelRiskBridge:
         book = app.books[wb_name]
         return TornadoChartWriter.write(
             book, output_name, ranking.entries, sheet_name=sheet_name
+        )
+
+    def create_histogram_chart(
+        self,
+        output_name: str,
+        workbook: str | None = None,
+        *,
+        sheet_name: str | None = None,
+    ) -> DistributionChartResult:
+        """Render a histogram (frequency + cumulative-% overlay, P10-P90
+        band) of `output_name`'s simulation samples as a new sheet.
+
+        Reads the per-iteration sample array from the active `.vmrs` via
+        `get_samples`, bins it onto round boundaries, and writes the
+        native Excel chart via `DistributionChartWriter`. Idempotent — a
+        target sheet of the same name is replaced. This is the
+        Results-Viewer histogram, persisted into the workbook."""
+        return self._create_distribution_chart(
+            output_name, workbook, chart_kind="histogram", sheet_name=sheet_name,
+        )
+
+    def create_cdf_chart(
+        self,
+        output_name: str,
+        workbook: str | None = None,
+        *,
+        sheet_name: str | None = None,
+    ) -> DistributionChartResult:
+        """Render the ascending cumulative-probability curve (CDF) of
+        `output_name`'s simulation samples as a new sheet.
+
+        Same machinery as `create_histogram_chart` but draws the
+        cumulative line on its own (the "chance the output is below X"
+        view). Idempotent — a target sheet of the same name is
+        replaced."""
+        return self._create_distribution_chart(
+            output_name, workbook, chart_kind="cdf", sheet_name=sheet_name,
+        )
+
+    def _create_distribution_chart(
+        self,
+        output_name: str,
+        workbook: str | None,
+        *,
+        chart_kind: str,
+        sheet_name: str | None,
+    ) -> DistributionChartResult:
+        samples = self.get_samples(output_name, workbook)
+        wb_name = workbook or self._excel.get_active_workbook().name
+        # The chart writer needs the raw xlwings book handle.
+        if not self._excel.is_connected():
+            self._excel.connect()
+        app = self._excel._app  # bridge-internal access
+        assert app is not None  # connect() guarantees this
+        book = app.books[wb_name]
+        return DistributionChartWriter.write(
+            book, output_name, samples,
+            chart_kind=chart_kind, sheet_name=sheet_name,
         )
 
     def run_scenarios(

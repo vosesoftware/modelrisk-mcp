@@ -4,6 +4,17 @@ All notable changes to ModelRisk MCP. Follows [Keep a Changelog](https://keepach
 
 ## [Unreleased]
 
+## [0.3.7] — 2026-06-18
+
+### Distribution charts: `create_histogram_chart` + `create_cdf_chart`
+
+Two new tools render one output's **simulation result distribution** as a native Excel chart on its own sheet — the ModelRisk Results-Viewer view, persisted into the workbook (linked to the spreadsheet, not a screenshot):
+
+- **`create_histogram_chart`** — frequency columns with the cumulative-probability curve overlaid on a secondary % axis and the central-80% (P10-P90) band highlighted.
+- **`create_cdf_chart`** — the ascending cumulative-probability curve on its own ("what's the chance the output is below X").
+
+Both read the per-iteration samples from the active `.vmrs` (`get_samples`), bin onto round-number boundaries (`_nice_bins`), and write a 3-column data table (bin centre / frequency / cumulative %) plus the chart. They **reuse the executive report's chart builders** (`_add_histogram_chart` + the bug-#18 bind-with-verification workaround), so a standalone chart looks byte-for-byte identical to the same chart inside `build_executive_report`. Idempotent — a sheet with the target name (`Histogram_<output>` / `CDF_<output>`) is replaced, so re-running after a fresh simulation just refreshes it. The response carries the sheet/chart names plus mean and P10/P50/P90.
+
 ## [0.3.6] — 2026-06-16
 
 ### Fix: ModelRisk reported "not loaded" on comma-decimal locales (Russian, German, …)
