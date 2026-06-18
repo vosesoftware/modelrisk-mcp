@@ -124,6 +124,14 @@ class SimulationRunResult:
 # "Vose" + X (ModelRiskCloude/CLAUDE.md:63).
 _CMD_START_SIM = "VoseStartSimulCustom12"
 _CMD_GET_DATA_SZ = "VoseGetDataSZ12"
+# Persists the simulation options to the workbook as SimOpt_* defined-names via
+# SaveOptionsToWorkbook (SimulationCommonOptionsReadWrite.cpp). REQUIRED for the
+# seed: ModelRisk's per-cell-twister Manual-Seed mode reads its base seed from the
+# workbook-persisted SimOpt_SeedFixed / SimOpt_Seed0 names, NOT from the per-call
+# options handed to VoseStartSimulCustom12. Without this call the per-call
+# [SeedFixed]/[seed0] are parsed but ignored by the twister -> Random mode ->
+# non-reproducible streams (AB#2742; verified end-to-end against the engine oracle).
+_CMD_SET_SIM_OPTS = "VoseSetSimulOptions12"
 
 # Operation prefix the SimulationObj_VBA dispatcher matches on for the
 # save path. PackSessionName format: "h<hwnd>_<Operation>_<book_name>"
@@ -346,6 +354,10 @@ class SimulationController:
         self._ensure_xll_registered()
         try:
             options_2d = [opts.to_string_list()]  # 1 row x N cols
+            # Persist options (esp. SeedFixed/seed0) to the workbook FIRST so the
+            # per-cell-twister Manual-Seed engine actually honors the seed. See
+            # _CMD_SET_SIM_OPTS above for the full rationale (AB#2742).
+            app.api.Run(_CMD_SET_SIM_OPTS, options_2d)
             app.api.Run(_CMD_START_SIM, options_2d)
         except Exception as exc:
             raise SimulationFailedError(

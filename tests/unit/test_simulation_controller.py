@@ -3,11 +3,15 @@
 The controller's job is to:
 1. Pack SimulationOptions into the exact `[Key]:Value` line format
    `CSimulationOptions::PackToStringList` (C++) emits.
-2. Call `Application.Run("VoseStartSimulCustom12", options_2d)` with a
-   1-row 2D string array.
-3. Call `Application.Run("VoseGetDataSZ12", session_name, target_path)`
+2. Call `Application.Run("VoseSetSimulOptions12", options_2d)` to persist
+   the options (esp. the seed) to the workbook's SimOpt_* defined-names —
+   required so the per-cell-twister Manual-Seed engine honors the seed
+   (AB#2742).
+3. Call `Application.Run("VoseStartSimulCustom12", options_2d)` with the
+   same 1-row 2D string array.
+4. Call `Application.Run("VoseGetDataSZ12", session_name, target_path)`
    with the session name in the form `h<hwnd>_SaveResultsToFile_<book>`.
-4. Verify the .vmrs file appeared, raising SimulationFailedError if not.
+5. Verify the .vmrs file appeared, raising SimulationFailedError if not.
 
 Tests use a fake ExcelBridge + a fake Application to record every Run
 call and let us assert exact-string conformance with the C++ side.
@@ -158,17 +162,20 @@ class TestRunSimulation:
         result = controller.run_simulation()
 
         assert [c[0] for c in recorder.calls] == [
+            "VoseSetSimulOptions12",
             "VoseStartSimulCustom12",
             "VoseGetDataSZ12",
         ]
-        # First call: 1-row 2D options array.
-        start_args = recorder.calls[0][1]
+        # Persist + start calls both carry the same 1-row 2D options array.
+        set_args = recorder.calls[0][1]
+        start_args = recorder.calls[1][1]
         assert len(start_args) == 1
         options_2d = start_args[0]
         assert len(options_2d) == 1, "options must be a 1-row 2D array"
         assert any(s.startswith("[Samples]:") for s in options_2d[0])
-        # Second call: session name + path.
-        save_args = recorder.calls[1][1]
+        assert set_args == start_args, "persist must get the same options as start"
+        # Third call: session name + path.
+        save_args = recorder.calls[2][1]
         assert save_args[0] == "h9999_SaveResultsToFile_model.xlsx"
         assert save_args[1] == str(target)
         # Result reflects the discovered file.
@@ -205,7 +212,8 @@ class TestRunSimulation:
 
         result = controller.run_simulation(save_to=str(target))
         assert result.vmrs_path == str(target)
-        assert recorder.calls[1][1][1] == str(target)
+        # calls: [0]=SetSimulOptions, [1]=StartSimul, [2]=GetDataSZ(session, path)
+        assert recorder.calls[2][1][1] == str(target)
 
     def test_raises_when_file_not_produced(self, tmp_path: Path) -> None:
         # on_save = None means the fake never writes the file.
@@ -234,8 +242,8 @@ class TestRunSimulation:
 
         result = controller.run_simulation(workbook_name="b.xlsx")
         assert result.workbook_name == "b.xlsx"
-        # Session name uses b.xlsx, not the active a.xlsx
-        assert "b.xlsx" in recorder.calls[1][1][0]
+        # Session name uses b.xlsx, not the active a.xlsx (save = 3rd call now)
+        assert "b.xlsx" in recorder.calls[2][1][0]
 
     def test_unknown_workbook_raises(self, tmp_path: Path) -> None:
         bridge = _FakeBridge(active=_make_wb("a.xlsx", tmp_path))
