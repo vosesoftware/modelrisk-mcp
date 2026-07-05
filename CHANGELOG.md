@@ -4,6 +4,12 @@ All notable changes to ModelRisk MCP. Follows [Keep a Changelog](https://keepach
 
 ## [Unreleased]
 
+## [0.3.10] — 2026-07-05
+
+### Demo gallery wave 2 — full use-case coverage
+
+Four new demo workbooks close the last coverage gaps (each live-tested end-to-end): **12** fit a time series from history and project with uncertainty (`fit_time_series`, `read_vmrs`); **13** compare two suppliers under uncertainty — rank correlation of their histories, then P(A beats B) and stochastic dominance (`compare_distributions`, `compute_correlation_matrix`); **14** backtest an overconfident forecast against actuals — PIT and coverage receipts (`backtest_output`); **15** epistemic vs aleatory — more data or more capital? (`decompose_uncertainty`). Gallery: 15 demos + index, all recalculating error-free in real Excel.
+
 ### `fit_time_series` — the deferred capability, unblocked and shipped
 
 New analysis tool: fit **time-series models** to a historical range and rank them by AIC/SIC/HQIC — GBM (plus mean-reverting / jump-diffusion / seasonal variants), AR1/AR2, MA1/MA2, ARMA, ARCH/GARCH/EGARCH — then optionally CSE-enter the best model's projection (`VoseTime<Family>Fit(...)`, one period per cell) into a target range, so every simulated path carries the fitted dynamics period to period.
