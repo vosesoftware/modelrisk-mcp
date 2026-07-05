@@ -214,6 +214,14 @@ Or jump straight into building:
 
 This walks through 9 steps, from identifying outputs through running the simulation and interpreting results. See [the slash-command catalogue](src/modelrisk_mcp/prompts) for the other workflows.
 
+### Demo gallery
+
+Prefer a guided tour? **[examples/demos](examples/demos)** contains eleven hands-on demo
+workbooks — one per feature area, each a simple real-life use case (store-expansion NPV,
+bakery demand fitting, correlated construction costs, insurance aggregate loss, reverse
+stress testing, board reporting…). Every workbook's README sheet gives the exact prompts
+to type to Claude, step by step. Start with `00_START_HERE.xlsx`.
+
 ---
 
 ## Safety by design

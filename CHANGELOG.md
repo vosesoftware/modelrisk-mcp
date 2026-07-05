@@ -4,6 +4,10 @@ All notable changes to ModelRisk MCP. Follows [Keep a Changelog](https://keepach
 
 ## [Unreleased]
 
+### Demo gallery (`examples/demos/`)
+
+Twelve identically-formatted demo workbooks (index + eleven demos), one per feature area, each a simple real-life use case: store-expansion NPV via `build_model_from_brief`, bakery demand fitting, correlated construction costs via `fit_copula_to_data`/`fit_all_data_and_wire`, data-centre `reverse_stress_test`, simulation + histogram/CDF/tornado charts, model audit + undo, insurance aggregate loss + tail capital, SaaS pricing `run_scenarios`, op-risk GPD tails, GBM time series, and a one-prompt board pack. Each workbook's README sheet gives the exact prompt to type to Claude at every step. Shared house formatting (navy bands, blue inputs, yellow Vose-target cells, green key metrics); no live Vose formulas (the agent builds them during the demo); fixed-seed synthetic data; all files recalculate error-free in Excel.
+
 ## [0.3.8] — 2026-07-05
 
 ### Four functional tools that widen the "does the work" gap vs. advisory agents
