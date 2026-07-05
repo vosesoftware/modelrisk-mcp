@@ -252,3 +252,161 @@ class UncertaintyDecomposition(BaseModel):
     interpretation: str = Field(
         description="Which uncertainty dominates and what reduces it."
     )
+
+
+class CopulaFitCandidate(BaseModel):
+    """Goodness-of-fit scores for one fitted copula family. Lower
+    information criteria are better fits."""
+
+    family: str = Field(description="Copula family, e.g. 'CopulaMultiClayton'.")
+    aic: float = Field(description="Akaike information criterion (lower = better).")
+    sic: float = Field(description="Schwarz/Bayesian information criterion (lower = better).")
+    hqic: float = Field(description="Hannan-Quinn information criterion (lower = better).")
+    rank: int = Field(description="1 = best fit by the chosen criterion.")
+    tail_dependence: str = Field(
+        description=(
+            "Asymmetric tail-dependence character of the family: 'none' "
+            "(Normal/Frank), 'lower' (Clayton — joint crashes), 'upper' "
+            "(Gumbel — joint booms), or 'both' (T). This is what a single "
+            "correlation coefficient throws away."
+        )
+    )
+
+
+class CopulaFitRanking(BaseModel):
+    """Result of fitting and ranking parametric copula families to a
+    multi-column data range — the dependence structure *fitted from
+    data*, not merely constructed."""
+
+    data_range: str
+    n_variables: int = Field(description="Number of variables (columns) the copula spans.")
+    criterion: str = Field(description="Criterion the ranking is sorted by (AIC / SIC / HQIC).")
+    sample_size: int = Field(description="Number of joint observations (rows).")
+    best_family: str | None = Field(
+        default=None, description="Top-ranked copula family, or null if every fit failed."
+    )
+    candidates: list[CopulaFitCandidate] = Field(
+        description="Successfully-fitted copula families, best first."
+    )
+    skipped: list[dict[str, str]] = Field(
+        default_factory=list,
+        description="Families that could not be fitted, with a reason each.",
+    )
+    note: str = Field(description="Interpretation of the winning family's tail behaviour.")
+
+
+class BreachDriver(BaseModel):
+    """One input's behaviour conditional on the output breaching the
+    stress threshold — the inverse of a forward tornado."""
+
+    input_name: str
+    marginal_mean: float = Field(description="The input's mean across all iterations.")
+    breach_mean: float = Field(description="The input's mean across only the breach iterations.")
+    mean_shift_sd: float = Field(
+        description=(
+            "Standardised departure = (breach_mean - marginal_mean) / marginal_stdev. "
+            "Large magnitude ⇒ this input is systematically different when things go wrong."
+        )
+    )
+    breach_share_of_own_tail: float = Field(
+        description=(
+            "Fraction of this input's own worst-decile iterations that fall in the "
+            "breach set — how concentrated breaches are in this input's tail."
+        )
+    )
+    rank: int = Field(description="1 = strongest breach driver by |mean_shift_sd|.")
+
+
+class StressScenario(BaseModel):
+    """A concrete named input state extracted from the breach iterations."""
+
+    label: str
+    input_values: dict[str, float] = Field(
+        description="Per-input value (the mean input vector over the breach set)."
+    )
+
+
+class ReverseStressResult(BaseModel):
+    """Reverse stress test: from a bad output outcome back to the joint
+    input state that produced it (Solvency II / PRA style). Pure analysis
+    over the recorded per-iteration sample matrix — impossible without
+    the engine's joint samples."""
+
+    output_name: str
+    threshold: float
+    direction: str = Field(description="'above' or 'below' — the breach side of the threshold.")
+    iterations: int
+    breach_count: int
+    breach_probability: float
+    drivers: list[BreachDriver] = Field(
+        description="Inputs ranked by how far they shift in the breach set."
+    )
+    scenario: StressScenario | None = Field(
+        default=None, description="The mean input vector over the breach iterations."
+    )
+    note: str
+
+
+class WiredColumnResult(BaseModel):
+    """Outcome of fitting + wiring one data column as a model input."""
+
+    input_name: str
+    target_cell: str
+    best_family: str | None
+    formula: str
+    written: bool
+    skipped_reason: str | None = None
+
+
+class FitAndWireResult(BaseModel):
+    """Outcome of fitting marginals + a copula from data and wiring them
+    into the workbook as a correlated, simulation-ready model."""
+
+    workbook: str
+    sheet: str
+    columns: list[WiredColumnResult]
+    copula_family: str | None = Field(
+        default=None, description="Best-fit copula family wired across the columns, if any."
+    )
+    copula_anchor: str | None = Field(
+        default=None, description="Range where the correlated-U block was written."
+    )
+    dry_run: bool
+    simulated: bool = Field(description="Whether a validating simulation was run.")
+    achieved_correlation: list[list[float]] | None = Field(
+        default=None, description="Rank correlation of the wired inputs from the validating run."
+    )
+    rolled_back: bool = Field(
+        default=False, description="True if a mid-build failure triggered a full rollback."
+    )
+    steps: list[str] = Field(description="Ordered log of what happened.")
+    note: str
+
+
+class BuiltInput(BaseModel):
+    """One input the brief-builder created."""
+
+    cell: str
+    input_name: str
+    formula: str
+    source: str = Field(description="'fitted-from-data', 'proposed', or 'existing'.")
+
+
+class ModelFromBriefResult(BaseModel):
+    """Outcome of turning a deterministic workbook into a simulation-ready
+    Monte Carlo model in one orchestrated, reversible pass."""
+
+    workbook: str
+    dry_run: bool
+    outputs_wrapped: list[str] = Field(default_factory=list)
+    inputs_built: list[BuiltInput] = Field(default_factory=list)
+    correlated: bool = Field(default=False)
+    simulated: bool = Field(default=False)
+    headline: dict[str, dict[str, float]] = Field(
+        default_factory=dict,
+        description="Per-output headline stats (mean/P10/P50/P90) from the validating run.",
+    )
+    rolled_back: bool = Field(default=False)
+    change_set_size: int = Field(description="Number of cells written (0 if dry_run).")
+    steps: list[str] = Field(description="Ordered, human-readable log of the build.")
+    note: str

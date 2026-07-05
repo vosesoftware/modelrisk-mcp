@@ -475,6 +475,88 @@ class ModelRiskBridge:
 
         return scored, skipped, sample_size
 
+    def fit_and_rank_copulas(
+        self,
+        data_range: str,
+        families: list[str],
+        *,
+        data_in_rows: bool = False,
+        workbook: str | None = None,
+        uncertainty: bool = False,
+    ) -> tuple[list[dict[str, Any]], list[dict[str, str]], int]:
+        """Fit each copula `family` to a multi-column `data_range` and
+        return its AIC/SIC/HQIC — the dependence structure fitted *from
+        data*, ranked like distributions.
+
+        Mirrors `fit_and_rank` exactly, but the copula fit-object
+        functions take a `Data_In_Rows` flag as well as the uncertainty
+        flag: `Vose<Family>FitObject(range, data_in_rows, uncertainty)`.
+        `family` names are catalogue stems like `CopulaMultiClayton`
+        (the tool passes the Multi* families, which handle any n>=2).
+
+        `data_range` must be sheet-qualified. Returns
+        `(scored, skipped, cell_count)` where `cell_count` is the total
+        numeric cell count (the caller divides by the variable count to
+        get the joint-observation row count)."""
+        self.ensure_modelrisk_functional()
+        unc = "TRUE" if uncertainty else "FALSE"
+        dir_flag = "TRUE" if data_in_rows else "FALSE"
+
+        valid: list[str] = []
+        skipped: list[dict[str, str]] = []
+        for fam in families:
+            if f"Vose{fam}FitObject" in self._catalogue:
+                valid.append(fam)
+            else:
+                skipped.append(
+                    {"family": fam, "reason": "no Vose<Family>FitObject in catalogue"}
+                )
+
+        scored: list[dict[str, Any]] = []
+        cell_count = 0
+        if valid:
+            with self._scratch_sheet(workbook) as (app, sht):
+                sht.range("F1").formula = f"=COUNT({data_range})"
+                for i, fam in enumerate(valid):
+                    r = i + 1
+                    sht.range((r, 1)).formula = (
+                        f"=Vose{fam}FitObject({data_range},{dir_flag},{unc})"
+                    )
+                    sht.range((r, 2)).formula = f"=VoseAIC(A{r})"
+                    sht.range((r, 3)).formula = f"=VoseSIC(A{r})"
+                    sht.range((r, 4)).formula = f"=VoseHQIC(A{r})"
+                app.api.CalculateFull()
+                try:
+                    cell_count = int(sht.range("F1").value or 0)
+                except (TypeError, ValueError):
+                    cell_count = 0
+                for i, fam in enumerate(valid):
+                    r = i + 1
+                    aic = sht.range((r, 2)).value
+                    sic = sht.range((r, 3)).value
+                    hqic = sht.range((r, 4)).value
+                    if all(
+                        isinstance(v, (int, float)) and not isinstance(v, bool)
+                        for v in (aic, sic, hqic)
+                    ):
+                        scored.append(
+                            {
+                                "family": fam,
+                                "aic": float(aic),
+                                "sic": float(sic),
+                                "hqic": float(hqic),
+                            }
+                        )
+                    else:
+                        reason = next(
+                            (str(v) for v in (aic, sic, hqic)
+                             if not isinstance(v, (int, float))),
+                            "fit failed",
+                        )
+                        skipped.append({"family": fam, "reason": reason})
+
+        return scored, skipped, cell_count
+
     # ------------------------------------------------------------------
     # Run sim — wraps SimulationController + auto-pins the resulting
     # .vmrs as the active source so subsequent get_simulation_results

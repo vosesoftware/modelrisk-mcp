@@ -7,6 +7,7 @@ methodology-aware result.
 
 from __future__ import annotations
 
+import re
 from importlib import resources
 from pathlib import Path
 from typing import Annotated, Any
@@ -16,8 +17,20 @@ from pydantic import Field
 
 from modelrisk_mcp.audit.engine import run_audit
 from modelrisk_mcp.bridge.charts import DistributionChartResult, TornadoChartResult
+from modelrisk_mcp.bridge.formulas import (
+    build_distribution_formula,
+    build_input_wrapper,
+    build_output_wrapper,
+)
 from modelrisk_mcp.bridge.reports import DriversReportResult, ExecutiveReportResult
-from modelrisk_mcp.schemas.analysis import RiskModelPlan
+from modelrisk_mcp.errors import ModelRiskComputationError
+from modelrisk_mcp.schemas.analysis import (
+    BuiltInput,
+    FitAndWireResult,
+    ModelFromBriefResult,
+    RiskModelPlan,
+    WiredColumnResult,
+)
 from modelrisk_mcp.schemas.results import AuditReport, SimulationResult
 from modelrisk_mcp.schemas.workbook import CellRef
 from modelrisk_mcp.server import mcp
@@ -855,13 +868,415 @@ def generate_executive_summary(
     return {"markdown": "\n".join(lines).rstrip() + "\n"}
 
 
+# ----------------------------------------------------------------------
+# Atomic multi-cell build helpers (staged change-set with rollback)
+# ----------------------------------------------------------------------
+
+# The repo has per-cell restore (restore_cell) but no transaction
+# primitive. A model build writes many cells; if step N fails we must
+# undo steps 1..N-1 or the workbook is left half-built. _ChangeSet wraps
+# safe_write_cell (mutex + audit log) and records each cell's prior
+# formula so rollback can restore them in reverse order.
+
+
+class _ChangeSet:
+    def __init__(self, bridge: Any) -> None:
+        self._bridge = bridge
+        self.applied: list[tuple[CellRef, str]] = []
+
+    def write(
+        self, ref: CellRef, formula: str, *, allow_overwrite_non_vose: bool = False
+    ) -> Any:
+        res = self._bridge.safe_write_cell(
+            ref, formula, allow_overwrite_non_vose=allow_overwrite_non_vose
+        )
+        self.applied.append((ref, res.previous_formula or ""))
+        return res
+
+    def rollback(self) -> None:
+        for ref, prev in reversed(self.applied):
+            try:
+                self._bridge.excel.write_cell(
+                    ref.workbook, ref.sheet, ref.cell, prev
+                )
+            except Exception:
+                pass
+
+
+_CELL_RE = re.compile(r"^\$?([A-Za-z]{1,3})\$?(\d+)$")
+_BLOCK_RE = re.compile(r"^\$?([A-Za-z]{1,3})\$?(\d+):\$?([A-Za-z]{1,3})\$?(\d+)$")
+
+_DEFAULT_MARGINAL_FAMILIES = [
+    "Normal", "Lognormal", "Gamma", "Weibull", "Expon",
+    "Logistic", "Beta", "LogLogistic", "Pareto", "Gumbel",
+]
+
+# Copula families for the wiring flow (Multi* handle any n>=2).
+_COPULA_FAMILIES_WF = [
+    "CopulaMultiNormal", "CopulaMultiT", "CopulaMultiClayton",
+    "CopulaMultiFrank", "CopulaMultiGumbel",
+]
+
+
+def _col_num(col: str) -> int:
+    n = 0
+    for ch in col.upper():
+        n = n * 26 + (ord(ch) - 64)
+    return n
+
+
+def _num_col(n: int) -> str:
+    s = ""
+    while n > 0:
+        n, r = divmod(n - 1, 26)
+        s = chr(65 + r) + s
+    return s
+
+
+def _split_cell(cell: str) -> tuple[str, int]:
+    m = _CELL_RE.match(cell.strip())
+    if not m:
+        raise ModelRiskComputationError(f"Not a single-cell reference: {cell!r}.")
+    return m.group(1).upper(), int(m.group(2))
+
+
+def _block_columns(data_range: str) -> list[str]:
+    """Slice a rectangular block like 'A2:C500' into per-column A1 ranges
+    ['A2:A500', 'B2:B500', 'C2:C500']."""
+    m = _BLOCK_RE.match(data_range.strip())
+    if not m:
+        raise ModelRiskComputationError(
+            f"data_range {data_range!r} must be a rectangular block like 'A2:C500'."
+        )
+    c1, r1, c2, r2 = _col_num(m.group(1)), int(m.group(2)), _col_num(m.group(3)), int(m.group(4))
+    lo_c, hi_c = sorted((c1, c2))
+    lo_r, hi_r = sorted((r1, r2))
+    return [f"{_num_col(c)}{lo_r}:{_num_col(c)}{hi_r}" for c in range(lo_c, hi_c + 1)]
+
+
+def _coerce_params(parameters: list[dict[str, Any]]) -> dict[str, Any] | list[Any]:
+    """Accept [{'name','value'}...] (→ dict) or [{'value'}...] (→ positional
+    list), mirroring insert_distribution's parameter convention."""
+    if all("name" in p for p in parameters):
+        return {p["name"]: p["value"] for p in parameters}
+    return [p.get("value") for p in parameters]
+
+
+@mcp.tool(
+    description=(
+        "ModelRisk: Fit BOTH the marginal distributions and the copula "
+        "dependence from a data block, then wire the whole correlated, "
+        "simulation-ready model into the workbook in one reversible pass. "
+        "For each variable column it fits+ranks the best marginal "
+        "(AIC/SIC/HQIC); across the columns it fits the best copula "
+        "(fit_copula_to_data) and writes the correlated-U block at "
+        "`copula_anchor`; each marginal is wired to its copula U so the "
+        "inputs are dependent, not independent — capturing the tail "
+        "co-movement a single correlation coefficient discards. Optionally "
+        "runs a validating simulation. Defaults to dry_run=True (returns "
+        "the exact planned formulas without writing). On any mid-build "
+        "failure the whole change-set is rolled back. This is the "
+        "data→model step no advisory agent can perform."
+    )
+)
+def fit_all_data_and_wire(
+    workbook: Annotated[str, Field(description="Workbook file name.")],
+    sheet: Annotated[str, Field(description="Sheet holding the data and target cells.")],
+    data_range: Annotated[
+        str,
+        Field(description="Rectangular data block, one column per variable, e.g. 'A2:C500'."),
+    ],
+    columns: Annotated[
+        list[dict[str, str]],
+        Field(
+            description=(
+                "One entry per data column, in column order: "
+                "{'input_name': 'Demand', 'target_cell': 'F2'}."
+            )
+        ),
+    ],
+    copula_anchor: Annotated[
+        str | None,
+        Field(description="Top cell for the correlated-U block. Omit to skip correlation."),
+    ] = None,
+    criterion: Annotated[
+        str, Field(description="Fit criterion: 'SIC' (default), 'AIC', or 'HQIC'.")
+    ] = "SIC",
+    uncertainty: Annotated[
+        bool, Field(description="Fit with parameter uncertainty. Default False.")
+    ] = False,
+    run: Annotated[
+        bool, Field(description="Run a validating simulation after wiring. Default False.")
+    ] = False,
+    samples: Annotated[int, Field(ge=1, le=1_000_000)] = 1000,
+    seed: Annotated[int, Field()] = 1,
+    dry_run: Annotated[
+        bool, Field(description="Preview the planned formulas without writing. Default True.")
+    ] = True,
+) -> FitAndWireResult:
+    crit = criterion.upper()
+    if crit not in ("AIC", "SIC", "HQIC"):
+        raise ModelRiskComputationError(f"Unknown criterion {criterion!r}.")
+    key = crit.lower()
+    bridge = get_bridge()
+    unc = "TRUE" if uncertainty else "FALSE"
+    col_ranges = _block_columns(data_range)
+    if len(columns) != len(col_ranges):
+        raise ModelRiskComputationError(
+            f"{len(columns)} column specs but data_range spans {len(col_ranges)} columns."
+        )
+    steps: list[str] = []
+
+    # 1. Fit each marginal.
+    marginals: list[dict[str, Any]] = []
+    for spec, col_rng in zip(columns, col_ranges, strict=True):
+        qualified = f"'{sheet}'!{col_rng}"
+        scored, _skipped, _ = bridge.fit_and_rank(
+            qualified, list(_DEFAULT_MARGINAL_FAMILIES),
+            workbook=workbook, uncertainty=uncertainty,
+        )
+        scored.sort(key=lambda d: d[key])
+        best = scored[0]["family"] if scored else None
+        marginals.append(
+            {"name": spec["input_name"], "cell": spec["target_cell"],
+             "range": qualified, "family": best}
+        )
+        steps.append(f"Fitted {spec['input_name']}: best marginal = {best or 'none'}")
+
+    # 2. Fit the copula across all columns (if requested and >=2 fittable).
+    copula_family: str | None = None
+    n_fit = sum(1 for m in marginals if m["family"])
+    if copula_anchor and n_fit >= 2:
+        qualified_block = f"'{sheet}'!{data_range}"
+        scored_c, _sk, _ = bridge.fit_and_rank_copulas(
+            qualified_block, list(_COPULA_FAMILIES_WF),
+            workbook=workbook, uncertainty=uncertainty,
+        )
+        scored_c.sort(key=lambda d: d[key])
+        copula_family = scored_c[0]["family"] if scored_c else None
+        steps.append(f"Fitted copula: best = {copula_family or 'none'}")
+    elif copula_anchor:
+        steps.append("Correlation skipped: fewer than 2 fittable marginals.")
+
+    # 3. Build the formulas (copula block first, then wired marginals).
+    anchor_col = anchor_row = None
+    if copula_family and copula_anchor:
+        anchor_col, anchor_row = _split_cell(copula_anchor)
+
+    col_results: list[WiredColumnResult] = []
+    plan: list[tuple[CellRef, str, bool]] = []  # (ref, formula, allow_overwrite)
+    if copula_family and copula_anchor:
+        cop_ref = CellRef(workbook=workbook, sheet=sheet, cell=copula_anchor)
+        cop_formula = (
+            f"=Vose{copula_family}Fit('{sheet}'!{data_range},FALSE,{unc})"
+        )
+        plan.append((cop_ref, cop_formula, True))
+
+    for i, m in enumerate(marginals):
+        u_ref = None
+        if copula_family and anchor_col is not None and anchor_row is not None:
+            u_ref = f"'{sheet}'!{anchor_col}{anchor_row + i}"
+        if m["family"]:
+            inner = f"Vose{m['family']}Fit({m['range']},{unc}"
+            inner += f",{u_ref})" if u_ref else ")"
+            formula = build_input_wrapper(m["name"], inner)
+            ref = CellRef(workbook=workbook, sheet=sheet, cell=m["cell"])
+            plan.append((ref, formula, True))
+            col_results.append(
+                WiredColumnResult(
+                    input_name=m["name"], target_cell=m["cell"],
+                    best_family=m["family"], formula=formula, written=False,
+                )
+            )
+        else:
+            col_results.append(
+                WiredColumnResult(
+                    input_name=m["name"], target_cell=m["cell"],
+                    best_family=None, formula="", written=False,
+                    skipped_reason="no marginal family fitted",
+                )
+            )
+
+    # 4. Commit (unless dry_run), with atomic rollback.
+    rolled_back = False
+    simulated = False
+    if not dry_run:
+        cs = _ChangeSet(bridge)
+        try:
+            for ref, formula, allow in plan:
+                cs.write(ref, formula, allow_overwrite_non_vose=allow)
+            for cr in col_results:
+                if cr.formula:
+                    cr.written = True
+            steps.append(f"Wrote {len(cs.applied)} cell(s).")
+            if run:
+                bridge.run_simulation(workbook=workbook, samples=samples, seed=seed)
+                simulated = True
+                steps.append(f"Ran validating simulation ({samples} iterations).")
+        except Exception as exc:
+            cs.rollback()
+            rolled_back = True
+            steps.append(f"Build failed ({exc!r}); rolled back all writes.")
+            for cr in col_results:
+                cr.written = False
+
+    note = (
+        "Correlated data→model wired and simulated."
+        if simulated
+        else "Preview only — pass dry_run=False to write."
+        if dry_run
+        else "Model wired; pass run=True to validate by simulation."
+    )
+    if rolled_back:
+        note = "Build failed and was fully rolled back — workbook unchanged."
+    return FitAndWireResult(
+        workbook=workbook, sheet=sheet, columns=col_results,
+        copula_family=copula_family,
+        copula_anchor=copula_anchor if copula_family else None,
+        dry_run=dry_run, simulated=simulated, achieved_correlation=None,
+        rolled_back=rolled_back, steps=steps, note=note,
+    )
+
+
+@mcp.tool(
+    description=(
+        "ModelRisk: Turn a deterministic workbook into a simulation-ready "
+        "Monte Carlo model in one atomic, reversible pass. Given the "
+        "output cells to track and the uncertain inputs to add (each with "
+        "a Vose distribution family + parameters you choose from the "
+        "brief), it wraps the outputs with VoseOutput, replaces the input "
+        "cells with VoseInput-wrapped distributions, optionally runs a "
+        "validating simulation, and returns the headline percentiles. "
+        "Every write goes through the audit-logged safe-write path and is "
+        "tracked in a change-set: if any step fails, the ENTIRE build is "
+        "rolled back so the workbook is never left half-converted. "
+        "Defaults to dry_run=True. This end-to-end build+simulate is "
+        "exactly what an advisory agent cannot do."
+    )
+)
+def build_model_from_brief(
+    workbook: Annotated[str, Field(description="Workbook file name.")],
+    sheet: Annotated[str, Field(description="Sheet holding the cells.")],
+    inputs: Annotated[
+        list[dict[str, Any]],
+        Field(
+            description=(
+                "Uncertain inputs to create, each: {'cell': 'B4', "
+                "'input_name': 'Demand', 'function_name': 'VoseModPERT', "
+                "'parameters': [{'value': 100}, {'value': 150}, {'value': 250}]}."
+            )
+        ),
+    ],
+    outputs: Annotated[
+        list[dict[str, str]] | None,
+        Field(
+            description=(
+                "Output cells to wrap: [{'cell': 'B12', 'output_name': 'NPV'}]. "
+                "Omit if outputs are already wrapped."
+            )
+        ),
+    ] = None,
+    run: Annotated[
+        bool, Field(description="Run a validating simulation after building. Default True.")
+    ] = True,
+    samples: Annotated[int, Field(ge=1, le=1_000_000)] = 1000,
+    seed: Annotated[int, Field()] = 1,
+    dry_run: Annotated[
+        bool, Field(description="Preview the planned build without writing. Default True.")
+    ] = True,
+) -> ModelFromBriefResult:
+    bridge = get_bridge()
+    steps: list[str] = []
+    outs = outputs or []
+
+    # Build the planned change-set (formulas first, so a bad spec fails
+    # before any write).
+    plan: list[tuple[CellRef, str, bool]] = []
+    built_inputs: list[BuiltInput] = []
+    for spec in inputs:
+        inner = build_distribution_formula(
+            spec["function_name"], _coerce_params(spec["parameters"]), bridge.catalogue
+        )
+        formula = build_input_wrapper(spec["input_name"], inner)
+        ref = CellRef(workbook=workbook, sheet=sheet, cell=spec["cell"])
+        plan.append((ref, formula, True))
+        built_inputs.append(
+            BuiltInput(cell=spec["cell"], input_name=spec["input_name"],
+                       formula=formula, source="proposed")
+        )
+    output_plan: list[tuple[CellRef, str]] = []
+    for spec in outs:
+        ref = CellRef(workbook=workbook, sheet=sheet, cell=spec["cell"])
+        current = bridge.excel.get_cell(workbook, sheet, spec["cell"])
+        inner = current.formula or (
+            f"={current.value}" if current.value is not None else "=0"
+        )
+        formula = build_output_wrapper(spec["output_name"], inner)
+        output_plan.append((ref, formula))
+    steps.append(
+        f"Planned {len(built_inputs)} input(s) and {len(outs)} output wrap(s)."
+    )
+
+    headline: dict[str, dict[str, float]] = {}
+    rolled_back = False
+    simulated = False
+    change_set_size = 0
+
+    if not dry_run:
+        cs = _ChangeSet(bridge)
+        try:
+            for ref, formula in output_plan:
+                cs.write(ref, formula, allow_overwrite_non_vose=True)
+            for ref, formula, allow in plan:
+                cs.write(ref, formula, allow_overwrite_non_vose=allow)
+            change_set_size = len(cs.applied)
+            steps.append(f"Wrote {change_set_size} cell(s).")
+            if run:
+                bridge.run_simulation(workbook=workbook, samples=samples, seed=seed)
+                simulated = True
+                names = [s["output_name"] for s in outs] or None
+                results = bridge.get_simulation_results(workbook, names)
+                for r in results:
+                    headline[r.output_name] = {
+                        "mean": r.mean,
+                        "p10": r.percentiles.get(0.1, r.mean),
+                        "p50": r.percentiles.get(0.5, r.mean),
+                        "p90": r.percentiles.get(0.9, r.mean),
+                    }
+                steps.append(f"Ran validating simulation ({samples} iterations).")
+        except Exception as exc:
+            cs.rollback()
+            rolled_back = True
+            change_set_size = 0
+            steps.append(f"Build failed ({exc!r}); rolled back all writes.")
+
+    if rolled_back:
+        note = "Build failed and was fully rolled back — workbook unchanged."
+    elif dry_run:
+        note = "Preview only — pass dry_run=False to build the model."
+    elif simulated:
+        note = "Model built and validated by simulation."
+    else:
+        note = "Model built; pass run=True to validate by simulation."
+
+    return ModelFromBriefResult(
+        workbook=workbook, dry_run=dry_run,
+        outputs_wrapped=[s["output_name"] for s in outs],
+        inputs_built=built_inputs, correlated=False, simulated=simulated,
+        headline=headline, rolled_back=rolled_back,
+        change_set_size=change_set_size, steps=steps, note=note,
+    )
+
+
 __all__ = [
     "audit_model",
     "build_drivers_report",
     "build_executive_report",
+    "build_model_from_brief",
     "create_tornado_chart",
     "diagnose_workbook",
     "discover_inputs",
+    "fit_all_data_and_wire",
     "generate_executive_summary",
     "propose_distributions_for_inputs",
 ]

@@ -4,6 +4,19 @@ All notable changes to ModelRisk MCP. Follows [Keep a Changelog](https://keepach
 
 ## [Unreleased]
 
+## [0.3.8] — 2026-07-05
+
+### Four functional tools that widen the "does the work" gap vs. advisory agents
+
+Capabilities that structurally require *running the engine* and *holding the per-iteration joint sample matrix* — things an advisory copilot cannot do:
+
+- **`fit_copula_to_data`** — fit parametric copulas (Normal / T / Clayton / Frank / Gumbel) to a multi-column data range, rank by AIC/SIC/HQIC (`Vose<Family>FitObject` scored via `VoseAIC/SIC/HQIC` on a transient scratch sheet), and report the winner's **tail-dependence** character (lower = crash-together, upper = boom-together, both = T). Dependence fitted *from data*, capturing joint-tail risk a single correlation coefficient discards.
+- **`reverse_stress_test`** — from a bad output outcome back to the joint input state that causes it: partitions iterations into breach / no-breach (threshold or percentile, above/below), reports each input's mean shift (in its own SDs) inside the breach set and its tail concentration (a breach-driver tornado), and extracts the mean input vector as a concrete named stress scenario. The Solvency II / PRA reverse-stress-test, pure Python over the recorded `.vmrs` sample matrix.
+- **`fit_all_data_and_wire`** — fit both the marginals *and* the copula from a data block and wire the whole **correlated** model into the workbook (each marginal `Vose<Family>Fit(range, unc, U)` linked to the fitted copula's correlated-U block). One atomic pass with full rollback; `dry_run=True` previews the exact formulas.
+- **`build_model_from_brief`** — turn a deterministic workbook into a simulation-ready model in one atomic, reversible pass: wrap outputs with `VoseOutput`, replace input cells with `VoseInput`-wrapped distributions you choose, optionally run a validating simulation, and return the headline percentiles. Every write goes through the audit-logged safe-write path inside a **change-set** — any mid-build failure rolls back the entire build so the workbook is never left half-converted.
+
+Both orchestrators add a staged change-set/rollback wrapper over `safe_write_cell` (the repo previously had only per-cell restore). 14 new unit tests (pure breach-partition logic + mocked-bridge wrapper/rollback tests); real-Excel wiring is covered by the gated integration suite. 620 unit tests green; ruff + mypy clean. Tool count 56.
+
 ## [0.3.7] — 2026-06-18
 
 ### Distribution charts: `create_histogram_chart` + `create_cdf_chart`

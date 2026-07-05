@@ -19,14 +19,19 @@ formula + simulation round-trip:
 from __future__ import annotations
 
 import math
+import re
 from typing import Annotated, Any
 
+import numpy as np
 from pydantic import Field
 
 from modelrisk_mcp.bridge.formulas import build_distribution_formula
 from modelrisk_mcp.errors import ModelRiskComputationError
 from modelrisk_mcp.schemas.analysis import (
     BacktestResult,
+    BreachDriver,
+    CopulaFitCandidate,
+    CopulaFitRanking,
     CorrelationMatrixResult,
     DistributionComparison,
     DistributionProperty,
@@ -35,6 +40,8 @@ from modelrisk_mcp.schemas.analysis import (
     FitRanking,
     IntervalCoverage,
     PercentileDelta,
+    ReverseStressResult,
+    StressScenario,
     TailFit,
     TailMetric,
     TailRiskResult,
@@ -808,6 +815,328 @@ def decompose_uncertainty(
     )
 
 
+# ---------------------------------------------------------------------------
+# fit_copula_to_data — dependency structure fitted FROM data
+# ---------------------------------------------------------------------------
+
+# Multi* families handle any n>=2 (bivariate included), so one family set
+# covers every case. Archimedean families (Clayton/Frank/Gumbel) capture
+# asymmetric tail co-movement a single correlation coefficient discards.
+_COPULA_FAMILIES = [
+    "CopulaMultiNormal",
+    "CopulaMultiT",
+    "CopulaMultiClayton",
+    "CopulaMultiFrank",
+    "CopulaMultiGumbel",
+]
+
+# Tail-dependence character of each family (standard copula theory).
+_COPULA_TAIL_DEP = {
+    "CopulaMultiNormal": "none",
+    "CopulaMultiT": "both",
+    "CopulaMultiClayton": "lower",
+    "CopulaMultiFrank": "none",
+    "CopulaMultiGumbel": "upper",
+}
+
+_TAIL_DEP_NOTE = {
+    "none": (
+        "symmetric with no tail dependence — extremes co-move no more than "
+        "the middle; a plain correlation captures it fully."
+    ),
+    "lower": (
+        "LOWER tail dependence — the variables crash together more than a "
+        "Normal copula implies. Critical for downside/joint-default risk."
+    ),
+    "upper": (
+        "UPPER tail dependence — the variables spike together in the right "
+        "tail; matters for joint-boom / concentration risk."
+    ),
+    "both": (
+        "symmetric tail dependence in BOTH tails — joint extremes (up and "
+        "down) are more likely than a Normal copula implies."
+    ),
+}
+
+_RANGE_RE = re.compile(r"^\$?([A-Za-z]{1,3})\$?(\d+):\$?([A-Za-z]{1,3})\$?(\d+)$")
+
+
+def _col_to_num(col: str) -> int:
+    n = 0
+    for ch in col.upper():
+        n = n * 26 + (ord(ch) - 64)
+    return n
+
+
+def _range_var_count(a1: str, data_in_rows: bool) -> int:
+    """Number of variables a data range spans: columns when data is in
+    columns (the usual layout), rows when `data_in_rows`. Returns 0 if
+    the range can't be parsed (caller degrades gracefully)."""
+    m = _RANGE_RE.match(a1.strip())
+    if not m:
+        return 0
+    cols = abs(_col_to_num(m.group(3)) - _col_to_num(m.group(1))) + 1
+    rows = abs(int(m.group(4)) - int(m.group(2))) + 1
+    return rows if data_in_rows else cols
+
+
+@mcp.tool(
+    description=(
+        "ModelRisk: Fit parametric copulas to a multi-column data range "
+        "and rank them by goodness of fit — the DEPENDENCE STRUCTURE "
+        "fitted from data, not merely constructed. Tries Normal, T, "
+        "Clayton, Frank and Gumbel families (Vose<Family>FitObject), "
+        "scores each with AIC / SIC / HQIC, and reports the winner plus "
+        "its tail-dependence character (lower = crash-together, upper = "
+        "boom-together, both = T, none = Normal/Frank) — the joint-tail "
+        "risk a single correlation coefficient throws away. Runs on a "
+        "transient scratch sheet that is always deleted; the data is not "
+        "modified. Pair with fit_all_data_and_wire to insert the fitted "
+        "copula into the model."
+    )
+)
+def fit_copula_to_data(
+    workbook: Annotated[str, Field(description="Workbook file name, e.g. 'model.xlsx'.")],
+    sheet: Annotated[str, Field(description="Sheet holding the data.")],
+    data_range: Annotated[
+        str,
+        Field(description="A1 range of the multi-column data, e.g. 'A1:C500'."),
+    ],
+    families: Annotated[
+        list[str] | None,
+        Field(description="Copula families to try. Omit for the default 5-family set."),
+    ] = None,
+    criterion: Annotated[
+        str, Field(description="Ranking criterion: 'SIC' (default), 'AIC', or 'HQIC'.")
+    ] = "SIC",
+    data_in_rows: Annotated[
+        bool,
+        Field(description="True if each variable is a ROW, not a column. Default False."),
+    ] = False,
+    uncertainty: Annotated[
+        bool,
+        Field(description="Fit with parameter uncertainty (second-order). Default False."),
+    ] = False,
+) -> CopulaFitRanking:
+    crit = criterion.upper()
+    if crit not in ("AIC", "SIC", "HQIC"):
+        raise ModelRiskComputationError(
+            f"Unknown criterion {criterion!r}; use AIC, SIC, or HQIC."
+        )
+    fams = families or list(_COPULA_FAMILIES)
+    n_vars = _range_var_count(data_range, data_in_rows)
+    qualified = f"'{sheet}'!{data_range}"
+    scored, skipped, cell_count = get_bridge().fit_and_rank_copulas(
+        qualified, fams, data_in_rows=data_in_rows,
+        workbook=workbook, uncertainty=uncertainty,
+    )
+    sample_size = cell_count // n_vars if n_vars else cell_count
+    key = crit.lower()
+    scored.sort(key=lambda d: d[key])
+    candidates = [
+        CopulaFitCandidate(
+            family=d["family"],
+            aic=d["aic"],
+            sic=d["sic"],
+            hqic=d["hqic"],
+            rank=i + 1,
+            tail_dependence=_COPULA_TAIL_DEP.get(d["family"], "unknown"),
+        )
+        for i, d in enumerate(scored)
+    ]
+    best = candidates[0].family if candidates else None
+    if best:
+        dep = _COPULA_TAIL_DEP.get(best, "unknown")
+        note = (
+            f"Best fit is {best} ({dep} tail dependence): "
+            f"{_TAIL_DEP_NOTE.get(dep, 'tail behaviour undetermined.')}"
+        )
+    else:
+        note = "No copula family fitted; check the data range spans >=2 numeric columns."
+    return CopulaFitRanking(
+        data_range=qualified,
+        n_variables=n_vars,
+        criterion=crit,
+        sample_size=sample_size,
+        best_family=best,
+        candidates=candidates,
+        skipped=skipped,
+        note=note,
+    )
+
+
+# ---------------------------------------------------------------------------
+# reverse_stress_test — from a bad outcome back to the input state
+# ---------------------------------------------------------------------------
+
+
+def reverse_stress_profile(
+    output: np.ndarray,
+    inputs: dict[str, np.ndarray],
+    mask: np.ndarray,
+) -> tuple[list[dict[str, Any]], dict[str, float]]:
+    """Pure core of reverse_stress_test (exposed for unit testing). Given
+    per-iteration output samples, a dict of input sample arrays, and a
+    boolean breach `mask` over the output, return `(drivers, scenario)`:
+    each driver is how far the input's mean shifts (in its own SDs) inside
+    the breach set, ranked by |shift|; `scenario` is the mean input vector
+    over the breach iterations."""
+    _ = output  # kept for signature symmetry / future conditioning
+    drivers: list[dict[str, Any]] = []
+    scenario: dict[str, float] = {}
+    n_mask = mask.size
+    breach_total = int(mask.sum())
+    for name, arr in inputs.items():
+        n = min(arr.size, n_mask)
+        if n == 0:
+            continue
+        a = arr[:n]
+        m = mask[:n]
+        if breach_total == 0 or not m.any():
+            continue
+        marg_mean = float(a.mean())
+        marg_std = float(a.std())
+        breach_mean = float(a[m].mean())
+        shift = (breach_mean - marg_mean) / marg_std if marg_std > 0 else 0.0
+        # Concentration: of this input's own worst decile (in the shift
+        # direction), what fraction fall in the breach set?
+        k = max(1, round(0.1 * a.size))
+        order = np.argsort(a)
+        tail_idx = order[-k:] if breach_mean >= marg_mean else order[:k]
+        breach_share = float(m[tail_idx].mean())
+        drivers.append(
+            {
+                "input_name": name,
+                "marginal_mean": marg_mean,
+                "breach_mean": breach_mean,
+                "mean_shift_sd": shift,
+                "breach_share_of_own_tail": breach_share,
+            }
+        )
+        scenario[name] = breach_mean
+    drivers.sort(key=lambda d: abs(d["mean_shift_sd"]), reverse=True)
+    for i, d in enumerate(drivers):
+        d["rank"] = i + 1
+    return drivers, scenario
+
+
+@mcp.tool(
+    description=(
+        "ModelRisk: Reverse stress test — start from a BAD output outcome "
+        "and work back to the joint input state that produces it. "
+        "Partitions the simulation's iterations into breach / no-breach "
+        "(output above/below a threshold, given directly or as a "
+        "percentile), then for each input reports how far its mean shifts "
+        "inside the breach set (in its own standard deviations) and how "
+        "concentrated breaches are in its tail — a breach-driver tornado "
+        "— plus the mean input vector as a concrete named stress "
+        "scenario. This is the Solvency II / PRA 'reverse stress test' and "
+        "is only possible with the engine's recorded per-iteration joint "
+        "sample matrix (requires a completed simulation)."
+    )
+)
+def reverse_stress_test(
+    output_name: Annotated[str, Field(description="VoseOutput name to stress.")],
+    threshold: Annotated[
+        float | None,
+        Field(description="Breach threshold on the output. Omit to use threshold_percentile."),
+    ] = None,
+    threshold_percentile: Annotated[
+        float | None,
+        Field(
+            ge=0.0, le=1.0,
+            description=(
+                "Breach threshold as an output percentile (0-1), e.g. 0.95. "
+                "Used when `threshold` is omitted."
+            ),
+        ),
+    ] = None,
+    direction: Annotated[
+        str,
+        Field(description="Breach side: 'above' (default) or 'below' the threshold."),
+    ] = "above",
+    workbook_name: Annotated[
+        str | None,
+        Field(description="Workbook name. Omit for the active workbook."),
+    ] = None,
+    max_n: Annotated[
+        int,
+        Field(ge=1, le=1_000_000, description="Max samples per variable to pull. Default 100000."),
+    ] = 100_000,
+) -> ReverseStressResult:
+    if direction not in ("above", "below"):
+        raise ModelRiskComputationError(
+            f"direction must be 'above' or 'below', got {direction!r}."
+        )
+    if threshold is None and threshold_percentile is None:
+        raise ModelRiskComputationError(
+            "Provide either `threshold` or `threshold_percentile`."
+        )
+    bridge = get_bridge()
+    out = np.asarray(
+        bridge.get_samples(output_name, workbook_name, max_n=max_n), dtype=float
+    )
+    if out.size == 0:
+        raise ModelRiskComputationError(
+            f"No samples for output {output_name!r}. Run a simulation first."
+        )
+    if threshold is not None:
+        thr = float(threshold)
+    else:
+        assert threshold_percentile is not None  # guarded above
+        thr = float(np.quantile(out, threshold_percentile))
+    mask = (out >= thr) if direction == "above" else (out <= thr)
+    breach_count = int(mask.sum())
+
+    variables = bridge.list_vmrs_variables(workbook_name)
+    input_names = [
+        str(v["name"])
+        for v in variables
+        if v.get("kind") == "input" and v["name"] != output_name
+    ]
+    inputs: dict[str, np.ndarray] = {}
+    for name in input_names:
+        try:
+            inputs[name] = np.asarray(
+                bridge.get_samples(name, workbook_name, max_n=max_n), dtype=float
+            )
+        except Exception:
+            continue
+
+    drivers_raw, scenario_vals = reverse_stress_profile(out, inputs, mask)
+    drivers = [BreachDriver(**d) for d in drivers_raw]
+    scenario = (
+        StressScenario(
+            label=f"Mean input state when {output_name} is {direction} {thr:.4g}",
+            input_values=scenario_vals,
+        )
+        if scenario_vals
+        else None
+    )
+    if breach_count == 0:
+        note = "No iterations breached the threshold — loosen it or flip the direction."
+    elif drivers:
+        top = drivers[0]
+        note = (
+            f"{breach_count}/{out.size} iterations breach. Strongest breach driver: "
+            f"{top.input_name} (mean shifts {top.mean_shift_sd:+.2f} SD when things go "
+            f"wrong). The scenario is the average state of the world in the breach set."
+        )
+    else:
+        note = f"{breach_count}/{out.size} iterations breach, but no input samples were readable."
+    return ReverseStressResult(
+        output_name=output_name,
+        threshold=thr,
+        direction=direction,
+        iterations=int(out.size),
+        breach_count=breach_count,
+        breach_probability=breach_count / out.size if out.size else 0.0,
+        drivers=drivers,
+        scenario=scenario,
+        note=note,
+    )
+
+
 __all__ = [
     "backtest_output",
     "backtest_samples",
@@ -818,6 +1147,9 @@ __all__ = [
     "compute_tail_risk",
     "decompose_uncertainty",
     "fit_and_rank_distributions",
+    "fit_copula_to_data",
     "fit_tail",
     "get_tail_risk",
+    "reverse_stress_profile",
+    "reverse_stress_test",
 ]
