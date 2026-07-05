@@ -1,9 +1,18 @@
 # ModelRisk MCP — Demo Gallery
 
 Eleven hands-on demo workbooks, each showing one feature area of ModelRisk MCP on a
-simple, real-life use case. Every workbook is self-contained: open it, then follow the
-numbered steps on its **README sheet** — each step gives the exact prompt to type to
-Claude and what to expect back. A demo takes about 5–10 minutes.
+simple, real-life use case. Every workbook is self-contained — its **README sheet**
+offers two ways in:
+
+- **FAST TRACK** — one aggregated prompt that runs the whole demo end-to-end (build,
+  simulate, analyse, report) in a single message. Paste it and watch.
+- **Step-by-step** — the same journey as numbered steps, one capability at a time, each
+  with the exact prompt to type to Claude and what to expect back. 5–10 minutes.
+
+Getting started: save this folder anywhere on your PC, then once per session tell
+Claude where it is — *"My ModelRisk demo gallery is in \<your folder\>. Open
+01_build_model_from_brief.xlsx from there."* After that, "open \<file\> from the demo
+folder" is enough.
 
 Start with **[00_START_HERE.xlsx](00_START_HERE.xlsx)** — the index, prerequisites and
 colour legend.
