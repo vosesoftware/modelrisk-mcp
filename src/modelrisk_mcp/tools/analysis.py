@@ -46,6 +46,8 @@ from modelrisk_mcp.schemas.analysis import (
     TailMetric,
     TailRiskResult,
     ThresholdProbability,
+    TimeSeriesFitCandidate,
+    TimeSeriesFitResult,
     UncertaintyDecomposition,
 )
 from modelrisk_mcp.schemas.workbook import CellRef
@@ -977,6 +979,117 @@ def fit_copula_to_data(
 
 
 # ---------------------------------------------------------------------------
+# fit_time_series — the formerly-deferred task #127 capability
+# ---------------------------------------------------------------------------
+
+# Univariate families with a VoseTime<Fam>FitObject; Multi* (multivariate)
+# and specialist families (Death, Yule, APARCH) are available via the
+# explicit `families` parameter.
+_TIME_SERIES_FAMILIES = [
+    "GBM", "GBMMR", "GBMJD", "SeasonalGBM",
+    "AR1", "AR2", "MA1", "MA2", "ARMA",
+    "ARCH", "GARCH", "EGARCH",
+]
+
+
+@mcp.tool(
+    description=(
+        "ModelRisk: Fit TIME-SERIES models to a historical data range and "
+        "rank them by goodness of fit — GBM (plus mean-reverting / "
+        "jump-diffusion / seasonal variants), AR1/AR2, MA1/MA2, ARMA, "
+        "ARCH/GARCH/EGARCH. Each family's VoseTime<Family>FitObject is "
+        "scored with AIC / SIC / HQIC on a transient scratch sheet "
+        "(nothing in the workbook is modified by the ranking). Optionally "
+        "pass `target_range` (+ dry_run=False) to write the best model's "
+        "projection — a VoseTime<Family>Fit(...) ARRAY formula, one "
+        "period per cell, CSE-entered — so each simulated path carries "
+        "the fitted dynamics (autocorrelation, volatility clustering) "
+        "period to period. Note: unlike distribution fitting, parameter "
+        "uncertainty is not supported here."
+    )
+)
+def fit_time_series(
+    workbook: Annotated[str, Field(description="Workbook file name.")],
+    sheet: Annotated[str, Field(description="Sheet holding the historical data.")],
+    data_range: Annotated[
+        str,
+        Field(description=(
+            "A1 range of the history, oldest first, e.g. 'B5:B64'. May be "
+            "sheet-qualified ('Data!B5:B64')."
+        )),
+    ],
+    families: Annotated[
+        list[str] | None,
+        Field(description=(
+            "Family stems to try, e.g. ['GBM','AR1','GARCH']. Omit for a "
+            "broad 12-family default."
+        )),
+    ] = None,
+    criterion: Annotated[
+        str, Field(description="Ranking criterion: 'SIC' (default), 'AIC', or 'HQIC'.")
+    ] = "SIC",
+    target_range: Annotated[
+        str | None,
+        Field(description=(
+            "Range to CSE-enter the best model's projection into, e.g. "
+            "'D5:D16' for a 12-period forecast. Omit to rank only."
+        )),
+    ] = None,
+    target_sheet: Annotated[
+        str | None,
+        Field(description="Sheet for target_range. Defaults to `sheet`."),
+    ] = None,
+    dry_run: Annotated[
+        bool,
+        Field(description="Preview the projection formula without writing. Default True."),
+    ] = True,
+) -> TimeSeriesFitResult:
+    crit = criterion.upper()
+    if crit not in ("AIC", "SIC", "HQIC"):
+        raise ModelRiskComputationError(
+            f"Unknown criterion {criterion!r}; use AIC, SIC, or HQIC."
+        )
+    fams = families or list(_TIME_SERIES_FAMILIES)
+    qualified = _qualify_range(sheet, data_range)
+    bridge = get_bridge()
+    scored, skipped, sample_size = bridge.fit_and_rank_time_series(
+        qualified, fams, workbook=workbook,
+    )
+    key = crit.lower()
+    scored.sort(key=lambda d: d[key])
+    candidates = [
+        TimeSeriesFitCandidate(
+            family=d["family"], aic=d["aic"], sic=d["sic"], hqic=d["hqic"],
+            rank=i + 1,
+        )
+        for i, d in enumerate(scored)
+    ]
+    best = candidates[0].family if candidates else None
+
+    projection: str | None = None
+    written = False
+    if best and target_range:
+        projection = f"=VoseTime{best}Fit({qualified})"
+        if not dry_run:
+            bridge.safe_write_array_formula(
+                workbook, target_sheet or sheet, target_range, projection,
+            )
+            written = True
+
+    return TimeSeriesFitResult(
+        data_range=qualified,
+        criterion=crit,
+        sample_size=sample_size,
+        best_family=best,
+        candidates=candidates,
+        skipped=skipped,
+        projection_formula=projection,
+        target_range=target_range,
+        written=written,
+    )
+
+
+# ---------------------------------------------------------------------------
 # reverse_stress_test — from a bad outcome back to the input state
 # ---------------------------------------------------------------------------
 
@@ -1160,6 +1273,7 @@ __all__ = [
     "fit_and_rank_distributions",
     "fit_copula_to_data",
     "fit_tail",
+    "fit_time_series",
     "get_tail_risk",
     "reverse_stress_profile",
     "reverse_stress_test",

@@ -557,6 +557,80 @@ class ModelRiskBridge:
 
         return scored, skipped, cell_count
 
+    def fit_and_rank_time_series(
+        self,
+        data_range: str,
+        families: list[str],
+        *,
+        workbook: str | None = None,
+    ) -> tuple[list[dict[str, Any]], list[dict[str, str]], int]:
+        """Fit each time-series `family` to a historical `data_range`
+        and return its AIC/SIC/HQIC — the deferred task #127 capability.
+
+        The original deferral blamed a 'wizard context' ABI dependency,
+        but a live spike (2026-07-05) showed the real blockers were the
+        phantom OutputSize catalogue parameter and missing CSE array
+        entry — both fixed in 0.3.9. `=VoseTime<Fam>FitObject(range)` in
+        a plain cell returns a valid fitted object and `VoseAIC/SIC/
+        HQIC` score it, exactly like distribution fitting.
+
+        `family` names are stems like 'GBM', 'AR1', 'GARCH' (mapped to
+        VoseTime<Fam>FitObject). `data_range` must be sheet-qualified.
+        Returns `(scored, skipped, sample_size)`."""
+        self.ensure_modelrisk_functional()
+
+        valid: list[str] = []
+        skipped: list[dict[str, str]] = []
+        for fam in families:
+            if f"VoseTime{fam}FitObject" in self._catalogue:
+                valid.append(fam)
+            else:
+                skipped.append(
+                    {"family": fam,
+                     "reason": "no VoseTime<Family>FitObject in catalogue"}
+                )
+
+        scored: list[dict[str, Any]] = []
+        sample_size = 0
+        if valid:
+            with self._scratch_sheet(workbook) as (app, sht):
+                sht.range("F1").formula = f"=COUNT({data_range})"
+                for i, fam in enumerate(valid):
+                    r = i + 1
+                    sht.range((r, 1)).formula = (
+                        f"=VoseTime{fam}FitObject({data_range})"
+                    )
+                    sht.range((r, 2)).formula = f"=VoseAIC(A{r})"
+                    sht.range((r, 3)).formula = f"=VoseSIC(A{r})"
+                    sht.range((r, 4)).formula = f"=VoseHQIC(A{r})"
+                app.api.CalculateFull()
+                try:
+                    sample_size = int(sht.range("F1").value or 0)
+                except (TypeError, ValueError):
+                    sample_size = 0
+                for i, fam in enumerate(valid):
+                    r = i + 1
+                    aic = sht.range((r, 2)).value
+                    sic = sht.range((r, 3)).value
+                    hqic = sht.range((r, 4)).value
+                    if all(
+                        isinstance(v, (int, float)) and not isinstance(v, bool)
+                        for v in (aic, sic, hqic)
+                    ):
+                        scored.append(
+                            {"family": fam, "aic": float(aic),
+                             "sic": float(sic), "hqic": float(hqic)}
+                        )
+                    else:
+                        reason = next(
+                            (str(v) for v in (aic, sic, hqic)
+                             if not isinstance(v, (int, float))),
+                            "fit failed",
+                        )
+                        skipped.append({"family": fam, "reason": reason})
+
+        return scored, skipped, sample_size
+
     # ------------------------------------------------------------------
     # Run sim — wraps SimulationController + auto-pins the resulting
     # .vmrs as the active source so subsequent get_simulation_results

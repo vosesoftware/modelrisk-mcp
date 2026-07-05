@@ -4,6 +4,16 @@ All notable changes to ModelRisk MCP. Follows [Keep a Changelog](https://keepach
 
 ## [Unreleased]
 
+### `fit_time_series` — the deferred capability, unblocked and shipped
+
+New analysis tool: fit **time-series models** to a historical range and rank them by AIC/SIC/HQIC — GBM (plus mean-reverting / jump-diffusion / seasonal variants), AR1/AR2, MA1/MA2, ARMA, ARCH/GARCH/EGARCH — then optionally CSE-enter the best model's projection (`VoseTime<Family>Fit(...)`, one period per cell) into a target range, so every simulated path carries the fitted dynamics period to period.
+
+This capability had been deferred since 0.3.2-alpha.6 on a "needs wizard context" diagnosis. A live spike showed that diagnosis was wrong: the real blockers were the phantom `OutputSize` catalogue parameter and missing CSE array entry — the exact bug class fixed in 0.3.9. With those fixed, `=VoseTime<Fam>FitObject(range)` returns a valid fitted object in a plain cell, `VoseAIC/SIC/HQIC` score it, and the `*Fit` projection array-enters cleanly. Live-verified: on GBM-generated history the tool ranks **GBM #1** (ground truth), reports 8 fitted families + 4 honestly skipped, and writes a real 12-period projection. Parameter uncertainty is not supported for time-series fits (the flag mis-binds to the timestamps slot) and the tool says so. Tool count 57.
+
+### Engineering note: Common Random Numbers verified across decision-cell mutations
+
+A live spike confirmed that mutating a decision cell's **value** between two same-seed runs leaves every unchanged input's per-iteration samples **byte-identical** (the address-seeded RNG keys streams by cell address, and value edits don't move addresses) while outputs respond to the decision. This validates cheap paired-search statistics for the planned simulation-in-the-loop tools (optimizers, chance-constraint solvers). Caveat: structural edits (row/column inserts) move addresses and would break pairing — in-loop tools must only write values/formulas, never restructure.
+
 ## [0.3.9] — 2026-07-05
 
 ### Fixes from the demo-gallery live test (10 findings, all addressed)

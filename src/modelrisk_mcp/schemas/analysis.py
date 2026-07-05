@@ -295,6 +295,41 @@ class CopulaFitRanking(BaseModel):
     note: str = Field(description="Interpretation of the winning family's tail behaviour.")
 
 
+class TimeSeriesFitCandidate(BaseModel):
+    """Goodness-of-fit scores for one fitted time-series family."""
+
+    family: str = Field(description="Time-series family stem, e.g. 'GBM', 'AR1', 'GARCH'.")
+    aic: float
+    sic: float
+    hqic: float
+    rank: int = Field(description="1 = best fit by the chosen criterion.")
+
+
+class TimeSeriesFitResult(BaseModel):
+    """Result of fitting time-series models to history and (optionally)
+    writing the best model's projection into the workbook."""
+
+    data_range: str
+    criterion: str
+    sample_size: int
+    best_family: str | None = Field(
+        default=None, description="Top-ranked family, or null if every fit failed."
+    )
+    candidates: list[TimeSeriesFitCandidate] = Field(
+        description="Successfully-fitted families, best first."
+    )
+    skipped: list[dict[str, str]] = Field(default_factory=list)
+    projection_formula: str | None = Field(
+        default=None,
+        description="The VoseTime<Family>Fit(...) array formula for the projection.",
+    )
+    target_range: str | None = None
+    written: bool = Field(
+        default=False,
+        description="True when the projection was CSE-entered into target_range.",
+    )
+
+
 class BreachDriver(BaseModel):
     """One input's behaviour conditional on the output breaching the
     stress threshold — the inverse of a forward tornado."""
