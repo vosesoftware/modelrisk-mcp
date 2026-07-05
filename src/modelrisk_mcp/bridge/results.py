@@ -36,8 +36,11 @@ from modelrisk_mcp.schemas.results import (
     SimulationResult,
 )
 
+# 0.80 included so P80 contingency reads (executive summary, headline
+# views) use the true P80 — previously absent, and the summary's "P80"
+# column silently fell back to P95.
 _DEFAULT_PERCENTILES: tuple[float, ...] = (
-    0.05, 0.10, 0.25, 0.50, 0.75, 0.90, 0.95,
+    0.05, 0.10, 0.25, 0.50, 0.75, 0.80, 0.90, 0.95,
 )
 
 

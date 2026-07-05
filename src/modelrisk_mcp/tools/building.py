@@ -51,16 +51,24 @@ def _dry_or_write(
     )
 
 
-def _params_dict(parameters: list[dict[str, Any]] | dict[str, Any]) -> dict[str, Any]:
-    """Accept either a dict {name: value} or a list of {name, value}
-    dicts (Pydantic models often serialise to the latter)."""
+def _params_dict(
+    parameters: list[dict[str, Any]] | dict[str, Any],
+) -> dict[str, Any] | list[Any]:
+    """Accept a dict {name: value}, a list of {name, value} dicts, or —
+    when every entry omits 'name' — a bare positional list of {value}
+    dicts (returned as an ordered list, matching the convention
+    build_model_from_brief already accepts). Mixed named/unnamed entries
+    are rejected."""
     if isinstance(parameters, dict):
         return parameters
+    if parameters and all("name" not in p for p in parameters):
+        return [p.get("value") for p in parameters]
     out: dict[str, Any] = {}
     for p in parameters:
         if "name" not in p:
             raise ParameterMismatchError(
-                f"Parameter entry missing 'name': {p!r}."
+                f"Parameter entry missing 'name': {p!r}. Either name "
+                f"every parameter or name none (positional)."
             )
         out[p["name"]] = p.get("value")
     return out
@@ -201,11 +209,24 @@ def fit_distribution_to_data(
     data_range: str,
     family: Annotated[str, Field(description="Distribution family, e.g. 'Normal'.")],
     uncertainty: bool = True,
+    as_object: Annotated[
+        bool,
+        Field(
+            description=(
+                "Write Vose<Family>FitObject(...) instead of the sampling "
+                "Vose<Family>Fit(...). The OBJECT form is what "
+                "compute_distribution / VoseMean / VosePercentile need to "
+                "answer analytic questions about the fit; the sampling "
+                "form is what a simulated model input needs. Default "
+                "False (sampling)."
+            )
+        ),
+    ] = False,
     dry_run: bool = True,
 ) -> InsertResult:
     ref = CellRef(workbook=workbook, sheet=sheet, cell=target_cell)
     bridge = get_bridge()
-    fit_function = f"Vose{family}Fit"
+    fit_function = f"Vose{family}Fit" + ("Object" if as_object else "")
     if fit_function not in bridge.catalogue:
         suggestions = bridge.catalogue.suggest(fit_function)
         hint = (
@@ -215,9 +236,14 @@ def fit_distribution_to_data(
             f"No fitting function {fit_function!r} in the ModelRisk catalogue."
             + hint
         )
+    # Key the arguments off the spec's OWN parameter names: the Object
+    # variants capitalise differently (VoseGammaFit: 'data' vs
+    # VoseGammaFitObject: 'Data'), and a mismatched key is rejected.
+    spec = bridge.catalogue.require(fit_function)
+    data_param = spec.parameters[0].name if spec.parameters else "data"
     formula = build_distribution_formula(
         fit_function,
-        {"data": data_range, "uncertainty": uncertainty},
+        {data_param: data_range, "uncertainty": uncertainty},
         bridge.catalogue,
     )
     return _dry_or_write(ref, formula, dry_run)
@@ -383,9 +409,14 @@ def create_time_series(
     ref = CellRef(workbook=workbook, sheet=sheet, cell=first_cell)
     if dry_run:
         return InsertResult(cell=ref, formula=formula, written=False)
-    # Time-series formulas spill via Excel 365 dynamic arrays; we write
-    # the formula into the first cell and let Excel handle the spill.
-    return bridge.safe_write_cell(ref, formula)
+    # ARRAY-enter (CSE) across the whole target range. VoseTime* are
+    # legacy XLL array functions that size their output from the entered
+    # block — a plain single-cell write leaves the rest of the range
+    # empty and nothing evaluates (verified live in the demo-gallery
+    # test: the GBM path only ran once entered via FormulaArray).
+    return bridge.safe_write_array_formula(
+        workbook, sheet, target_range, formula
+    )
 
 
 @mcp.tool(
@@ -413,7 +444,14 @@ def create_copula(
     ref = CellRef(workbook=workbook, sheet=sheet, cell=first_cell)
     if dry_run:
         return InsertResult(cell=ref, formula=formula, written=False)
-    return bridge.safe_write_cell(ref, formula)
+    # ARRAY-enter (CSE) across the u-array block. A copula is an array
+    # function sized by the entered range; written into one cell it
+    # returns 'output array must contain N cells' and the downstream
+    # distributions referencing the empty slots silently sample
+    # UNCORRELATED (verified live in the demo-gallery test).
+    return bridge.safe_write_array_formula(
+        workbook, sheet, u_array_target_range, formula
+    )
 
 
 @mcp.tool(

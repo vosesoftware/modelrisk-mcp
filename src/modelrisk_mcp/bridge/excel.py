@@ -368,11 +368,20 @@ class ExcelBridge:
             ) from exc
         # Single COM call each for values and formulas. xlwings returns a
         # 2D list for multi-cell ranges and a scalar for single cells —
-        # normalise both shapes to 2D.
+        # normalise both shapes to 2D. For a single ROW or COLUMN xlwings
+        # returns a FLAT list whose orientation is ambiguous; `_as_2d`
+        # alone renders both as one row, so a column range's `values`
+        # came back row-shaped while `formulas` (tuple-of-tuples from
+        # COM) stayed column-shaped. Reshape flat lists using the
+        # range's true shape so both grids always agree.
+        n_rows, n_cols = (int(r.shape[0]), int(r.shape[1]))
         raw_values = r.value
         raw_formulas = r.formula
-        values = _as_2d(raw_values)
-        formulas = [[str(f or "") for f in row] for row in _as_2d(raw_formulas)]
+        values = _as_2d_shaped(raw_values, n_rows, n_cols)
+        formulas = [
+            [str(f or "") for f in row]
+            for row in _as_2d_shaped(raw_formulas, n_rows, n_cols)
+        ]
         # Bug #34 (alpha.33) / bug #35 (alpha.36): also surface error
         # cells. Same dual strategy as `iterate_cells`:
         # 1. `Range.Value2` returns integer CVErr codes on multi-cell
@@ -560,7 +569,85 @@ class ExcelBridge:
             raise CellReferenceError(
                 f"Invalid cell reference {cell!r} on {workbook}!{sheet}."
             ) from exc
+        self._guard_merged_cell(cell_obj, workbook, sheet, cell)
         cell_obj.formula = formula
+
+    @staticmethod
+    def _guard_merged_cell(
+        cell_obj: Any, workbook: str, sheet: str, cell: str
+    ) -> None:
+        """Refuse writes into a merged region's non-anchor cells.
+
+        COM silently DISCARDS a `.Formula` assignment to any merged cell
+        other than the merge area's top-left — the write 'succeeds' but
+        the cell stays empty. Observed live (demo-gallery testing): a
+        distribution object written into a cell under a wide merged note
+        row vanished, the downstream aggregate sampled an empty
+        frequency, and the simulation returned all-zero results with no
+        error anywhere. Raising here turns that silent wrong-answer into
+        an actionable message. Writing to the merge ANCHOR is allowed —
+        Excel applies that normally."""
+        try:
+            api = cell_obj.api
+            if not api.MergeCells:
+                return
+            anchor = api.MergeArea.Cells(1, 1)
+            if api.Address == anchor.Address:
+                return  # top-left of the merge: writes apply normally
+            merged_ref = str(api.MergeArea.Address).replace("$", "")
+        except CellReferenceError:
+            raise
+        except Exception:
+            return  # COM probe failed — don't block the write on a guard
+        raise CellReferenceError(
+            f"Cell {cell!r} on {workbook}!{sheet} is inside the merged "
+            f"range {merged_ref} but is not its top-left anchor — Excel "
+            f"silently discards writes to such cells. Write to the "
+            f"anchor cell, or pick an unmerged cell."
+        )
+
+    def write_array_formula(
+        self, workbook: str, sheet: str, range_ref: str, formula: str
+    ) -> None:
+        """Enter `formula` as a legacy CSE ARRAY formula across
+        `range_ref` (Ctrl+Shift+Enter semantics via `Range.FormulaArray`).
+
+        Required for ModelRisk's array-returning functions (copulas,
+        VoseTime* series, multi-output fits): written as a normal
+        formula in one cell they error ('output area must be >= number
+        of columns') or leave the rest of the block empty — and a
+        downstream cell referencing an empty U-slot silently samples
+        UNCORRELATED. Array entry sizes the function to the whole
+        block."""
+        sh = self._get_sheet(workbook, sheet)
+        try:
+            r = sh.range(range_ref)
+        except Exception as exc:
+            raise CellReferenceError(
+                f"Invalid range reference {range_ref!r} on {workbook}!{sheet}."
+            ) from exc
+        self._guard_merged_cell(r[0], workbook, sheet, range_ref)
+        f = formula if formula.startswith("=") else "=" + formula
+        try:
+            r.api.FormulaArray = f
+        except Exception as exc:
+            raise CellReferenceError(
+                f"Could not array-enter {f!r} into {workbook}!{sheet}!"
+                f"{range_ref}: {exc}"
+            ) from exc
+
+    def clear_range(self, workbook: str, sheet: str, range_ref: str) -> None:
+        """Clear the contents of a range. Needed to roll back an ARRAY
+        formula: Excel refuses per-cell writes into part of a CSE block
+        ('cannot change part of an array'), so undo must clear the whole
+        block first."""
+        sh = self._get_sheet(workbook, sheet)
+        try:
+            sh.range(range_ref).api.ClearContents()
+        except Exception as exc:
+            raise CellReferenceError(
+                f"Could not clear {workbook}!{sheet}!{range_ref}: {exc}"
+            ) from exc
 
     def write_range(
         self,
@@ -1175,6 +1262,24 @@ def _as_2d(value: Any) -> list[list[Any]]:
         # xlwings doesn't tell us which orientation, so treat as a row.
         return [list(value)]
     return [[value]]
+
+
+def _as_2d_shaped(value: Any, n_rows: int, n_cols: int) -> list[list[Any]]:
+    """`_as_2d`, then reorient a flat 1D result to the range's true
+    shape. xlwings returns a FLAT list for a single row OR a single
+    column — indistinguishable without the shape — so a column range's
+    values previously came back as one row while its formulas (which
+    arrive as tuple-of-tuples from COM) stayed column-shaped. Passing
+    the known (rows, cols) fixes the orientation."""
+    grid = _as_2d(value)
+    if (
+        n_rows > 1
+        and n_cols == 1
+        and len(grid) == 1
+        and len(grid[0]) == n_rows
+    ):
+        return [[v] for v in grid[0]]
+    return grid
 
 
 _LETTERS = "ABCDEFGHIJKLMNOPQRSTUVWXYZ"

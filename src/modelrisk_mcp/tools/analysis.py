@@ -52,6 +52,17 @@ from modelrisk_mcp.schemas.workbook import CellRef
 from modelrisk_mcp.server import mcp
 from modelrisk_mcp.tools.reading import get_bridge
 
+
+def _qualify_range(sheet: str, data_range: str) -> str:
+    """Sheet-qualify `data_range` unless it already names a sheet.
+
+    Blindly prefixing produced references like `'Model'!Data!D5:D44`
+    when a caller passed a cross-sheet range — which reached COM as an
+    invalid reference and died with an opaque `Exception occurred`
+    instead of a usable message (demo-gallery live test, fit_tail)."""
+    return data_range if "!" in data_range else f"'{sheet}'!{data_range}"
+
+
 # Tail families that fit an extreme-value / Generalised-Pareto tail.
 _TAIL_FAMILIES = {"GPD", "GEV", "ExtValueMax", "ExtValueMin"}
 
@@ -250,7 +261,7 @@ def fit_and_rank_distributions(
             f"Unknown criterion {criterion!r}; use AIC, SIC, or HQIC."
         )
     fams = families or list(_DEFAULT_FIT_FAMILIES)
-    qualified = f"'{sheet}'!{data_range}"
+    qualified = _qualify_range(sheet, data_range)
     scored, skipped, sample_size = get_bridge().fit_and_rank(
         qualified, fams, workbook=workbook, uncertainty=uncertainty
     )
@@ -428,7 +439,7 @@ def compute_correlation_matrix(
             f"Need at least 2 variables to correlate; got {n_vars}. "
             "Check `data_range` orientation / `data_in_rows`."
         )
-    qualified = f"'{sheet}'!{data_range}"
+    qualified = _qualify_range(sheet, data_range)
     matrix, nearest, is_valid = bridge.correlation_matrix_of_data(
         qualified, n_vars, data_in_rows=data_in_rows, workbook=workbook
     )
@@ -477,7 +488,7 @@ def fit_tail(
         raise ModelRiskComputationError(
             f"No fit function {func!r} in the ModelRisk catalogue."
         )
-    qualified = f"'{sheet}'!{data_range}"
+    qualified = _qualify_range(sheet, data_range)
     unc = "TRUE" if uncertainty else "FALSE"
     object_formula = f"={func}({qualified},{unc})"
 
@@ -925,7 +936,7 @@ def fit_copula_to_data(
         )
     fams = families or list(_COPULA_FAMILIES)
     n_vars = _range_var_count(data_range, data_in_rows)
-    qualified = f"'{sheet}'!{data_range}"
+    qualified = _qualify_range(sheet, data_range)
     scored, skipped, cell_count = get_bridge().fit_and_rank_copulas(
         qualified, fams, data_in_rows=data_in_rows,
         workbook=workbook, uncertainty=uncertainty,

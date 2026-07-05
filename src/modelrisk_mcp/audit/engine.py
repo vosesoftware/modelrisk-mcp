@@ -69,7 +69,18 @@ def run_audit(bridge: ModelRiskBridge, workbook: str) -> AuditReport:
     from modelrisk_mcp.audit.rules import RULES_BY_NAME
 
     rules = [r for r in load_rules() if r.enabled]
-    cells = list(bridge.excel.iterate_cells(workbook))
+    # Blank the `.formula` of TEXT cells before any rule sees them.
+    # xlwings returns a text cell's content through `.formula`, so
+    # instructional text mentioning Vose functions (e.g. a note saying
+    # 'wrap as VoseOutput("NPV")') used to trip the formula rules on
+    # cells that hold no formula at all. Values / errors / cell_type
+    # are preserved for the value-based rules.
+    cells = [
+        c
+        if (c.formula and c.formula.lstrip().startswith("="))
+        else c.model_copy(update={"formula": ""})
+        for c in bridge.excel.iterate_cells(workbook)
+    ]
     findings: list[AuditFinding] = []
     for spec in rules:
         detector = RULES_BY_NAME.get(spec.name)

@@ -137,5 +137,20 @@ def load_catalogue() -> FunctionCatalogue:
     raw = json.loads(text)
     if not isinstance(raw, dict):
         raise CatalogueError("functions.json root must be an object")
+    # Strip the phantom 'OutputSize' parameter — an artifact of the C#
+    # metadata extraction for ARRAY functions. Vose array functions
+    # (VoseTimeGBM, VoseCopulaMulti*Fit, VoseAggregateMulti*, …) size
+    # their output from the RANGE the formula is array-entered into;
+    # none take the size as a worksheet argument. Verified live:
+    # =VoseTimeGBM(5,0.05,0.12,12400) errors ('{Time Stamps} array size
+    # must be equal to output array size') while
+    # =VoseTimeGBM(0.05,0.12,12400) CSE-entered over 5 cells works, and
+    # =VoseCopulaMultiClaytonFit(data,FALSE,FALSE) works with no size.
+    for entry in raw.values():
+        params = entry.get("parameters")
+        if isinstance(params, list):
+            entry["parameters"] = [
+                p for p in params if p.get("name") != "OutputSize"
+            ]
     by_name = {name: _spec_from_entry(name, entry) for name, entry in raw.items()}
     return FunctionCatalogue(by_name=by_name)

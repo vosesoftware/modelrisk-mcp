@@ -315,7 +315,9 @@ class DistributionChartWriter:
                     width=_DIST_CHART_WIDTH, height=_DIST_CHART_HEIGHT,
                 )
                 if ok:
-                    chart_name = DistributionChartWriter._last_chart_name(sheet)
+                    chart_name = DistributionChartWriter._rename_last_chart(
+                        sheet, f"Histogram_{output_name}"[:31]
+                    )
             else:
                 title = f"Cumulative probability — {output_name}"
                 chart_name = _add_cdf_chart(
@@ -324,6 +326,10 @@ class DistributionChartWriter:
                     left=_DIST_CHART_LEFT, top=_DIST_CHART_TOP,
                     width=_DIST_CHART_WIDTH, height=_DIST_CHART_HEIGHT,
                 )
+                if chart_name:
+                    chart_name = DistributionChartWriter._rename_last_chart(
+                        sheet, f"CDF_{output_name}"[:31]
+                    )
 
         return DistributionChartResult(
             sheet_name=target_sheet,
@@ -363,17 +369,22 @@ class DistributionChartWriter:
                 pass
 
     @staticmethod
-    def _last_chart_name(sheet: Any) -> str:
-        """`_add_histogram_chart` names the chart itself but returns an
-        int flag, not the name. Read the most-recently-added chart's
-        name back off the sheet for the response."""
+    def _rename_last_chart(sheet: Any, name: str) -> str:
+        """Give the most-recently-added chart a clean, output-derived
+        name. The shared chart builders name charts from their TITLE
+        ('Histogram — Profit'), which produced doubled prefixes like
+        'Histogram_Histogram — Profit' in the tool response."""
         try:
             charts = list(sheet.charts)
             if charts:
+                try:
+                    charts[-1].name = name
+                except Exception:
+                    pass
                 return str(charts[-1].name)
         except Exception:
             pass
-        return ""
+        return name
 
 
 def _add_cdf_chart(

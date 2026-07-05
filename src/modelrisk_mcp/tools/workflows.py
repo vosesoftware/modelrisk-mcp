@@ -794,6 +794,15 @@ def generate_executive_summary(
 ) -> dict[str, str]:
     bridge = get_bridge()
     results = bridge.get_simulation_results()
+    # Dedupe by output name: duplicate declarations (or historical
+    # text-cell phantoms) previously repeated every row of the summary.
+    seen_names: set[str] = set()
+    deduped = []
+    for r in results:
+        if r.output_name not in seen_names:
+            seen_names.add(r.output_name)
+            deduped.append(r)
+    results = deduped
     lines: list[str] = []
     lines.append(f"# Simulation summary — `{workbook_name}`")
     lines.append("")
@@ -882,7 +891,8 @@ def generate_executive_summary(
 class _ChangeSet:
     def __init__(self, bridge: Any) -> None:
         self._bridge = bridge
-        self.applied: list[tuple[CellRef, str]] = []
+        # ('cell', ref, prev_formula) | ('array', workbook, sheet, range_ref)
+        self.applied: list[tuple[Any, ...]] = []
 
     def write(
         self, ref: CellRef, formula: str, *, allow_overwrite_non_vose: bool = False
@@ -890,15 +900,34 @@ class _ChangeSet:
         res = self._bridge.safe_write_cell(
             ref, formula, allow_overwrite_non_vose=allow_overwrite_non_vose
         )
-        self.applied.append((ref, res.previous_formula or ""))
+        self.applied.append(("cell", ref, res.previous_formula or ""))
+        return res
+
+    def write_array(
+        self, workbook: str, sheet: str, range_ref: str, formula: str
+    ) -> Any:
+        """Array-enter (CSE) a block through the safe path and record it
+        for rollback. Only empty/Vose blocks are accepted upstream, so
+        rollback clears the whole block (Excel forbids per-cell writes
+        into part of a CSE array)."""
+        res = self._bridge.safe_write_array_formula(
+            workbook, sheet, range_ref, formula,
+            allow_overwrite_non_vose=True,
+        )
+        self.applied.append(("array", workbook, sheet, range_ref))
         return res
 
     def rollback(self) -> None:
-        for ref, prev in reversed(self.applied):
+        for entry in reversed(self.applied):
             try:
-                self._bridge.excel.write_cell(
-                    ref.workbook, ref.sheet, ref.cell, prev
-                )
+                if entry[0] == "array":
+                    _, wb, sheet, range_ref = entry
+                    self._bridge.excel.clear_range(wb, sheet, range_ref)
+                else:
+                    _, ref, prev = entry
+                    self._bridge.excel.write_cell(
+                        ref.workbook, ref.sheet, ref.cell, prev
+                    )
             except Exception:
                 pass
 
@@ -999,6 +1028,17 @@ def fit_all_data_and_wire(
         str | None,
         Field(description="Top cell for the correlated-U block. Omit to skip correlation."),
     ] = None,
+    target_sheet: Annotated[
+        str | None,
+        Field(
+            description=(
+                "Sheet holding the target cells and the copula block. "
+                "Defaults to `sheet` (the data sheet) — pass this when "
+                "the model lives on a different sheet than the data, "
+                "e.g. data on 'Data', wired inputs on 'Model'."
+            )
+        ),
+    ] = None,
     criterion: Annotated[
         str, Field(description="Fit criterion: 'SIC' (default), 'AIC', or 'HQIC'.")
     ] = "SIC",
@@ -1059,28 +1099,39 @@ def fit_all_data_and_wire(
         steps.append("Correlation skipped: fewer than 2 fittable marginals.")
 
     # 3. Build the formulas (copula block first, then wired marginals).
+    # Targets and the copula block live on `target_sheet` (defaults to
+    # the data sheet) — real models usually keep data and model apart.
+    tsheet = target_sheet or sheet
     anchor_col = anchor_row = None
     if copula_family and copula_anchor:
         anchor_col, anchor_row = _split_cell(copula_anchor)
 
     col_results: list[WiredColumnResult] = []
     plan: list[tuple[CellRef, str, bool]] = []  # (ref, formula, allow_overwrite)
-    if copula_family and copula_anchor:
-        cop_ref = CellRef(workbook=workbook, sheet=sheet, cell=copula_anchor)
+    copula_block: tuple[str, str] | None = None  # (range_ref, formula)
+    if copula_family and copula_anchor and anchor_row is not None:
+        # The copula is an ARRAY function sized by the entered range —
+        # one U row per data column. It must be CSE-entered across the
+        # whole block; a single-cell write errors and the marginals
+        # referencing the empty slots silently sample UNCORRELATED.
+        block_ref = (
+            f"{anchor_col}{anchor_row}:"
+            f"{anchor_col}{anchor_row + len(marginals) - 1}"
+        )
         cop_formula = (
             f"=Vose{copula_family}Fit('{sheet}'!{data_range},FALSE,{unc})"
         )
-        plan.append((cop_ref, cop_formula, True))
+        copula_block = (block_ref, cop_formula)
 
     for i, m in enumerate(marginals):
         u_ref = None
         if copula_family and anchor_col is not None and anchor_row is not None:
-            u_ref = f"'{sheet}'!{anchor_col}{anchor_row + i}"
+            u_ref = f"'{tsheet}'!{anchor_col}{anchor_row + i}"
         if m["family"]:
             inner = f"Vose{m['family']}Fit({m['range']},{unc}"
             inner += f",{u_ref})" if u_ref else ")"
             formula = build_input_wrapper(m["name"], inner)
-            ref = CellRef(workbook=workbook, sheet=sheet, cell=m["cell"])
+            ref = CellRef(workbook=workbook, sheet=tsheet, cell=m["cell"])
             plan.append((ref, formula, True))
             col_results.append(
                 WiredColumnResult(
@@ -1103,12 +1154,18 @@ def fit_all_data_and_wire(
     if not dry_run:
         cs = _ChangeSet(bridge)
         try:
+            if copula_block is not None:
+                cs.write_array(workbook, tsheet, *copula_block)
+                steps.append(
+                    f"Array-entered the {copula_family} U-block at "
+                    f"{tsheet}!{copula_block[0]}."
+                )
             for ref, formula, allow in plan:
                 cs.write(ref, formula, allow_overwrite_non_vose=allow)
             for cr in col_results:
                 if cr.formula:
                     cr.written = True
-            steps.append(f"Wrote {len(cs.applied)} cell(s).")
+            steps.append(f"Wrote {len(cs.applied)} block(s)/cell(s).")
             if run:
                 bridge.run_simulation(workbook=workbook, samples=samples, seed=seed)
                 simulated = True

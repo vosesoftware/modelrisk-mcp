@@ -739,7 +739,7 @@ class ModelRiskBridge:
     def list_inputs(self, workbook: str) -> list[ModelRiskInput]:
         result: list[ModelRiskInput] = []
         for cell in self._excel.iterate_cells(workbook):
-            if not cell.formula:
+            if not _is_live_formula(cell.formula):
                 continue
             name = self._resolve_vose_name(
                 cell.formula, "VoseInput", workbook, cell.ref.sheet,
@@ -759,7 +759,7 @@ class ModelRiskBridge:
     def list_outputs(self, workbook: str) -> list[ModelRiskOutput]:
         result: list[ModelRiskOutput] = []
         for cell in self._excel.iterate_cells(workbook):
-            if not cell.formula:
+            if not _is_live_formula(cell.formula):
                 continue
             name = self._resolve_vose_name(
                 cell.formula, "VoseOutput", workbook, cell.ref.sheet,
@@ -825,7 +825,7 @@ class ModelRiskBridge:
     ) -> list[DistributionCell]:
         result: list[DistributionCell] = []
         for cell in self._excel.iterate_cells(workbook, sheet=sheet):
-            if not cell.formula:
+            if not _is_live_formula(cell.formula):
                 continue
             dist_head = self._first_distribution_head(cell.formula)
             if dist_head is None:
@@ -1333,6 +1333,60 @@ class ModelRiskBridge:
             previous_formula=previous_formula or None,
         )
 
+    def safe_write_array_formula(
+        self,
+        workbook: str,
+        sheet: str,
+        range_ref: str,
+        formula: str,
+        *,
+        allow_overwrite_non_vose: bool = False,
+    ) -> InsertResult:
+        """Array-enter (CSE) `formula` across `range_ref`, with the same
+        safety rails as `safe_write_cell`: writer mutex, refuse-to-
+        overwrite guard (checked on every cell of the block), and an
+        audit-log record per cell so `restore_cell` can roll back each
+        one. Required for array-returning Vose functions (copulas,
+        VoseTime* series) — a single-cell write leaves the rest of the
+        block empty and downstream references silently degrade."""
+        with self._writer_mutex.held(timeout_ms=0):
+            info = self._excel.read_range(workbook, sheet, range_ref)
+            anchor_ref = CellRef(
+                workbook=workbook, sheet=sheet,
+                cell=range_ref.split(":")[0].replace("$", ""),
+            )
+            for row in info.formulas:
+                for prev in row:
+                    if (
+                        prev
+                        and not allow_overwrite_non_vose
+                        and not is_vose_formula(prev, self._catalogue)
+                    ):
+                        raise CellReferenceError(
+                            f"Refusing to array-write over {workbook}!"
+                            f"{sheet}!{range_ref}: a cell in the block "
+                            f"contains a non-Vose formula ({prev!r}). "
+                            f"Clear the block or pick an empty range."
+                        )
+            self._excel.write_array_formula(workbook, sheet, range_ref, formula)
+            # One audit record per cell so per-cell restore still works.
+            for r_i, row in enumerate(info.formulas):
+                for c_i, prev in enumerate(row):
+                    cell_a1 = _offset_a1(anchor_ref.cell, r_i, c_i)
+                    append_write_log(
+                        cell=f"{workbook}!{sheet}!{cell_a1}",
+                        before_formula=prev or "",
+                        before_value=None,
+                        after_formula=f"{{={formula.lstrip('=')}}}",
+                        log_path=self._settings.writes_log_path,
+                    )
+        return InsertResult(
+            cell=anchor_ref,
+            formula=formula if formula.startswith("=") else "=" + formula,
+            written=True,
+            previous_formula=None,
+        )
+
     def restore_cell(
         self,
         ref: CellRef,
@@ -1424,6 +1478,37 @@ class ModelRiskBridge:
         if buf:
             args.append("".join(buf).strip())
         return args
+
+
+def _is_live_formula(formula: str | None) -> bool:
+    """True only for a REAL formula (starts with '='). xlwings returns a
+    text cell's content through `.formula` unchanged, so instructional
+    text like 'wrap as VoseOutput("NPV")' previously registered as a
+    live output — phantom entries in list_outputs / list_distributions /
+    plan_risk_model, duplicate rows in executive summaries, and noise in
+    audits (the demo-gallery live test surfaced all of these). Same rule
+    get_workbook_summary already applied for bug #27, now centralised."""
+    if not formula:
+        return False
+    return formula.lstrip().startswith("=")
+
+
+def _offset_a1(anchor: str, d_rows: int, d_cols: int) -> str:
+    """Offset an A1 reference by (rows, cols) — for per-cell audit-log
+    records of an array-formula block."""
+    m = re.match(r"^\$?([A-Za-z]{1,3})\$?(\d+)$", anchor.strip())
+    if not m:
+        return anchor
+    col_num = 0
+    for ch in m.group(1).upper():
+        col_num = col_num * 26 + (ord(ch) - 64)
+    col_num += d_cols
+    row = int(m.group(2)) + d_rows
+    col = ""
+    while col_num > 0:
+        col_num, rem = divmod(col_num - 1, 26)
+        col = chr(65 + rem) + col
+    return f"{col}{row}"
 
 
 def _unescape_excel_string(raw: str) -> str:

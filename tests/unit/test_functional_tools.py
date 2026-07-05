@@ -216,10 +216,36 @@ class TestFitAllDataAndWire:
         )
         assert all(c.written for c in r.columns)
         assert r.rolled_back is False
-        # 1 copula block + 2 marginals.
-        assert bridge.safe_write_cell.call_count == 3
-        first_formula = bridge.safe_write_cell.call_args_list[0].args[1]
-        assert first_formula.startswith("=VoseCopulaMultiNormalFit(")
+        # Copula block goes through the ARRAY write (CSE over H2:H3 —
+        # single-cell entry errors and downstream Us sample uncorrelated);
+        # the 2 marginals are plain cell writes.
+        bridge.safe_write_array_formula.assert_called_once()
+        arr_args = bridge.safe_write_array_formula.call_args
+        assert arr_args.args[2] == "H2:H3"
+        assert arr_args.args[3].startswith("=VoseCopulaMultiNormalFit(")
+        assert bridge.safe_write_cell.call_count == 2
+
+    def test_cross_sheet_targets(self, bridge: MagicMock) -> None:
+        """Data on one sheet, wired model on another (the realistic
+        layout the demo gallery uses)."""
+        self._wire_fits(bridge)
+        bridge.safe_write_cell.return_value = _written()
+        r = workflows.fit_all_data_and_wire(
+            "m.xlsx", "Data", "A2:B500", self._cols(),
+            copula_anchor="H6", target_sheet="Model",
+            dry_run=False, run=False,
+        )
+        # Array block lands on the TARGET sheet.
+        arr_args = bridge.safe_write_array_formula.call_args
+        assert arr_args.args[1] == "Model"
+        # Marginal formulas reference the target-sheet U cells and the
+        # DATA-sheet ranges.
+        f0 = r.columns[0].formula
+        assert "'Model'!H6" in f0
+        assert "'Data'!A2:A500" in f0
+        # Targets written on the Model sheet.
+        written_ref = bridge.safe_write_cell.call_args_list[0].args[0]
+        assert written_ref.sheet == "Model"
 
     def test_mid_build_failure_rolls_back(self, bridge: MagicMock) -> None:
         self._wire_fits(bridge)

@@ -277,7 +277,7 @@ class TestCompositeBuilders:
         # VoseTimeGBM is in the time-series category.
         formula = build_time_series(
             "VoseTimeGBM",
-            {"OutputSize": 10, "mu": 0.05, "sigma": 0.2},
+            {"mu": 0.05, "sigma": 0.2},
             cat,
         )
         assert formula.startswith("=VoseTimeGBM(")

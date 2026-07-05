@@ -4,6 +4,25 @@ All notable changes to ModelRisk MCP. Follows [Keep a Changelog](https://keepach
 
 ## [Unreleased]
 
+## [0.3.9] — 2026-07-05
+
+### Fixes from the demo-gallery live test (10 findings, all addressed)
+
+Every demo scenario was executed end-to-end against real Excel + ModelRisk; the run surfaced 10 product findings, all fixed here and re-verified live (8/8 previously-failing flows now pass):
+
+- **Array functions are now CSE-entered** (high). `create_copula`, `create_time_series`, and `fit_all_data_and_wire`'s copula U-block are array-entered over the full target range via a new audit-logged `safe_write_array_formula` (`Range.FormulaArray`). Previously a single-cell write errored ('output array must contain N cells') or — worst case — left U-slots empty so wired marginals **silently sampled uncorrelated**. Re-verified: wired inputs now show Spearman ≈0.72 from a Clayton fit.
+- **Writes into merged cells now raise** (high). COM silently discards `.Formula` writes into a merged region's non-anchor cells — a distribution object 'written' under a merged note row vanished and the downstream aggregate simulated all-zero with no error. `write_cell`/array writes now detect merged targets and raise an actionable message.
+- **Text cells are no longer treated as live formulas.** Instructional text like `wrap as VoseOutput("NPV")` registered as a real output (xlwings returns text content via `.formula`), producing phantom outputs/distributions in `plan_risk_model`/`list_*`, duplicate rows in summaries, and audit noise. Centralised the starts-with-`=` rule across scanners and the audit engine.
+- **Phantom `OutputSize` parameter stripped from the catalogue.** An extraction artifact on array functions (`VoseTime*`, `VoseCopulaMulti*Fit`, …): the real signatures start at the first true argument (verified live: `=VoseTimeGBM(mu,sigma,lastvalue)` CSE-entered works; with a size argument it errors). `create_time_series` now builds correct formulas.
+- **Cross-sheet ranges supported.** `fit_all_data_and_wire` gains `target_sheet` (data on `Data`, wired model on `Model` — the realistic layout); `fit_tail`/`fit_and_rank_distributions`/`fit_copula_to_data` accept already-qualified `Sheet!range` data ranges instead of double-prefixing into an opaque COM exception.
+- **`fit_distribution_to_data` gains `as_object`** — writes `Vose<Family>FitObject(...)` so `compute_distribution` can answer analytic questions against the cell (the sampling form remains the default for model inputs). Parameters are keyed off the spec's own names (the Object variants capitalise `Data` differently).
+- **Executive summary fixes:** outputs deduplicated by name (no more triplicated rows), and the P80 column now reports the true P80 — `0.80` added to the default percentile set (it silently fell back to P95 before).
+- **Chart names cleaned** (`Histogram_Profit`, `CDF_Profit` — no more doubled prefixes) and **`read_range` orientation fixed** (values and formulas now agree for single-column ranges).
+- MCP tool `parameters` now also accept positional `{"value": …}` entries (previously only named entries).
+
+### Demo gallery corrections (from the same test)
+Demo 02's step 3 now asks for the distribution **object** form; demo 09 steers helper objects to unmerged cells (`Model!B30/B31`); demo 10's named range is `Revenue2030` (`Rev2030` is a valid cell address, which Excel rejects as a name). All 12 workbooks re-verified: zero formula errors in a real-Excel recalculation, formatting and no-path checks clean.
+
 ### Demo gallery (`examples/demos/`)
 
 Twelve identically-formatted demo workbooks (index + eleven demos), one per feature area, each a simple real-life use case: store-expansion NPV via `build_model_from_brief`, bakery demand fitting, correlated construction costs via `fit_copula_to_data`/`fit_all_data_and_wire`, data-centre `reverse_stress_test`, simulation + histogram/CDF/tornado charts, model audit + undo, insurance aggregate loss + tail capital, SaaS pricing `run_scenarios`, op-risk GPD tails, GBM time series, and a one-prompt board pack. Each workbook's README sheet gives the exact prompt to type to Claude at every step. Shared house formatting (navy bands, blue inputs, yellow Vose-target cells, green key metrics); no live Vose formulas (the agent builds them during the demo); fixed-seed synthetic data; all files recalculate error-free in Excel.

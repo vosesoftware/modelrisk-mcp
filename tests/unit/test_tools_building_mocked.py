@@ -305,7 +305,6 @@ class TestDryRunDoesNotMutate:
             "book.xlsx", "Sheet1", "D2:D101",
             function_name="VoseTimeGBM",
             parameters=[
-                {"name": "OutputSize", "value": 100},
                 {"name": "mu", "value": 0.05},
                 {"name": "sigma", "value": 0.2},
             ],
