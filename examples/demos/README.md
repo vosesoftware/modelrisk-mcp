@@ -1,6 +1,6 @@
 # ModelRisk MCP — Demo Gallery
 
-Eleven hands-on demo workbooks, each showing one feature area of ModelRisk MCP on a
+Fifteen hands-on demo workbooks, each showing one feature area of ModelRisk MCP on a
 simple, real-life use case. Every workbook is self-contained — its **README sheet**
 offers two ways in:
 
@@ -30,6 +30,10 @@ colour legend.
 | [09_tail_risk_op_losses.xlsx](09_tail_risk_op_losses.xlsx) | Bank operational-risk 99.9% capital | `fit_tail` (GPD), `get_tail_risk`, `create_aggregate_mc` |
 | [10_time_series_and_construction.xlsx](10_time_series_and_construction.xlsx) | CFO 5-year stochastic revenue forecast | `create_time_series`, `create_copula`, `set_named_range`, `save_workbook_as` |
 | [11_executive_report.xlsx](11_executive_report.xlsx) | Board pack for a quarry acquisition | `build_executive_report`, `build_drivers_report`, `generate_executive_summary` |
+| [12_fit_time_series.xlsx](12_fit_time_series.xlsx) | CFO revenue projection — dynamics fitted from history | `fit_time_series`, `read_vmrs`, `set_active_vmrs` |
+| [13_compare_options.xlsx](13_compare_options.xlsx) | Two suppliers, one contract — P(A beats B) | `compare_distributions`, `compute_correlation_matrix` |
+| [14_backtest_forecast.xlsx](14_backtest_forecast.xlsx) | Was last year's forecast honestly calibrated? | `backtest_output` |
+| [15_uncertainty_sources.xlsx](15_uncertainty_sources.xlsx) | More data or more capital? Epistemic vs aleatory | `decompose_uncertainty` |
 
 ## Prerequisites
 
