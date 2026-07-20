@@ -4,6 +4,8 @@ All notable changes to ModelRisk MCP. Follows [Keep a Changelog](https://keepach
 
 ## [Unreleased]
 
+## [0.3.13] — 2026-07-20
+
 ### No-DLL results fallback — full results reading on ModelRisk-only machines
 
 - **Every results-reading tool now works without MRService.dll.** On machines whose ModelRisk predates the DLL (installers up to 9.1.x), `get_simulation_results`, `get_samples`, `get_sensitivity_ranking`, `get_correlation_matrix`, `list_vmrs_variables`, `run_scenarios`, and both report builders fall back automatically to reading the **live Excel session**: a temporary `=VoseSimValue(output, ROW())` column is written into a spare column past the sheet's used range, bulk-read, and cleared. Live-verified: the extracted samples are **sample-for-sample identical** to what MRService.dll reads from the `.vmrs` of the same run (< 1e-12 over the full run), inputs and outputs both readable, 500 samples in ~0.06 s. Fallback results carry `source: "in-session (no MRService.dll; live Excel session)"` so callers can tell them from `.vmrs` reads (`source: "vmrs"`).
