@@ -41,14 +41,18 @@ _DEFAULT_SERVER_NAME = "modelrisk"
 
 @dataclass(frozen=True)
 class ClientTarget:
-    """One MCP-client config file we know how to write to."""
+    """One MCP client we know how to register a server with."""
 
     name: str
     config_path: Path
-    # JSON path inside the file where mcpServers live. Claude Desktop
-    # uses `mcpServers` at the top level; Claude Code uses the same key
-    # under `~/.claude/settings.json`. Cursor differs.
+    # JSON key holding the server map. Claude Desktop uses top-level
+    # `mcpServers` in claude_desktop_config.json; Claude Code uses
+    # top-level `mcpServers` in ~/.claude.json.
     servers_key: str = "mcpServers"
+    # "json" = merge into config_path directly. "claude-cli" = prefer
+    # shelling out to `claude mcp add/remove` (the CLI owns the schema),
+    # falling back to a direct JSON merge into config_path.
+    strategy: str = "json"
 
 
 def _claude_desktop_config_path() -> Path:
@@ -72,19 +76,37 @@ def _claude_desktop_config_path() -> Path:
 
 
 def _claude_code_config_path() -> Path:
-    """Claude Code stores its per-user settings at ~/.claude/settings.json."""
-    return Path.home() / ".claude" / "settings.json"
+    """Claude Code reads user-scope MCP servers from the TOP-LEVEL
+    `mcpServers` key of `~/.claude.json` — NOT `~/.claude/settings.json`,
+    which holds per-user settings (theme, notifications, …) and is
+    silently ignored for MCP registration. Writing there produced a
+    green 'added' line and a dead server (field bug report,
+    2026-07-20)."""
+    return Path.home() / ".claude.json"
+
+
+def _claude_cli() -> str | None:
+    """Path to the Claude Code CLI, if installed."""
+    return shutil.which("claude")
 
 
 def discover_clients() -> list[ClientTarget]:
-    """Return only the clients whose parent directories exist. We
-    accept missing config files (we'll create them) but not missing
-    parent dirs — those signal the client isn't installed."""
-    candidates = [
-        ClientTarget("Claude Desktop", _claude_desktop_config_path()),
-        ClientTarget("Claude Code", _claude_code_config_path()),
-    ]
-    return [c for c in candidates if c.config_path.parent.is_dir()]
+    """Return only the clients that actually appear to be installed.
+
+    Claude Desktop: its config directory exists.
+    Claude Code: `~/.claude.json` exists OR the `claude` CLI is on PATH
+    (the old check — `~/.claude/` existing — mis-detected Claude Code
+    via a directory other tools also create)."""
+    targets: list[ClientTarget] = []
+    desktop = ClientTarget("Claude Desktop", _claude_desktop_config_path())
+    if desktop.config_path.parent.is_dir():
+        targets.append(desktop)
+    code_cfg = _claude_code_config_path()
+    if code_cfg.is_file() or _claude_cli():
+        targets.append(
+            ClientTarget("Claude Code", code_cfg, strategy="claude-cli")
+        )
+    return targets
 
 
 # ---------------------------------------------------------------------------
@@ -239,6 +261,87 @@ def uninstall(
     return results
 
 
+def _claude_cli_add(
+    server_name: str, entry: dict[str, Any], *, force: bool
+) -> InstallResult | None:
+    """Register via `claude mcp add` — the CLI owns the config schema
+    and scoping, so prefer it whenever it's on PATH. Returns None when
+    the CLI is unavailable (caller falls back to the JSON merge)."""
+    import subprocess
+
+    cli = _claude_cli()
+    if not cli:
+        return None
+    command = entry["command"]
+    args = entry.get("args", [])
+    if force:
+        # Idempotent replace: remove any existing entry first; ignore
+        # 'not found' failures.
+        subprocess.run(
+            [cli, "mcp", "remove", server_name, "--scope", "user"],
+            capture_output=True, text=True, timeout=30,
+        )
+    proc = subprocess.run(
+        [cli, "mcp", "add", server_name, "--scope", "user", "--",
+         command, *args],
+        capture_output=True, text=True, timeout=30,
+    )
+    if proc.returncode != 0:
+        detail = (proc.stderr or proc.stdout or "").strip()
+        if "already exists" in detail.lower() and not force:
+            return InstallResult(
+                client="Claude Code",
+                config_path=_claude_code_config_path(),
+                action="skipped",
+                message=(
+                    f"{server_name!r} already registered in Claude Code. "
+                    "Re-run with --force to replace it."
+                ),
+            )
+        raise InstallError(
+            f"`claude mcp add` failed ({proc.returncode}): {detail[:300]}"
+        )
+    return InstallResult(
+        client="Claude Code",
+        config_path=_claude_code_config_path(),
+        action="added",
+        message=(
+            f"Registered {server_name!r} via `claude mcp add --scope user` "
+            f"-> {command} {' '.join(args)}".rstrip()
+        ),
+    )
+
+
+def _claude_cli_remove(server_name: str) -> InstallResult | None:
+    import subprocess
+
+    cli = _claude_cli()
+    if not cli:
+        return None
+    proc = subprocess.run(
+        [cli, "mcp", "remove", server_name, "--scope", "user"],
+        capture_output=True, text=True, timeout=30,
+    )
+    if proc.returncode != 0:
+        detail = (proc.stderr or proc.stdout or "").strip().lower()
+        if "not found" in detail or "no mcp server" in detail:
+            return InstallResult(
+                client="Claude Code",
+                config_path=_claude_code_config_path(),
+                action="skipped",
+                message=f"{server_name!r} not registered in Claude Code.",
+            )
+        raise InstallError(
+            f"`claude mcp remove` failed ({proc.returncode}): {detail[:300]}"
+        )
+    return InstallResult(
+        client="Claude Code",
+        config_path=_claude_code_config_path(),
+        action="removed",
+        message=f"Removed {server_name!r} via `claude mcp remove`.",
+    )
+
+
 def _install_one(
     target: ClientTarget,
     server_name: str,
@@ -246,6 +349,11 @@ def _install_one(
     *,
     force: bool,
 ) -> InstallResult:
+    if target.strategy == "claude-cli":
+        via_cli = _claude_cli_add(server_name, entry, force=force)
+        if via_cli is not None:
+            return via_cli
+        # CLI absent — fall through to a direct merge into ~/.claude.json.
     data = _read_config(target.config_path)
     servers = data.setdefault(target.servers_key, {})
     if not isinstance(servers, dict):
@@ -280,6 +388,10 @@ def _install_one(
 
 
 def _uninstall_one(target: ClientTarget, server_name: str) -> InstallResult:
+    if target.strategy == "claude-cli":
+        via_cli = _claude_cli_remove(server_name)
+        if via_cli is not None:
+            return via_cli
     if not target.config_path.is_file():
         return InstallResult(
             client=target.name,

@@ -84,15 +84,61 @@ class ExcelBridge:
             self._xlwings = xw
 
     def _attach_active(self) -> Any | None:
-        """Return the active Excel app if one is running, else None.
-        `xlwings.apps.active` either returns None or raises when no
-        Excel is up — normalise both to None."""
+        """Return the best Excel app to attach to, else None.
+
+        With ONE instance running this is simply `apps.active`. With
+        SEVERAL, `apps.active` is effectively arbitrary — and loading
+        ModelRisk from its shortcut can spawn a *second* Excel, leaving
+        the add-in live in one process and absent in another. Attaching
+        to the wrong one made `diagnose_workbook` report the add-in dead
+        while Vose functions worked perfectly in the user's real session
+        (field bug report, 2026-07-20; three instances, `apps.active`
+        picked the only one without the add-in).
+
+        So: when more than one instance is attachable, probe each with
+        the cheap separator-safe `VosePoisson(5)` evaluation and prefer
+        an instance where ModelRisk answers; fall back to `apps.active`
+        only if none does."""
         if self._xlwings is None:
             return None
+        try:
+            apps = list(self._xlwings.apps)
+        except Exception:
+            apps = []
+        if len(apps) > 1:
+            for app in apps:
+                if _instance_probe_live(app):
+                    return app
         try:
             return self._xlwings.apps.active
         except Exception:
             return None
+
+    def attachable_instances(self) -> list[dict[str, Any]]:
+        """Enumerate running Excel instances with their PID and whether
+        ModelRisk answers in each — for diagnostics, so a user seeing
+        'add-in not live' can tell WHICH process was probed instead of
+        chasing a phantom locale or licence fault."""
+        self._load_xlwings()
+        assert self._xlwings is not None
+        out: list[dict[str, Any]] = []
+        try:
+            apps = list(self._xlwings.apps)
+        except Exception:
+            return out
+        for app in apps:
+            entry: dict[str, Any] = {}
+            try:
+                entry["pid"] = int(app.pid)
+            except Exception:
+                entry["pid"] = None
+            entry["modelrisk_functional"] = _instance_probe_live(app)
+            try:
+                entry["workbooks"] = [str(b.name) for b in app.books]
+            except Exception:
+                entry["workbooks"] = []
+            out.append(entry)
+        return out
 
     def connect(self) -> None:
         if self._app is not None:
@@ -232,6 +278,8 @@ class ExcelBridge:
         ARE DISCARDED; pass save=True to write them first. Raises
         WorkbookNotFoundError if the workbook isn't open. Returns the closed
         name, whether it was saved, and the names still open."""
+        if save:
+            self._ensure_writable(f"save {workbook} on close")
         app = self._ensure()
         book = self._get_book(workbook)  # raises WorkbookNotFoundError if not open
         name = str(book.name)
@@ -559,9 +607,27 @@ class ExcelBridge:
     # Writes
     # ------------------------------------------------------------------
 
+    @staticmethod
+    def _ensure_writable(operation: str) -> None:
+        """Raise in read-only mode. Called by every mutating method so
+        `--read-only` / MODELRISK_MCP_READ_ONLY is a real guarantee, not
+        a documented aspiration — the natural first-session posture when
+        pointing the server at a live client model."""
+        from modelrisk_mcp.config import read_only_active
+        from modelrisk_mcp.errors import ReadOnlyModeError
+
+        if read_only_active():
+            raise ReadOnlyModeError(
+                f"Refusing to {operation}: the server is running in "
+                f"read-only mode (--read-only / MODELRISK_MCP_READ_ONLY). "
+                f"Reading tools still work; restart without the flag to "
+                f"enable writes, simulations and saves."
+            )
+
     def write_cell(
         self, workbook: str, sheet: str, cell: str, formula: str
     ) -> None:
+        self._ensure_writable(f"write cell {sheet}!{cell}")
         sh = self._get_sheet(workbook, sheet)
         try:
             cell_obj = sh.range(cell)
@@ -609,6 +675,7 @@ class ExcelBridge:
     def write_array_formula(
         self, workbook: str, sheet: str, range_ref: str, formula: str
     ) -> None:
+        self._ensure_writable(f"array-write {sheet}!{range_ref}")
         """Enter `formula` as a legacy CSE ARRAY formula across
         `range_ref` (Ctrl+Shift+Enter semantics via `Range.FormulaArray`).
 
@@ -637,6 +704,7 @@ class ExcelBridge:
             ) from exc
 
     def clear_range(self, workbook: str, sheet: str, range_ref: str) -> None:
+        self._ensure_writable(f"clear {sheet}!{range_ref}")
         """Clear the contents of a range. Needed to roll back an ARRAY
         formula: Excel refuses per-cell writes into part of a CSE block
         ('cannot change part of an array'), so undo must clear the whole
@@ -656,6 +724,7 @@ class ExcelBridge:
         range_ref: str,
         formulas: list[list[str]],
     ) -> None:
+        self._ensure_writable(f"write range {sheet}!{range_ref}")
         sh = self._get_sheet(workbook, sheet)
         try:
             r = sh.range(range_ref)
@@ -675,6 +744,7 @@ class ExcelBridge:
         name: str,
         range_ref: str,
     ) -> None:
+        self._ensure_writable(f"create named range {name}")
         """Create or overwrite a workbook-level named range. `range_ref`
         is the A1 reference the name points to, e.g. 'Sheet1!$A$1:$A$10'.
 
@@ -732,6 +802,7 @@ class ExcelBridge:
     def save_workbook_as(
         self, workbook: str, path: str, *, overwrite: bool = False,
     ) -> str:
+        self._ensure_writable(f"save workbook to {path}")
         """Save a COPY of `workbook` to `path` (absolute). Returns the
         resolved path that was actually written.
 
@@ -1227,6 +1298,22 @@ def _detect_excel_error(cell_obj: Any, value: Any) -> str | None:
     except Exception:
         val2 = None
     return _coerce_error_value(val2)
+
+
+def _instance_probe_live(app: Any) -> bool:
+    """True when ModelRisk answers in this specific Excel instance.
+
+    A live add-in returns a numeric draw from `VosePoisson(5)` (a
+    non-negative float); a dead one returns a CVErr integer (e.g.
+    -2146826259 for #NAME?), which `_coerce_error_value` classifies.
+    Bools are excluded (COM sometimes coerces oddly)."""
+    try:
+        result = app.api.Evaluate("VosePoisson(5)")
+    except Exception:
+        return False
+    if isinstance(result, bool) or not isinstance(result, (int, float)):
+        return False
+    return _coerce_error_value(result) is None
 
 
 def _as_2d(value: Any) -> list[list[Any]]:

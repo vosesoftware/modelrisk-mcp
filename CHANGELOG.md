@@ -4,6 +4,16 @@ All notable changes to ModelRisk MCP. Follows [Keep a Changelog](https://keepach
 
 ## [Unreleased]
 
+## [0.3.11] — 2026-07-20
+
+### Field bug report fixes (all five findings addressed — thank you, Peter Vanneck)
+
+- **Claude Code registration actually works now.** `modelrisk-mcp install` wrote the server entry into `~/.claude/settings.json` — a file Claude Code does not read for MCP servers — while printing a green "added" line: a silent no-op. It now prefers `claude mcp add --scope user` (the CLI owns the schema), falling back to a direct `mcpServers` merge into `~/.claude.json` when the CLI is absent; detection keys on `~/.claude.json` / the `claude` binary. Verified live end-to-end (`claude mcp list` shows the server "✓ Connected").
+- **`--read-only` exists and is enforced.** `Settings.read_only` was declared but nothing set or checked it. New `--read-only` flag / `MODELRISK_MCP_READ_ONLY=1` env: every mutating operation — cell/range/array writes, named ranges, clears, simulations, workbook saves (including save-on-close) — raises a clear `ReadOnlyModeError` while reading and analysis keep working. The natural first-session posture against a live client model.
+- **Multi-instance Excel attach is no longer a coin toss.** With several Excel processes running (ModelRisk's shortcut can spawn a second one), `xlwings.apps.active` could attach to an instance *without* the add-in, making diagnostics report ModelRisk dead while Vose functions worked fine in the user's real session. The bridge now probes each instance with the separator-safe `VosePoisson(5)` evaluation and prefers one where ModelRisk answers; the add-in-dead error now enumerates running instances (PID, workbooks, live/dead) so a mismatch is visible instead of reading like a locale or licence fault.
+- **MRService.dll too old is diagnosed up front.** Required exports are probed at load; a 7.1.x-era DLL (e.g. the copy shipped with Tamara) now fails with "too old — needs ≥ 7.3.2.1 (bundled key covers 7.3.2.1–9.2.2.1)" instead of a cryptic mid-call "function 'MRLIB_SetOfflineActivationKeyEx2' not found". Error messages no longer recommend the Tamara path; they state plainly that ModelRisk installers through 9.1.x do not ship MRService.dll, so `.vmrs` reading is unavailable out of the box on ModelRisk-only machines (building and simulating are unaffected).
+- **Claude for Excel instructions corrected — withdrawn, not hedged.** Current Claude for Excel builds have no local Connectors panel; they resolve connectors from the claude.ai account, and claude.ai custom connectors are fetched by Anthropic's infrastructure — a loopback URL is unreachable *by construction*. README + docs/claude-for-excel.md now say this plainly, direct users to Claude Desktop / Claude Code (stdio), document that local stdio servers never appear in the claude.ai "Connectors" panel (absence there is not a failed install), and explicitly warn against public-tunnel workarounds for a server that can write and save workbooks.
+
 ## [0.3.10] — 2026-07-05
 
 ### Demo gallery wave 2 — full use-case coverage

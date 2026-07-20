@@ -138,11 +138,12 @@ def find_mrservice_dll() -> str | None:
     """Locate MRService.dll, in priority order:
 
     1. `MRSERVICE_DLL_PATH` env var — the canonical override. Point it at the
-       full path of an MRService.dll whose version matches your activation key
-       (e.g. the copy under `…\\Vose Software\\Tamara\\MRLibrary\\MRService.dll`,
-       which the bundled key activates). Its sibling DLLs resolve from that same
-       folder (see `_load`'s `add_dll_directory`), so you don't copy the file
-       out — point at it in place.
+       full path of an MRService.dll of version 7.3.2.1 OR NEWER (the bundled
+       key covers 7.3.2.1-9.2.2.1). Older copies shipped with other Vose
+       products — e.g. Tamara's 7.1.x — lack exports this wrapper calls and
+       are rejected up front with a version diagnosis. Its sibling DLLs
+       resolve from that same folder (see `_load`'s `add_dll_directory`), so
+       you don't copy the file out — point at it in place.
     2. `MRSERVICE_DLL` — back-compat alias for the same thing.
     3. The standard ModelRisk install paths.
 
@@ -222,10 +223,16 @@ class MrServiceBridge:
         if path is None:
             raise ModelRiskNotLoadedError(
                 "MRService.dll not found in the standard ModelRisk install "
-                "paths. Set MRSERVICE_DLL_PATH to the full path of an "
-                "MRService.dll on this machine (e.g. one under "
-                r"'…\Vose Software\Tamara\MRLibrary\') — only needed to READ "
-                ".vmrs results; running simulations is unaffected."
+                "paths — current ModelRisk installers (through 9.1.x) do NOT "
+                "ship this DLL, so on a ModelRisk-only machine .vmrs results "
+                "reading is unavailable out of the box. If you have a "
+                "version-matched MRService.dll (7.3.2.1 or newer — e.g. "
+                "obtained from Vose Software, or placed in the ModelRisk "
+                "folder by a newer installer), set MRSERVICE_DLL_PATH to its "
+                "full path. NOTE: older copies shipped with other Vose "
+                "products (e.g. Tamara's 7.1.x) are too old and will not "
+                "work. Only READING .vmrs results is affected; building "
+                "models and running simulations work without it."
             )
         # add_dll_directory makes License.dll resolvable.
         if hasattr(os, "add_dll_directory"):
@@ -234,13 +241,50 @@ class MrServiceBridge:
             except OSError:
                 pass
         try:
-            self._lib = ctypes.cdll.LoadLibrary(path)
+            lib = ctypes.cdll.LoadLibrary(path)
         except OSError as exc:
             raise ModelRiskNotLoadedError(
                 f"Could not LoadLibrary({path!r}): {exc}"
             ) from exc
+        self._check_exports(lib, path)
+        self._lib = lib
         self._configure_signatures(self._lib)
         self._dll_path = path
+
+    # Exports this wrapper calls. Probed up front so an out-of-date DLL
+    # fails with a version diagnosis instead of a mid-call AttributeError
+    # ('function MRLIB_SetOfflineActivationKeyEx2 not found') — the 7.1.x
+    # MRService.dll shipped with Tamara predates the Ex2 activation export
+    # (field bug report, 2026-07-20).
+    _REQUIRED_EXPORTS: tuple[str, ...] = (
+        "MRLIB_SetOfflineActivationKey",
+        "MRLIB_SetOfflineActivationKeyEx2",
+        "MRLIB_OpenSimulationModel",
+        "MRLIB_CloseSimulationModel",
+        "MRLIB_GetModelDataLength",
+        "MRLIB_GetModelData",
+        "MRLIB_CalcStatistics",
+        "MRLIB_CalcPercentilesArray",
+    )
+
+    @classmethod
+    def _check_exports(cls, lib: ctypes.CDLL, path: str) -> None:
+        missing = []
+        for name in cls._REQUIRED_EXPORTS:
+            try:
+                getattr(lib, name)
+            except AttributeError:
+                missing.append(name)
+        if missing:
+            raise ModelRiskNotLoadedError(
+                f"The MRService.dll at {path!r} is too old for this "
+                f"package: it lacks {', '.join(missing)}. A version of at "
+                f"least 7.3.2.1 is required (the bundled activation key "
+                f"covers 7.3.2.1-9.2.2.1). Copies shipped with other Vose "
+                f"products (e.g. Tamara's 7.1.x) predate these exports. "
+                f"Point MRSERVICE_DLL_PATH at a newer MRService.dll, or "
+                f"unset it to see the standard search paths."
+            )
 
     @staticmethod
     def _configure_signatures(lib: ctypes.CDLL) -> None:
@@ -341,12 +385,11 @@ class MrServiceBridge:
             # rather than silently leaving the bridge unactivated.
             raise SimulationFailedError(
                 "Bundled activation key was rejected by MRService.dll — the "
-                "loaded DLL's version is outside what the bundled key covers. "
-                "Two fixes: (a) point MRSERVICE_DLL_PATH at a version-matched "
-                r"MRService.dll you already have (e.g. under '…\Vose Software\\"
-                r"Tamara\MRLibrary\'), which the bundled key activates; or "
-                "(b) set MRSERVICE_ACTIVATION_KEY to your own ModelRisk key. "
-                "Only affects READING .vmrs results — simulations still run."
+                "loaded DLL's version is outside what the bundled key covers "
+                "(7.3.2.1-9.2.2.1). Two fixes: (a) point MRSERVICE_DLL_PATH "
+                "at an MRService.dll inside that version range; or (b) set "
+                "MRSERVICE_ACTIVATION_KEY to your own ModelRisk key. Only "
+                "affects READING .vmrs results — simulations still run."
             )
         raise SimulationFailedError(
             "MRService.dll requires activation, but no key was supplied.\n\n"

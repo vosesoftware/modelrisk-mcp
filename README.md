@@ -187,18 +187,42 @@ After any of the three, **restart Claude Desktop** so it spawns the MCP server s
 
 ---
 
-## Wire into Claude for Excel (HTTP transport)
+## Claude for Excel — not currently reachable (read this before trying)
 
-Claude for Excel runs inside an Office.js sandbox and can't spawn subprocesses, so it talks to MCP servers over HTTP. Start the server in HTTP mode:
+**Current Claude for Excel builds cannot connect to this server, and no local
+workaround exists.** Earlier versions of this README described a
+Settings → Connectors flow; that was wrong for shipping builds and has been
+withdrawn (verified against a 2026-07 build; independently confirmed by a
+field report).
+
+What we verified:
+
+- The Claude for Excel add-in has **no local Connectors panel**. It resolves
+  connectors from your **claude.ai account**, and claude.ai custom connectors
+  are **remote MCP servers fetched by Anthropic's infrastructure** — not by
+  your device. A loopback URL (`http://127.0.0.1:…`) is therefore unreachable
+  **by construction**, and the dialog's OAuth fields don't match this server's
+  bearer-token auth.
+- Local **stdio** servers (the Claude Desktop kind) never appear in the
+  claude.ai / Claude Desktop "Connectors" panel. Their absence there is
+  normal, not a failed install — Claude Desktop lists them separately under
+  local MCP servers.
+- **Do not expose this server through a public tunnel to work around this.**
+  It can write formulas into, simulate, and save your workbooks; putting that
+  behind a single bearer token on a public URL is a materially different risk
+  posture than the loopback bind these docs describe, and we don't support it.
+
+**Use Claude Desktop or Claude Code instead** (local stdio — the supported,
+tested path; `modelrisk-mcp install` wires both). The HTTP transport below
+remains useful for LAN/self-hosted setups with MCP clients that genuinely
+run on your machine:
 
 ```powershell
 $env:MODELRISK_MCP_TOKEN = [Guid]::NewGuid().ToString("N") * 2
 modelrisk-mcp --transport=streamable-http --port=8000 --token=$env:MODELRISK_MCP_TOKEN
 ```
 
-Then in Claude for Excel: Settings → Connectors → Add MCP server, URL `http://127.0.0.1:8000/mcp`, paste the token. Full guide: [docs/claude-for-excel.md](docs/claude-for-excel.md).
-
-**Why this is interesting:** Claude for Excel's sandbox can't reach Excel's COM surface or the ModelRisk ribbon on its own. ModelRisk MCP runs outside the sandbox and bridges that gap — Claude for Excel can do things via this server it structurally can't do otherwise (run simulations, dispatch ModelRisk COM, write distributions through the safety pipeline).
+Details and the full analysis: [docs/claude-for-excel.md](docs/claude-for-excel.md).
 
 ---
 

@@ -2,8 +2,9 @@
 
 Supports three MCP transports per the spec — stdio (default) for
 Claude Desktop / Code / Cursor / Zed, and streamable-http or sse for
-Claude for Excel and other remote MCP clients that can't spawn local
-subprocesses.
+MCP clients on your own machine that speak HTTP rather than spawning a
+subprocess. (Claude for Excel cannot reach a local server at all — see
+docs/claude-for-excel.md.)
 
 CLI:
 
@@ -36,8 +37,8 @@ def _build_parser() -> argparse.ArgumentParser:
         prog="modelrisk-mcp",
         description=(
             "ModelRisk MCP server — exposes ModelRisk's read/build/run "
-            "surface to Claude Desktop, Claude Code, Claude for Excel, "
-            "Cursor, Zed, and any MCP-compliant client."
+            "surface to Claude Desktop, Claude Code, Cursor, Zed, and any "
+            "local MCP-compliant client."
         ),
     )
     p.add_argument(
@@ -47,7 +48,7 @@ def _build_parser() -> argparse.ArgumentParser:
         help=(
             "Transport protocol. 'stdio' (default) is for local clients "
             "like Claude Desktop; 'streamable-http' is the modern remote "
-            "MCP transport (recommended for Claude for Excel); 'sse' is "
+            "MCP transport for clients running on your own machine; 'sse' is "
             "the legacy SSE transport."
         ),
     )
@@ -82,6 +83,18 @@ def _build_parser() -> argparse.ArgumentParser:
             "'Authorization: Bearer <token>'). Falls back to the "
             "MODELRISK_MCP_TOKEN environment variable if unset. Strongly "
             "recommended for any non-loopback HTTP deployment."
+        ),
+    )
+    p.add_argument(
+        "--read-only",
+        action="store_true",
+        help=(
+            "Disable every mutating operation: cell/range writes, named "
+            "ranges, simulations, and workbook saves all raise a clear "
+            "error while the reading and analysis tools keep working. "
+            "The recommended first-session posture when pointing the "
+            "server at a live client model. Equivalent to setting "
+            "MODELRISK_MCP_READ_ONLY=1."
         ),
     )
     return p
@@ -144,6 +157,13 @@ def main(argv: list[str] | None = None) -> None:
         argv = argv[1:]  # `modelrisk-mcp serve --transport=stdio` works too
 
     args = _build_parser().parse_args(argv)
+    if args.read_only:
+        # The enforcement layer (ExcelBridge._ensure_writable) checks
+        # this env var at call time, so setting it here covers every
+        # transport and entry path.
+        import os
+
+        os.environ["MODELRISK_MCP_READ_ONLY"] = "1"
     if args.transport == "stdio":
         _run_stdio()
     else:

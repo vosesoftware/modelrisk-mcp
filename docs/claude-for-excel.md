@@ -1,103 +1,81 @@
-# Wiring ModelRisk MCP into Claude for Excel
+# Claude for Excel and ModelRisk MCP — the honest status
 
-Claude for Excel runs inside an Office.js iframe sandboxed *inside* Excel itself. It can't spawn local subprocesses (the way Claude Desktop launches a stdio MCP server), so it talks to MCP servers over **HTTP** instead. ModelRisk MCP serves both stdio and HTTP transports.
+> **TL;DR: Claude for Excel cannot currently reach this server. Use Claude
+> Desktop or Claude Code (local stdio) instead — `modelrisk-mcp install`
+> wires both.** This page replaces earlier instructions that described a
+> Settings → Connectors flow inside the add-in; those instructions were wrong
+> for shipping builds and are withdrawn (verified 2026-07 against a current
+> build, and independently confirmed by a field report).
 
-This is also where the architectural payoff is: Office.js can't reach Excel's COM surface or ModelRisk's ribbon. ModelRisk MCP, running outside the sandbox, can — which means Claude for Excel can do things via this server that it structurally can't do on its own.
+## Why it can't work today
 
-## Prerequisites
+Claude for Excel is an Office.js add-in running in a browser WebView. Its
+connector model has three properties that together rule out a local,
+Excel-driving MCP server:
 
-- Excel 2019+ with ModelRisk loaded
-- Claude for Excel installed (Microsoft AppSource → "Claude for Excel" by Anthropic)
-- ModelRisk MCP installed: `pip install modelrisk-mcp` or the standalone `.exe`
+1. **No local Connectors panel.** The add-in's settings contain no "Add MCP
+   server" entry. It resolves connectors from your **claude.ai account**
+   connector list.
+2. **claude.ai custom connectors are remote.** The "Add custom connector"
+   dialog takes a **remote MCP server URL** plus OAuth credentials, and those
+   connectors are **fetched by Anthropic's infrastructure, not by your
+   device**. A loopback URL (`http://127.0.0.1:8000/mcp`) is unreachable *by
+   construction* — no configuration makes it work. The OAuth fields also
+   don't match this server's bearer-token auth.
+3. **Local stdio servers never appear in the "Connectors" panel** on
+   claude.ai or Claude Desktop. That's normal: the Connectors panel lists
+   account-level remote connectors; local stdio servers are a separate,
+   Desktop-only mechanism. Not seeing `modelrisk` there does **not** mean the
+   install failed.
 
-## 1. Start the server in HTTP mode
+The server side is fine — the HTTP transport handshakes correctly and
+enforces its bearer token (`401` without it). The limitation is entirely in
+how the client resolves connectors.
 
-Open a PowerShell window. Generate a token first — anything random and >=24 characters. PowerShell built-in:
+## Do not tunnel around this
+
+The only technically-possible route to Claude for Excel today would be
+exposing the server through a public tunnel with OAuth in front. **We do not
+recommend or support this.** This server can write formulas into your
+workbooks, run simulations, and save files to disk. A publicly reachable
+instance guarded by a single bearer token is a materially different security
+posture from the loopback bind these docs are written around. If your
+organisation genuinely needs an in-Excel path, contact Vose — that is a
+product decision (a hosted connector with real auth), not a configuration
+setting.
+
+## What to use instead
+
+| Client | Transport | Status |
+|---|---|---|
+| **Claude Desktop** | local stdio | ✅ Supported, tested — `modelrisk-mcp install` |
+| **Claude Code** | local stdio | ✅ Supported, tested — `modelrisk-mcp install` (0.3.11+; earlier versions wrote the wrong config file) |
+| Cursor / Zed / other local MCP clients | local stdio | ✅ Works; configure manually |
+| An MCP client running on your own machine/LAN | `--transport=streamable-http` + bearer token | ✅ Works — keep the default loopback bind |
+| **Claude for Excel** | — | ❌ Not reachable by current builds |
+
+Everything this server does — building models, running simulations, reading
+results, charts, reports — works identically from Claude Desktop and Claude
+Code against the same Excel session you have open. Excel and ModelRisk are
+driven either way; only the chat window lives elsewhere.
+
+## HTTP transport (for clients that do run on your machine)
 
 ```powershell
-$env:MODELRISK_MCP_TOKEN = [Guid]::NewGuid().ToString("N") + [Guid]::NewGuid().ToString("N")
-$env:MODELRISK_MCP_TOKEN
+$env:MODELRISK_MCP_TOKEN = [Guid]::NewGuid().ToString("N") * 2
+modelrisk-mcp --transport=streamable-http --host=127.0.0.1 --port=8000 --token=$env:MODELRISK_MCP_TOKEN
 ```
 
-Copy the printed token — you'll paste it into Claude for Excel in step 2. Then start the server:
+- `POST /mcp` with `Authorization: Bearer <token>` → MCP initialize handshake.
+- No token → `401`.
+- Keep `--host=127.0.0.1` unless you fully understand the exposure of
+  `0.0.0.0` on your network.
+- Add `--read-only` for a first session against a model you care about
+  (0.3.11+): reading and analysis work; writes, simulations and saves are
+  refused with a clear error.
 
-```powershell
-modelrisk-mcp --transport=streamable-http --port=8000 --token=$env:MODELRISK_MCP_TOKEN
-```
+## If Anthropic's connector model changes
 
-You should see:
-
-```
-INFO:     Uvicorn running on http://127.0.0.1:8000 (Press CTRL+C to quit)
-```
-
-Leave the window open while you work. Closing it stops the server.
-
-> **Why a token?** The HTTP endpoint binds to `127.0.0.1` (loopback) by default, so only processes on your machine can reach it. But *any* process on your machine could otherwise hit it and drive Excel — including malicious ones. A bearer token shuts that down. If you bind to a non-loopback host, the token isn't optional.
-
-## 2. Add the connector in Claude for Excel
-
-Open Excel, open Claude for Excel (the side-panel icon), then:
-
-1. Go to **Settings → Connectors** (or the equivalent in your current Claude for Excel build).
-2. Click **Add MCP server**.
-3. Fill in:
-   - **Name:** `modelrisk` (or anything you'll recognise)
-   - **URL:** `http://127.0.0.1:8000/mcp`
-   - **Authentication:** Bearer token
-   - **Token:** paste the token from step 1
-4. Save.
-
-Claude for Excel should report the connection as live and show the 40 ModelRisk tools.
-
-## 3. First conversation
-
-In Claude for Excel:
-
-> Summarise the active workbook's risk model — inputs, outputs, distributions.
-
-Or jump straight in:
-
-> /build-risk-model
-
-The same tool surface and same prompts as Claude Desktop. See [docs/demo-script.md](demo-script.md) for the headline workflow.
-
-## Lifecycle tips
-
-- **Token in another shell.** If you need to share the token with a second Claude for Excel session or paste it into a different config, save it to a file once and read it back. `Get-Clipboard` after the env-var line above also works.
-- **Stopping the server.** `Ctrl+C` in the PowerShell window. The Claude for Excel connector will go red until you start it again.
-- **Auto-start on boot.** Wrap the launch command in a Windows scheduled task running at logon, or a Start Menu shortcut. Keep the token out of source control.
-- **Two-machine setup (advanced).** Bind to `0.0.0.0`, expose the chosen port through your firewall, and use a strong token. Watch the security model carefully — this server can write to your Excel.
-
-## Troubleshooting
-
-### "Connection refused" or "ERR_CONNECTION_RESET"
-
-The server isn't running, or it's bound to a port Claude for Excel can't reach. Check the PowerShell window — uvicorn prints `Uvicorn running on http://127.0.0.1:8000` when it's healthy.
-
-### 401 Unauthorised
-
-The token Claude for Excel is sending doesn't match the one the server expects. Re-paste it. Tokens are case-sensitive.
-
-### Tools listed but every call hangs
-
-The server is running but can't reach Excel. Confirm Excel is open and ModelRisk is loaded. Try the standalone `modelrisk-mcp --transport=stdio` with Claude Desktop first — that's a simpler topology to debug.
-
-### Concurrent-writer errors
-
-If Claude Desktop is running the same server over stdio at the same time, the writer mutex will reject one of them. Pick one client per session, or run the HTTP server with a different mutex name (advanced — see `src/modelrisk_mcp/safety.py`).
-
-### "version": "1.27.1" in serverInfo
-
-That's the FastMCP library version FastMCP currently reports, not our package version. Cosmetic, doesn't affect behaviour. The actual server is identifiable as `"name": "modelrisk-mcp"`.
-
-## Security model — important
-
-ModelRisk MCP over HTTP is a **local-only, single-user** integration in its default configuration. The defaults:
-
-- Loopback bind (`127.0.0.1`) — only your own machine
-- Bearer token required if you change the bind to a non-loopback host
-- No outbound network calls — the server doesn't phone home
-- All writes still default to `dry_run=True`; the writer mutex still serialises commits; the audit log still records every change
-
-Do **not** expose this server to the public internet. The MCP tool surface includes `replace_constant_with_distribution`, `run_simulation`, and `set_named_range` — anyone who can reach the endpoint with a valid token can drive your Excel. Treat the token like an API key.
+If a future Claude for Excel build adds local MCP support or a
+device-fetched connector mode, this page will be updated and the client
+re-tested before instructions are published. Watch the CHANGELOG.

@@ -265,11 +265,39 @@ class ModelRiskBridge:
                         "add-in was not loaded; registered it from disk",
                     )
 
-        # 5. Couldn't make it functional.
+        # 5. Couldn't make it functional. Enumerate the running Excel
+        # instances in the error: with several Excels up, the probe may
+        # simply be looking at the wrong PROCESS (ModelRisk's shortcut
+        # can spawn a second Excel), and without the PID table users
+        # chase phantom locale/licence faults instead of the mismatch.
         raise ModelRiskNotFunctionalError(
             _ADDIN_DEAD_MESSAGE
             + (f" (attempted: {'; '.join(steps)})" if steps else "")
+            + self._describe_instances()
         )
+
+    def _describe_instances(self) -> str:
+        try:
+            instances = self._excel.attachable_instances()
+        except Exception:
+            return ""
+        if len(instances) < 2:
+            return ""
+        rows = []
+        any_live = False
+        for i in instances:
+            state = "ModelRisk LIVE" if i.get("modelrisk_functional") else "no add-in"
+            any_live = any_live or bool(i.get("modelrisk_functional"))
+            books = ", ".join(i.get("workbooks") or []) or "(no workbook)"
+            rows.append(f"PID {i.get('pid')}: {books} — {state}")
+        text = " Running Excel instances: " + " | ".join(rows) + "."
+        if any_live:
+            text += (
+                " A LIVE ModelRisk instance exists but the server probed a "
+                "different Excel process — close the extra instance(s) or "
+                "open your workbook in the live one, then retry."
+            )
+        return text
 
     def health(self) -> ModelRiskHealth:
         """Non-mutating health snapshot — probe only, no activation.
@@ -645,6 +673,20 @@ class ModelRiskBridge:
         seed: int = 1,
         save_to: str | None = None,
     ) -> SimulationRunResult:
+        # Read-only mode blocks simulations too: a run mutates workbook
+        # state (recalculation, frozen samples on failure) and writes a
+        # .vmrs next to the user's file. Checked here directly (not via
+        # the Excel bridge) so mocked bridges in tests aren't required
+        # to carry the guard.
+        from modelrisk_mcp.config import read_only_active
+        from modelrisk_mcp.errors import ReadOnlyModeError
+
+        if read_only_active(self._settings):
+            raise ReadOnlyModeError(
+                "Refusing to run a simulation: the server is in read-only "
+                "mode (--read-only / MODELRISK_MCP_READ_ONLY). Reading and "
+                "analysis tools still work."
+            )
         # Bug #20 fix: capture the list of VoseOutput names BEFORE the
         # simulation so we can verify at least one ended up registered
         # in the .vmrs afterwards. Without this, run_simulation

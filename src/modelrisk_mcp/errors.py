@@ -58,3 +58,9 @@ class ModelRiskComputationError(ModelRiskMCPError):
     `#VALUE!`, or a fit returned 'parameter must be a valid Fit
     Object'. Carries the offending expression so the caller can see
     what ModelRisk rejected."""
+
+
+class ReadOnlyModeError(ModelRiskMCPError):
+    """The server is running in read-only mode; write/simulate/save
+    operations are disabled. Launch without --read-only (or unset
+    MODELRISK_MCP_READ_ONLY) to enable them."""
