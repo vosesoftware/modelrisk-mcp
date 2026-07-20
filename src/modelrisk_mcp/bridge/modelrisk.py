@@ -30,6 +30,7 @@ from modelrisk_mcp.bridge.charts import (
     TornadoChartWriter,
 )
 from modelrisk_mcp.bridge.excel import ExcelBridge
+from modelrisk_mcp.bridge.insession import InSessionSampleReader
 from modelrisk_mcp.bridge.mrservice import MrServiceBridge
 from modelrisk_mcp.bridge.name_parser import (
     ExpressionName,
@@ -43,7 +44,12 @@ from modelrisk_mcp.bridge.reports import (
     ExecutiveReportResult,
     default_subtitle,
 )
-from modelrisk_mcp.bridge.results import ResultsReader
+from modelrisk_mcp.bridge.results import (
+    ResultsReader,
+    correlation_matrix_from_samples,
+    sensitivity_from_samples,
+    simulation_result_from_samples,
+)
 from modelrisk_mcp.bridge.simulation import (
     SimulationController,
     SimulationRunResult,
@@ -53,6 +59,7 @@ from modelrisk_mcp.errors import (
     CellReferenceError,
     ModelRiskComputationError,
     ModelRiskNotFunctionalError,
+    ModelRiskNotLoadedError,
     SimulationFailedError,
 )
 from modelrisk_mcp.safety import (
@@ -156,6 +163,13 @@ class ModelRiskBridge:
         self._settings = settings or Settings()
         self._writer_mutex = writer_mutex or WriterMutex()
         self._simulation = simulation or SimulationController(excel)
+        # No-MRService.dll fallback: reads samples from the live Excel
+        # session via VoseSimValue scratch cells (bridge/insession.py).
+        self._insession = InSessionSampleReader(excel)
+        # Iteration count of the last run this process triggered — a
+        # hint for the fallback's store-size detection (always verified
+        # by probe before trusting).
+        self._last_sim_iterations: int | None = None
 
     @property
     def catalogue(self) -> FunctionCatalogue:
@@ -744,6 +758,9 @@ class ModelRiskBridge:
         )
         # Pin the produced file so the existing reader tools find it.
         self._results.set_active_vmrs(result.vmrs_path)
+        # Remember the run size — the in-session fallback uses it as a
+        # (probe-verified) hint for how many iterations to extract.
+        self._last_sim_iterations = result.iterations
 
         # Post-condition verification. Only check names we can
         # statically resolve — ExpressionName outputs (alpha.31)
@@ -792,6 +809,14 @@ class ModelRiskBridge:
                         # lookup_var_id can raise on pathological names;
                         # one bad name doesn't condemn the whole sim.
                         continue
+        except ModelRiskNotLoadedError:
+            # No MRService.dll on this machine — the .vmrs can't be
+            # opened for verification, but that says nothing about the
+            # run itself (the file was produced; results are also
+            # readable in-session via the VoseSimValue fallback).
+            # Failing here would turn every successful no-DLL run into
+            # a bogus "file may be incomplete or corrupt" error.
+            return
         except SimulationFailedError:
             raise
         except Exception as exc:
@@ -1058,11 +1083,29 @@ class ModelRiskBridge:
         self,
         workbook: str | None = None,
         output_names: list[str] | None = None,
+        *,
+        percentiles: tuple[float, ...] | None = None,
     ) -> list[SimulationResult]:
         wb_path, names = self._resolve_workbook_and_outputs(
             workbook, output_names
         )
-        return self._results.get_simulation_results(wb_path, names)
+        try:
+            if percentiles is not None:
+                return self._results.get_simulation_results(
+                    wb_path, names, percentiles=percentiles
+                )
+            return self._results.get_simulation_results(wb_path, names)
+        except ModelRiskNotLoadedError as dll_exc:
+            samples_map = self._insession_samples(workbook, names, dll_exc)
+            if percentiles is not None:
+                return [
+                    simulation_result_from_samples(name, samples, percentiles)
+                    for name, samples in samples_map.items()
+                ]
+            return [
+                simulation_result_from_samples(name, samples)
+                for name, samples in samples_map.items()
+            ]
 
     def get_correlation_matrix(
         self,
@@ -1072,7 +1115,17 @@ class ModelRiskBridge:
         wb_path, resolved_names = self._resolve_workbook_and_outputs(
             workbook, names, include_inputs=True
         )
-        return self._results.get_correlation_matrix(wb_path, resolved_names)
+        try:
+            return self._results.get_correlation_matrix(
+                wb_path, resolved_names
+            )
+        except ModelRiskNotLoadedError as dll_exc:
+            samples_map = self._insession_samples(
+                workbook, resolved_names, dll_exc, include_inputs=True
+            )
+            return correlation_matrix_from_samples(
+                [(n, s) for n, s in samples_map.items()]
+            )
 
     def build_drivers_report(
         self,
@@ -1088,13 +1141,10 @@ class ModelRiskBridge:
         a 'how to read this chart' panel, and tiered recommendations.
         """
         wb_name = workbook or self._excel.get_active_workbook().name
-        wb_path, _ = self._resolve_workbook_and_outputs(wb_name, [output_name])
 
-        # Fetch sensitivity + iteration count.
-        input_names = [i.name for i in self.list_inputs(wb_name)]
-        sensitivity = self._results.get_sensitivity_ranking(
-            output_name, input_names, wb_path,
-        )
+        # Fetch sensitivity + iteration count (fallback-aware: works
+        # without MRService.dll via the in-session reader).
+        sensitivity = self.get_sensitivity_ranking(output_name, wb_name)
 
         if not self._excel.is_connected():
             self._excel.connect()
@@ -1132,8 +1182,7 @@ class ModelRiskBridge:
         # Gather: stats for primary + secondary, raw samples for the
         # histogram, sensitivity ranking for the tornado.
         all_outputs = [primary_output, *list(secondary_outputs or [])]
-        wb_path, _ = self._resolve_workbook_and_outputs(wb_name, all_outputs)
-        stats = self._results.get_simulation_results(wb_path, all_outputs)
+        stats = self.get_simulation_results(wb_name, all_outputs)
         results_by_name = {r.output_name: r for r in stats}
         if primary_output not in results_by_name:
             raise SimulationFailedError(
@@ -1147,16 +1196,13 @@ class ModelRiskBridge:
             if name in results_by_name
         ]
 
-        # Raw samples for the histogram.
-        primary_samples = list(
-            self._results.get_samples(primary_output, wb_path, max_n=10_000)
+        # Raw samples for the histogram (fallback-aware).
+        primary_samples = self.get_samples(
+            primary_output, wb_name, max_n=10_000
         )
 
-        # Sensitivity — input names from the workbook.
-        input_names = [i.name for i in self.list_inputs(wb_name)]
-        sensitivity = self._results.get_sensitivity_ranking(
-            primary_output, input_names, wb_path,
-        )
+        # Sensitivity — fallback-aware.
+        sensitivity = self.get_sensitivity_ranking(primary_output, wb_name)
 
         # Default title / subtitle if not provided.
         effective_title = title or f"Simulation Report — {primary_output}"
@@ -1312,10 +1358,12 @@ class ModelRiskBridge:
                 self.run_simulation(
                     workbook=wb_name, samples=samples, seed=seed,
                 )
-                # Read every output's stats from the just-produced .vmrs.
+                # Read every output's stats from the just-produced .vmrs
+                # (or, without MRService.dll, from the live session).
                 output_names = [o.name for o in self.list_outputs(wb_name)]
-                stats_list = self._results.get_simulation_results(
-                    None, output_names, percentiles=(0.05, 0.50, 0.95),
+                stats_list = self.get_simulation_results(
+                    wb_name, output_names,
+                    percentiles=(0.05, 0.50, 0.95),
                 )
                 outcomes = [
                     ScenarioOutcome(
@@ -1357,7 +1405,24 @@ class ModelRiskBridge:
             candidates.append((o.name, "output"))
         for i in self.list_inputs(wb):
             candidates.append((i.name, "input"))
-        entries = self._results.list_variables(wb_path, candidates)
+        try:
+            entries = self._results.list_variables(wb_path, candidates)
+        except ModelRiskNotLoadedError as dll_exc:
+            kind_by_name = dict(reversed(candidates))
+            samples_map = self._insession_samples(
+                workbook, [n for n, _ in candidates], dll_exc,
+                include_inputs=True,
+            )
+            return [
+                {
+                    "name": name,
+                    "var_id": -1,
+                    "kind": kind_by_name.get(name, "unknown"),
+                    "iterations": len(samples),
+                    "source": "in-session",
+                }
+                for name, samples in samples_map.items()
+            ]
         return [e.to_dict() for e in entries]
 
     def get_samples(
@@ -1369,9 +1434,21 @@ class ModelRiskBridge:
     ) -> list[float]:
         """Raw per-iteration sample array for one variable."""
         wb_path, _ = self._resolve_workbook_and_outputs(workbook, None)
-        samples = self._results.get_samples(
-            output_name, wb_path, max_n=max_n
-        )
+        try:
+            samples = self._results.get_samples(
+                output_name, wb_path, max_n=max_n
+            )
+        except ModelRiskNotLoadedError as dll_exc:
+            samples_map = self._insession_samples(
+                workbook, [output_name], dll_exc,
+                include_inputs=True, max_n=max_n,
+            )
+            if output_name not in samples_map:
+                raise SimulationFailedError(
+                    f"Variable {output_name!r} has no in-session samples. "
+                    "Call list_vmrs_variables to see what's available."
+                ) from dll_exc
+            samples = samples_map[output_name]
         return list(samples)
 
     def get_sensitivity_ranking(
@@ -1382,9 +1459,75 @@ class ModelRiskBridge:
         wb_path, _ = self._resolve_workbook_and_outputs(workbook, None)
         wb = workbook or self._excel.get_active_workbook().name
         input_names = [i.name for i in self.list_inputs(wb)]
-        return self._results.get_sensitivity_ranking(
-            output_name, input_names, wb_path
+        try:
+            return self._results.get_sensitivity_ranking(
+                output_name, input_names, wb_path
+            )
+        except ModelRiskNotLoadedError as dll_exc:
+            samples_map = self._insession_samples(
+                wb, [output_name, *input_names], dll_exc,
+                include_inputs=True,
+            )
+            if output_name not in samples_map:
+                raise SimulationFailedError(
+                    f"Output {output_name!r} has no in-session samples — "
+                    "cannot build a sensitivity ranking."
+                ) from dll_exc
+            out_samples = samples_map.pop(output_name)
+            wanted = set(input_names)
+            return sensitivity_from_samples(
+                output_name,
+                out_samples,
+                [(n, s) for n, s in samples_map.items() if n in wanted],
+            )
+
+    # ------------------------------------------------------------------
+    # In-session fallback plumbing (no MRService.dll — see
+    # bridge/insession.py for the verified VoseSimValue semantics)
+    # ------------------------------------------------------------------
+
+    def _insession_samples(
+        self,
+        workbook: str | None,
+        names: list[str],
+        dll_error: ModelRiskNotLoadedError,
+        *,
+        include_inputs: bool = False,
+        max_n: int = 100_000,
+    ) -> dict[str, tuple[float, ...]]:
+        """Resolve `names` to their VoseOutput / VoseInput wrapper cells
+        and extract per-iteration samples from the live session. Raises
+        SimulationFailedError (chained to the DLL error) when nothing
+        can be read."""
+        wb_name = workbook or self._excel.get_active_workbook().name
+        wanted = set(names)
+        targets: list[tuple[str, str, str]] = []
+        seen: set[str] = set()
+        scans: list[list[ModelRiskOutput] | list[ModelRiskInput]] = [
+            self.list_outputs(wb_name)
+        ]
+        if include_inputs:
+            scans.append(self.list_inputs(wb_name))
+        for scan in scans:
+            for item in scan:
+                if item.name in wanted and item.name not in seen:
+                    targets.append(
+                        (item.name, item.ref.sheet, item.ref.cell)
+                    )
+                    seen.add(item.name)
+        if not targets:
+            raise SimulationFailedError(
+                f"MRService.dll is unavailable ({dll_error}) and none of "
+                f"{names!r} match a VoseOutput/VoseInput cell in "
+                f"{wb_name!r}, so the in-session fallback has nothing to "
+                "read. Update ModelRisk from vosesoftware.com to get "
+                "MRService.dll, or check the variable names."
+            ) from dll_error
+        result = self._insession.read_many(
+            wb_name, targets,
+            max_n=max_n, n_hint=self._last_sim_iterations,
         )
+        return result
 
     def _resolve_workbook_and_outputs(
         self,

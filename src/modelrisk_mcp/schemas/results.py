@@ -20,6 +20,10 @@ class SimulationResult(BaseModel):
     min: float
     max: float
     percentiles: dict[float, float] = Field(default_factory=dict)
+    # "vmrs" = read from the .vmrs file via MRService.dll; the
+    # in-session fallback (no DLL) stamps its own label so callers can
+    # see the numbers are session-bound.
+    source: str = "vmrs"
 
 
 class ScenarioOutcome(BaseModel):
@@ -67,6 +71,7 @@ class CorrelationMatrix(BaseModel):
     pearson: list[list[float | None]] = Field(default_factory=list)
     spearman: list[list[float | None]] = Field(default_factory=list)
     iterations: int = 0
+    source: str = "vmrs"
 
 
 class SensitivityEntry(BaseModel):
@@ -81,6 +86,7 @@ class SensitivityRanking(BaseModel):
     output_name: str
     entries: list[SensitivityEntry] = Field(default_factory=list)
     iterations: int = 0
+    source: str = "vmrs"
 
 
 class SimulationSettingsRequest(BaseModel):

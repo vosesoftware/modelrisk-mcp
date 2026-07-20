@@ -333,6 +333,117 @@ class ResultsReader:
 
 
 # ----------------------------------------------------------------------
+# Sample-array assembly — shared by the .vmrs path and the in-session
+# (no-MRService.dll) fallback, which produces raw sample arrays via
+# VoseSimValue scratch cells and needs the same result shapes.
+# ----------------------------------------------------------------------
+
+
+_INSESSION_SOURCE = "in-session (no MRService.dll; live Excel session)"
+
+
+def simulation_result_from_samples(
+    name: str,
+    samples: Iterable[float],
+    percentiles: tuple[float, ...] = _DEFAULT_PERCENTILES,
+    *,
+    source: str = _INSESSION_SOURCE,
+) -> SimulationResult:
+    """Build a SimulationResult from a raw sample array with numpy.
+
+    Conventions match MRLIB_CalcStatistics: population variance,
+    moment-based skewness, NON-excess kurtosis (normal ≈ 3)."""
+    a = np.asarray(list(samples), dtype=float)
+    if a.size == 0:
+        raise SimulationFailedError(
+            f"No samples available for {name!r} — cannot compute statistics."
+        )
+    mean = float(a.mean())
+    var = float(a.var())  # population variance, as MRLIB reports
+    sd = math.sqrt(var)
+    centred = a - mean
+    skew = float((centred**3).mean() / sd**3) if sd > 0 else None
+    kurt = float((centred**4).mean() / var**2) if var > 0 else None
+    pcts = {
+        p: float(np.percentile(a, p * 100.0)) for p in percentiles
+    }
+    return SimulationResult(
+        output_name=name,
+        iterations=int(a.size),
+        mean=mean,
+        stdev=sd,
+        variance=var,
+        skewness=skew,
+        kurtosis=kurt,
+        min=float(a.min()),
+        max=float(a.max()),
+        percentiles=pcts,
+        source=source,
+    )
+
+
+def correlation_matrix_from_samples(
+    named_samples: list[tuple[str, Iterable[float]]],
+    *,
+    source: str = _INSESSION_SOURCE,
+) -> CorrelationMatrix:
+    """Pearson + Spearman matrices from raw sample arrays (trimmed to
+    the shortest array). Mirrors ResultsReader.get_correlation_matrix."""
+    materialised = [
+        (n, np.asarray(list(s), dtype=float)) for n, s in named_samples
+    ]
+    kept = [n for n, a in materialised if a.size > 0]
+    arrays = [a for _, a in materialised if a.size > 0]
+    if not arrays:
+        return CorrelationMatrix(
+            names=[n for n, _ in materialised], source=source
+        )
+    n = min(a.size for a in arrays)
+    matrix = np.stack([a[:n] for a in arrays])
+    return CorrelationMatrix(
+        names=kept,
+        pearson=_matrix_to_optional_list(_corrcoef(matrix)),
+        spearman=_matrix_to_optional_list(_corrcoef(_rank_matrix(matrix))),
+        iterations=int(n),
+        source=source,
+    )
+
+
+def sensitivity_from_samples(
+    output_name: str,
+    output_samples: Iterable[float],
+    named_inputs: list[tuple[str, Iterable[float]]],
+    *,
+    source: str = _INSESSION_SOURCE,
+) -> SensitivityRanking:
+    """Tornado ranking from raw sample arrays. Mirrors
+    ResultsReader.get_sensitivity_ranking's math exactly."""
+    out_samples = np.asarray(list(output_samples), dtype=float)
+    entries: list[SensitivityEntry] = []
+    for in_name, in_iter in named_inputs:
+        in_samples = np.asarray(list(in_iter), dtype=float)
+        n = min(in_samples.size, out_samples.size)
+        if n < 2:
+            continue
+        entries.append(
+            SensitivityEntry(
+                input_name=in_name,
+                correlation=_spearman_pair(in_samples[:n], out_samples[:n]),
+                regression_coefficient=_standardised_regression_coef(
+                    in_samples[:n], out_samples[:n]
+                ),
+            )
+        )
+    entries.sort(key=lambda e: abs(e.correlation), reverse=True)
+    return SensitivityRanking(
+        output_name=output_name,
+        entries=entries,
+        iterations=int(out_samples.size),
+        source=source,
+    )
+
+
+# ----------------------------------------------------------------------
 # numpy helpers — same as the old implementation
 # ----------------------------------------------------------------------
 
@@ -417,4 +528,9 @@ def _matrix_to_optional_list(matrix: np.ndarray) -> list[list[float | None]]:
     return out
 
 
-__all__ = ["ResultsReader"]
+__all__ = [
+    "ResultsReader",
+    "correlation_matrix_from_samples",
+    "sensitivity_from_samples",
+    "simulation_result_from_samples",
+]
