@@ -4,6 +4,8 @@ All notable changes to ModelRisk MCP. Follows [Keep a Changelog](https://keepach
 
 ## [Unreleased]
 
+## [0.3.12] — 2026-07-20
+
 - **MRService.dll guidance updated: the DLL now ships with ModelRisk.** The current ModelRisk release on vosesoftware.com includes MRService.dll, so the "MRService.dll not found" and bundled-key-rejected errors, the README prerequisites/activation/caveats sections, and the installation/glossary docs now lead with the actual fix — *update ModelRisk to the latest version* — instead of stating the DLL is unavailable (installers up to 9.1.x did not ship it; that historical note is kept so older installs understand what they're seeing). The README's stale suggestion to point `MRSERVICE_DLL_PATH` at Tamara's copy is gone — 7.1.x copies are too old and are rejected with the 0.3.11 version diagnosis.
 
 ## [0.3.11] — 2026-07-20
