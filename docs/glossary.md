@@ -160,7 +160,7 @@ The official discovery service at `registry.modelcontextprotocol.io`. ModelRisk 
 
 ### MRService.dll
 
-Vose's official ModelRisk SDK. ModelRisk MCP calls it via ctypes to read `.vmrs` files directly — much faster than the COM Dispatch surface and immune to ATL CoClass quirks. The DLL ships with ModelRisk; activation is automatic in v0.3.0 via a bundled offline key.
+Vose's official ModelRisk SDK. ModelRisk MCP calls it via ctypes to read `.vmrs` files directly — much faster than the COM Dispatch surface and immune to ATL CoClass quirks. The DLL ships with the current ModelRisk release (installers up to 9.1.x did not include it — update ModelRisk from vosesoftware.com if it's missing); activation is automatic since v0.3.0 via a bundled offline key.
 
 ### Prompt (MCP)
 

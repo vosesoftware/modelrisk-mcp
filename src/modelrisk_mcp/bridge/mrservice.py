@@ -145,7 +145,9 @@ def find_mrservice_dll() -> str | None:
        resolve from that same folder (see `_load`'s `add_dll_directory`), so
        you don't copy the file out — point at it in place.
     2. `MRSERVICE_DLL` — back-compat alias for the same thing.
-    3. The standard ModelRisk install paths.
+    3. The standard ModelRisk install paths. The current ModelRisk release
+       installs MRService.dll there; installers up to 9.1.x did not, so on
+       an older install the fix is updating ModelRisk from vosesoftware.com.
 
     A path that's set but missing is skipped (we fall through), so a stale
     override never hard-fails discovery."""
@@ -223,16 +225,16 @@ class MrServiceBridge:
         if path is None:
             raise ModelRiskNotLoadedError(
                 "MRService.dll not found in the standard ModelRisk install "
-                "paths — current ModelRisk installers (through 9.1.x) do NOT "
-                "ship this DLL, so on a ModelRisk-only machine .vmrs results "
-                "reading is unavailable out of the box. If you have a "
-                "version-matched MRService.dll (7.3.2.1 or newer — e.g. "
-                "obtained from Vose Software, or placed in the ModelRisk "
-                "folder by a newer installer), set MRSERVICE_DLL_PATH to its "
-                "full path. NOTE: older copies shipped with other Vose "
-                "products (e.g. Tamara's 7.1.x) are too old and will not "
-                "work. Only READING .vmrs results is affected; building "
-                "models and running simulations work without it."
+                "paths. FIX: update ModelRisk to the latest version from "
+                "vosesoftware.com — the current release includes "
+                "MRService.dll. (Installers up to 9.1.x did not ship the "
+                "DLL, which is why older installs lack it.) Alternatively, "
+                "set MRSERVICE_DLL_PATH to the full path of an "
+                "MRService.dll of version 7.3.2.1 or newer. NOTE: older "
+                "copies shipped with other Vose products (e.g. Tamara's "
+                "7.1.x) are too old and will not work. Only READING .vmrs "
+                "results is affected; building models and running "
+                "simulations work without it."
             )
         # add_dll_directory makes License.dll resolvable.
         if hasattr(os, "add_dll_directory"):
@@ -386,10 +388,13 @@ class MrServiceBridge:
             raise SimulationFailedError(
                 "Bundled activation key was rejected by MRService.dll — the "
                 "loaded DLL's version is outside what the bundled key covers "
-                "(7.3.2.1-9.2.2.1). Two fixes: (a) point MRSERVICE_DLL_PATH "
-                "at an MRService.dll inside that version range; or (b) set "
-                "MRSERVICE_ACTIVATION_KEY to your own ModelRisk key. Only "
-                "affects READING .vmrs results — simulations still run."
+                "(7.3.2.1-9.2.2.1). Fixes, in order: (a) update ModelRisk "
+                "to the latest version from vosesoftware.com — the current "
+                "release ships an MRService.dll the bundled key accepts; "
+                "(b) point MRSERVICE_DLL_PATH at an MRService.dll inside "
+                "that version range; or (c) set MRSERVICE_ACTIVATION_KEY "
+                "to your own ModelRisk key. Only affects READING .vmrs "
+                "results — simulations still run."
             )
         raise SimulationFailedError(
             "MRService.dll requires activation, but no key was supplied.\n\n"

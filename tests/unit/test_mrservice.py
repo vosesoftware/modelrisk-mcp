@@ -78,6 +78,11 @@ class TestBridgeLifecycle:
         msg = str(exc.value)
         assert "MRService.dll not found" in msg
         assert "MRSERVICE_DLL_PATH" in msg
+        # Primary remedy: the DLL ships with the current ModelRisk
+        # release, so the fix is updating ModelRisk — the message must
+        # lead with that, not imply the DLL is unobtainable.
+        assert "update ModelRisk" in msg
+        assert "vosesoftware.com" in msg
 
     def test_bundled_key_used_when_no_env(
         self, monkeypatch: pytest.MonkeyPatch

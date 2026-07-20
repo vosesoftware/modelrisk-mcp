@@ -8,7 +8,7 @@
   - **Python 3.11, 3.12, or 3.13** (recommended via [`uv`](https://docs.astral.sh/uv/) so it manages Python for you), or
   - The standalone `modelrisk-mcp.exe` from the [latest release](https://github.com/vosesoftware/modelrisk-mcp/releases/latest) — no Python knowledge required.
 
-**Activation.** None required. MRService.dll (the SDK that reads `.vmrs` files) is activated automatically by a bundled offline key. Set `MRSERVICE_ACTIVATION_KEY` only if you want to override the default with your own.
+**Activation.** None required. MRService.dll (the SDK that reads `.vmrs` files) ships with the current ModelRisk release and is activated automatically by a bundled offline key. If the server reports "MRService.dll not found", update ModelRisk to the latest version from [vosesoftware.com](https://www.vosesoftware.com) — installers up to 9.1.x did not include the DLL (only results *reading* is affected; building and simulating work without it). Set `MRSERVICE_ACTIVATION_KEY` only if you want to override the default key with your own.
 
 ## From PyPI
 

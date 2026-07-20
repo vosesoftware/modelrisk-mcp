@@ -79,14 +79,14 @@ Every formula written to Excel is validated against the ModelRisk function catal
 ### Prerequisites
 
 - Windows 10 or 11, 64-bit
-- Excel 2019 or newer with the ModelRisk add-in installed and loaded
+- Excel 2019 or newer with the ModelRisk add-in installed and loaded — **the latest ModelRisk from [vosesoftware.com](https://www.vosesoftware.com) is recommended**: the current release includes MRService.dll, which the results-reading tools need (installers up to 9.1.x did not ship it)
 - One of:
   - Python 3.11+ (recommended via [`uv`](https://docs.astral.sh/uv/))
   - Or the standalone `modelrisk-mcp.exe` from the [latest release](https://github.com/vosesoftware/modelrisk-mcp/releases/latest) — no Python knowledge required
 
-**Activation (results reading):** None required — MRService.dll (the SDK that reads `.vmrs` files) is activated automatically by a bundled offline key. Two env overrides exist for non-standard setups (both only affect *reading* `.vmrs` results; simulations run regardless):
+**Activation (results reading):** None required — MRService.dll (the SDK that reads `.vmrs` files) ships with the current ModelRisk release and is activated automatically by a bundled offline key. If the server reports "MRService.dll not found", update ModelRisk to the latest version from [vosesoftware.com](https://www.vosesoftware.com) — installers up to 9.1.x did not include the DLL. Two env overrides exist for non-standard setups (both only affect *reading* `.vmrs` results; simulations run regardless):
 
-- `MRSERVICE_DLL_PATH` — full path to an MRService.dll if it isn't in the standard ModelRisk folder, **or** if your ModelRisk's MRService is a version the bundled key doesn't cover. Point it at a copy whose version the key accepts (e.g. one under `…\Vose Software\Tamara\MRLibrary\MRService.dll`); its sibling DLLs resolve from that folder, so point at it in place.
+- `MRSERVICE_DLL_PATH` — full path to an MRService.dll if it isn't in the standard ModelRisk folder. Must be version 7.3.2.1 or newer (the bundled key covers 7.3.2.1–9.2.2.1); older copies shipped with other Vose products (e.g. Tamara's 7.1.x) are too old and are rejected with a version diagnosis. Its sibling DLLs resolve from that folder, so point at it in place.
 - `MRSERVICE_ACTIVATION_KEY` — your own activation key, to override the bundled one for any MRService version.
 
 ### Recommended: auto-wire from PyPI
@@ -329,6 +329,7 @@ More: [docs/architecture.md](docs/architecture.md), [docs/com-surface.md](docs/c
 - **Starting ModelRisk is automatic (since 0.3.2).** If no Excel is running when a tool is called, the server starts an attachable Excel and registers the ModelRisk XLL into it, so Vose functions resolve and simulations run. If Excel is already up but the add-in isn't live (e.g. ModelRisk's "Start with Excel" is off), the server auto-activates it before simulating, or returns a clear instruction if it can't. Disable auto-launch with `MODELRISK_AUTO_LAUNCH=0` if you'd rather manage Excel yourself. (Earlier versions required you to open Excel + ModelRisk by hand first and could fail with an opaque "macro may not be available".)
 - **OneDrive-hosted workbooks**: xlwings can fail to resolve the workbook's full path without `ONEDRIVE_COMMERCIAL_WIN` set. The bridge degrades gracefully — name-based operations still work, and `run_simulation` defaults the `.vmrs` save location to the user's Desktop when the workbook folder can't be resolved.
 - **Active simulation results**: `get_simulation_results` reads from the `.vmrs` file produced by the most recent `run_simulation` call, or the most recent sibling `.vmrs` next to the workbook. Use `set_active_vmrs(path)` or `read_vmrs(path)` to point at a specific file.
+- **Results reading on older ModelRisk installs**: reading `.vmrs` results requires MRService.dll, which ships with the current ModelRisk release but was not included in installers up to 9.1.x. If you see "MRService.dll not found", update ModelRisk from [vosesoftware.com](https://www.vosesoftware.com). Building models and running simulations work without the DLL.
 
 ---
 
