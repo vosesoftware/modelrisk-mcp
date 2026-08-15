@@ -16,7 +16,7 @@ prior attempt at a unified-COM design fractured.
                  │ JSON-RPC / stdio (or HTTP)
                  ▼
 ┌──────────────────────────────────┐
-│  FastMCP layer                   │  server.py, tools/, resources/, prompts/
+│  MCP server layer                │  server.py, tools/, resources/, prompts/
 │  — tools, resources, prompts     │
 ├──────────────────────────────────┤
 │  ModelRiskBridge (domain)        │  bridge/modelrisk.py
@@ -37,10 +37,10 @@ prior attempt at a unified-COM design fractured.
 
 ## Layers
 
-### FastMCP layer
+### MCP server layer
 
 Protocol surface. Pure Python. Stateless except for the registered
-FastMCP instance. Tools, resources, and prompts live under
+MCPServer instance (mcp 2.0 SDK). Tools, resources, and prompts live under
 [`src/modelrisk_mcp/server.py`](../src/modelrisk_mcp/server.py),
 [`tools/`](../src/modelrisk_mcp/tools), [`resources/`](../src/modelrisk_mcp/resources),
 and [`prompts/`](../src/modelrisk_mcp/prompts). Nothing in this layer

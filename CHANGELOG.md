@@ -4,6 +4,15 @@ All notable changes to ModelRisk MCP. Follows [Keep a Changelog](https://keepach
 
 ## [Unreleased]
 
+## [0.4.0] — 2026-08-15
+
+### Ported to the mcp 2.0 SDK (`FastMCP` → `MCPServer`)
+
+- **Why now:** a field incident. On any machine where another package upgraded the shared `mcp` dependency to 2.x (e.g. installing a 2.0-based MCP server into the same Python), modelrisk-mcp 0.3.x died at import — `mcp.server.fastmcp` no longer exists in 2.0 — and the MCP client reported the server as disconnected. The 0.3.x dependency spec (`mcp[cli]>=1.2.0`, uncapped) let pip do this silently.
+- **The port:** `server.py` now constructs `mcp.server.MCPServer` (and reports the package version in `serverInfo`); the HTTP entrypoint adapts to 2.0's renamed transport kwargs (`mount_path` → `streamable_http_path`/`sse_path`) and passes the bind host so 2.0's Host-header validation is configured correctly. The `@mcp.tool` / `@mcp.resource` / `@mcp.prompt` surface is unchanged in 2.0, so all 59 tools, 8 resources, and 5 prompts register exactly as before — verified by the test suite and a live streamable-http smoke test (bearer auth 401/200 paths included). Same migration pattern as modelchoice-mcp 0.0.31.
+- **Dependency spec:** `mcp[cli]>=2.0.0,<3` — the `<3` cap is load-bearing; an uncapped range is exactly how 0.3.x broke. `httpx` is now declared explicitly in the dev extra (2.0 no longer pulls it transitively; `starlette.testclient` needs it).
+- **Compatibility:** requires an environment with `mcp>=2`. If you must stay on mcp 1.x, pin `modelrisk-mcp==0.3.13`.
+
 ## [0.3.13] — 2026-07-20
 
 ### No-DLL results fallback — full results reading on ModelRisk-only machines

@@ -1,6 +1,6 @@
 # PyInstaller spec for ModelRisk MCP Server.
 #
-# Produces a single-file Windows .exe that boots the FastMCP server
+# Produces a single-file Windows .exe that boots the MCP server
 # over stdio. The .exe ships:
 # - every tool/resource/prompt module (declared as hidden imports so
 #   PyInstaller doesn't strip them — they're only used via dynamic

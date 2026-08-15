@@ -122,10 +122,15 @@ def _run_http(
 
     from modelrisk_mcp.http_auth import build_auth_middleware
 
+    # mcp 2.0 renamed the path kwargs (1.x `mount_path` is gone) and
+    # added Host-header validation configured via `host` — pass the
+    # bind host so non-loopback deployments validate correctly.
     if transport == "streamable-http":
-        app = mcp.streamable_http_app()
+        app = mcp.streamable_http_app(
+            streamable_http_path=mount_path or "/mcp", host=host,
+        )
     else:
-        app = mcp.sse_app(mount_path=mount_path) if mount_path else mcp.sse_app()
+        app = mcp.sse_app(sse_path=mount_path or "/sse", host=host)
 
     effective_token = token or os.environ.get("MODELRISK_MCP_TOKEN")
     if effective_token:

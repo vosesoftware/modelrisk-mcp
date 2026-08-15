@@ -298,7 +298,7 @@ Three internal layers plus two external integration paths:
                  │ JSON-RPC / stdio (or HTTP)
                  ▼
 ┌──────────────────────────────────┐
-│  FastMCP layer (tools, resources,│
+│  MCP server layer (tools,        │
 │   prompts)                       │
 ├──────────────────────────────────┤
 │  ModelRiskBridge (domain)        │

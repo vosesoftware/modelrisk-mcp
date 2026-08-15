@@ -18,7 +18,8 @@ async def test_seven_resources_registered() -> None:
     static = await mcp.list_resources()
     templated = await mcp.list_resource_templates()
     static_uris = {str(r.uri) for r in static}
-    templated_uris = {t.uriTemplate for t in templated}
+    # mcp 2.0 renamed the wire-camelCase attribute to snake_case.
+    templated_uris = {t.uri_template for t in templated}
     # Static resources.
     assert "modelrisk://functions" in static_uris
     assert "modelrisk://distributions" in static_uris

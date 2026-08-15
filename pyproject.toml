@@ -1,6 +1,6 @@
 [project]
 name = "modelrisk-mcp"
-version = "0.3.13"
+version = "0.4.0"
 description = "Open MCP server bridging Anthropic Claude (and any MCP-compatible client) with the ModelRisk Excel add-in."
 readme = "README.md"
 requires-python = ">=3.11"
@@ -36,7 +36,10 @@ classifiers = [
     "Typing :: Typed",
 ]
 dependencies = [
-    "mcp[cli]>=1.2.0",
+    # 2.0 SDK (MCPServer). The <3 cap matters: an uncapped range is how
+    # 0.3.x broke — a co-installed package upgraded `mcp` past the
+    # version our imports were written for.
+    "mcp[cli]>=2.0.0,<3",
     "numpy>=1.26",
     "pydantic>=2.6",
     "pyyaml>=6.0",
@@ -52,6 +55,9 @@ dev = [
     "ruff>=0.4",
     "mypy>=1.10",
     "pyinstaller>=6.0",
+    # starlette.testclient backend (was transitively present via mcp 1.x;
+    # the 2.0 SDK no longer pulls it).
+    "httpx>=0.27",
 ]
 
 [project.scripts]
