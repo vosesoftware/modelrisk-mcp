@@ -121,7 +121,7 @@ uv run python -m modelrisk_mcp     # speaks MCP over stdio
 
 ### Standalone `.exe`
 
-Download `modelrisk-mcp.exe` from [Releases](https://github.com/vosesoftware/modelrisk-mcp/releases/latest), drop it anywhere on disk, and point Claude Desktop at it. See [docs/claude-desktop.md](docs/claude-desktop.md).
+Download `modelrisk-mcp.exe` from [Releases](https://github.com/vosesoftware/modelrisk-mcp/releases/latest), drop it where you want to keep it, then run `.\modelrisk-mcp.exe install` from a terminal in that folder. It registers that exe, at that path, with Claude Desktop and Claude Code (0.4.1 and later; older exes wrote an entry that could not start). To wire it by hand instead, see [docs/claude-desktop.md](docs/claude-desktop.md).
 
 ---
 

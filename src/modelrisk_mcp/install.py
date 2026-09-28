@@ -118,12 +118,20 @@ def resolve_server_entry() -> dict[str, Any]:
     """Return the JSON object that should be written for our server.
 
     Strategy:
-    1. Prefer the absolute path to the installed `modelrisk-mcp` exe
+    1. Running as the standalone exe (PyInstaller sets `sys.frozen`):
+       register that exe, with no args. There `sys.executable` is the
+       exe itself, which takes no interpreter flags, so fallback 3 made
+       the registered server exit 2 at every start. It also wins over a
+       pip-installed `modelrisk-mcp` on PATH: install registers the
+       program you ran.
+    2. Prefer the absolute path to the installed `modelrisk-mcp` exe
        found on PATH. Most robust against PATH not being set up for
        Claude's spawned subprocess.
-    2. Fall back to running this Python interpreter as `-m modelrisk_mcp`.
+    3. Fall back to running this Python interpreter as `-m modelrisk_mcp`.
        Works regardless of installed-shim status.
     """
+    if getattr(sys, "frozen", False):
+        return {"command": sys.executable}
     exe = shutil.which("modelrisk-mcp")
     if exe:
         return {"command": exe}

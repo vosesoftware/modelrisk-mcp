@@ -8,6 +8,7 @@ developer's actual setup.
 from __future__ import annotations
 
 import json
+import os
 from pathlib import Path
 
 import pytest
@@ -39,6 +40,36 @@ class TestResolveServerEntry:
         # Either the exe path OR sys.executable + args fallback
         if "args" in entry:
             assert entry["args"] == ["-m", "modelrisk_mcp"]
+
+    def test_frozen_exe_registers_itself_without_args(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """The standalone PyInstaller exe is its own interpreter and its
+        parser has no `-m`: the `-m modelrisk_mcp` fallback made every
+        Claude start exit 2. Frozen, it registers the exe it runs from,
+        even when a pip-installed `modelrisk-mcp` is on PATH."""
+        import modelrisk_mcp.install as install_mod
+
+        exe = r"C:\Tools\modelrisk-mcp.exe"
+        monkeypatch.setattr(install_mod.sys, "frozen", True, raising=False)
+        monkeypatch.setattr(install_mod.sys, "executable", exe)
+        monkeypatch.setattr(
+            install_mod.shutil, "which",
+            lambda name: r"C:\Python\Scripts\modelrisk-mcp.exe",
+        )
+        assert resolve_server_entry() == {"command": exe}
+
+    def test_interpreter_fallback_unchanged_when_not_frozen(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        import modelrisk_mcp.install as install_mod
+
+        monkeypatch.delattr(install_mod.sys, "frozen", raising=False)
+        monkeypatch.setattr(install_mod.shutil, "which", lambda name: None)
+        assert resolve_server_entry() == {
+            "command": install_mod.sys.executable,
+            "args": ["-m", "modelrisk_mcp"],
+        }
 
 
 # ----------------------------------------------------------------------
@@ -290,6 +321,27 @@ class TestCliDispatch:
         monkeypatch.setattr(main_mod, "_run_stdio", fake_stdio)
         main_mod.main([])
         assert called.get("stdio") is True
+
+    def test_legacy_module_args_still_serve(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """The 0.4.0 exe's `install` wrote `"args": ["-m", "modelrisk_mcp"]`
+        after the exe, and some hand-written configs copy those args onto
+        the exe too. Those configs must serve once the exe is updated,
+        not die in argparse. Flags after the pair still apply."""
+        from modelrisk_mcp import __main__ as main_mod
+
+        called: dict[str, bool] = {}
+
+        def fake_stdio() -> None:
+            called["stdio"] = True
+
+        monkeypatch.setattr(main_mod, "_run_stdio", fake_stdio)
+        # Recorded so teardown removes what --read-only sets below.
+        monkeypatch.setenv("MODELRISK_MCP_READ_ONLY", "0")
+        main_mod.main(["-m", "modelrisk_mcp", "--read-only"])
+        assert called.get("stdio") is True
+        assert os.environ["MODELRISK_MCP_READ_ONLY"] == "1"
 
     def test_uninstall_subcommand_runs(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch

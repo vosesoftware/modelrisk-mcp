@@ -150,6 +150,13 @@ def main(argv: list[str] | None = None) -> None:
     if argv is None:
         argv = sys.argv[1:]
 
+    # The 0.4.0 standalone exe's `install` registered Python's
+    # `-m modelrisk_mcp` after the exe, and hand-written configs copy it
+    # there too. The exe *is* that module, so the pair is a no-op; without
+    # this, those configs die in argparse with exit 2 at every start.
+    if argv[:2] == ["-m", "modelrisk_mcp"]:
+        argv = argv[2:]
+
     # Subcommand dispatch — we keep the legacy "no subcommand = serve"
     # behaviour because Claude Desktop configs in the wild say
     # `"command": "modelrisk-mcp"` with no args. Only intercept the
