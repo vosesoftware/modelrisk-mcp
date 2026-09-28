@@ -4,6 +4,8 @@ All notable changes to ModelRisk MCP. Follows [Keep a Changelog](https://keepach
 
 ## [Unreleased]
 
+## [0.4.1] — 2026-09-28
+
 ### Fixed
 
 - **`modelrisk-mcp.exe install` registered a server that could not start.** Run from the standalone exe (the GitHub release download) while that exe was not on PATH, `install` wrote the Python fallback `"args": ["-m", "modelrisk_mcp"]` after the exe. The exe takes no interpreter flags, so Claude Desktop and Claude Code saw the server exit with code 2 ("unrecognized arguments") at every start. The frozen exe now registers itself with no args, ahead of any `modelrisk-mcp` on PATH, so `install` registers the program you ran. The README's standalone-exe section now points to `install` instead of a hand-edited config.
