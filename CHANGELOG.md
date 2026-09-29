@@ -4,6 +4,8 @@ All notable changes to ModelRisk MCP. Follows [Keep a Changelog](https://keepach
 
 ## [Unreleased]
 
+## [0.4.2] — 2026-09-29
+
 ### Fixed
 
 - **`install` now finds the Microsoft Store build of Claude Desktop.** The Store (MSIX) build keeps its settings in its package folder, `%LOCALAPPDATA%\Packages\Claude_<publisher>\LocalCache\Roaming\Claude`. Windows shows that folder as `%APPDATA%\Claude` only to programs running inside the Claude package, so `install` run from a normal terminal, or from Excel, reported Claude Desktop as not installed and never wired it, while a run from inside Claude appeared to work. `install` now looks in the package folder first and writes the file the Store app reads. If a classic install also exists, it is a second target, "Claude Desktop (classic install)".
