@@ -60,7 +60,7 @@ The CHANGELOG entry under the new version header gets the user-facing summary.
 
 The user has Microsoft Store Python at `C:\Users\timou\AppData\Local\Python\pythoncore-3.14-64\python.exe`. The `python` command alias is intercepted by Windows App Execution Aliases and goes to the Store stub instead of the real install. **Always use `py -m modelrisk_mcp ...` or the full path, never bare `python -m ...`.**
 
-The user also has two Claude Desktop installs (regular + MS Store packaged). Both share `%APPDATA%\Claude\` via Windows file virtualisation, so a single config write reaches both.
+⛔ **Corrected 2026-09-29: the Store (MSIX) Claude Desktop does NOT share `%APPDATA%\Claude\`.** Its settings live in `%LOCALAPPDATA%\Packages\Claude_<publisher>\LocalCache\Roaming\Claude\`. Windows shows that folder as `%APPDATA%\Claude` only to processes INSIDE the Claude package, which includes every shell of a Claude Code session run from the desktop app. So a check made from such a session sees the folder and misleads you; Excel and ordinary terminals do not see it. Check the outside view with a WMI-started process (`Invoke-CimMethod Win32_Process -MethodName Create`). `install.py:_claude_desktop_store_dir` handles it.
 
 ## Stale-bug-report pattern
 

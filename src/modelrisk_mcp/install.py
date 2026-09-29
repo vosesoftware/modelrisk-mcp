@@ -7,7 +7,11 @@ missing commas, accidental clobbering of other servers' entries.
 
 `modelrisk-mcp install` does the wiring on the user's behalf:
 
-- Detects which MCP clients are installed (Claude Desktop, Claude Code).
+- Detects which MCP clients are installed: Claude Desktop (including the
+  Microsoft Store build, whose settings live in its package folder),
+  Claude Code, Cursor, VS Code, Windsurf, Gemini CLI and LM Studio.
+- `status` reports where each one stands, for tools (the ModelRisk ribbon)
+  that show it rather than re-derive every client's file layout.
 - Backs up each existing config.
 - Merges in the `modelrisk` server entry (preserves any other servers).
 - Picks the right `command` path: the absolute path to the installed
@@ -45,34 +49,72 @@ class ClientTarget:
 
     name: str
     config_path: Path
-    # JSON key holding the server map. Claude Desktop uses top-level
-    # `mcpServers` in claude_desktop_config.json; Claude Code uses
-    # top-level `mcpServers` in ~/.claude.json.
+    # JSON key holding the server map: `mcpServers` for Claude Desktop,
+    # Claude Code (top level of ~/.claude.json), Cursor, Windsurf, Gemini
+    # CLI and LM Studio; `servers` for VS Code.
     servers_key: str = "mcpServers"
     # "json" = merge into config_path directly. "claude-cli" = prefer
     # shelling out to `claude mcp add/remove` (the CLI owns the schema),
     # falling back to a direct JSON merge into config_path.
     strategy: str = "json"
+    # Stable id for `--client` and `status --json` ("claude-desktop", ...).
+    id: str = ""
+    # Fields the client needs in every entry besides command/args: VS Code
+    # wants "type": "stdio".
+    entry_extra: tuple[tuple[str, str], ...] = ()
+
+
+def _home() -> Path:
+    return Path.home()
+
+
+def _roaming() -> Path:
+    """Per-user application data: %APPDATA% on Windows."""
+    if sys.platform == "win32":
+        appdata = os.environ.get("APPDATA")
+        return Path(appdata) if appdata else _home() / "AppData" / "Roaming"
+    if sys.platform == "darwin":
+        return _home() / "Library" / "Application Support"
+    return Path(os.environ.get("XDG_CONFIG_HOME") or _home() / ".config")
 
 
 def _claude_desktop_config_path() -> Path:
-    """Windows: %APPDATA%\\Claude\\claude_desktop_config.json.
-    macOS: ~/Library/Application Support/Claude/claude_desktop_config.json.
-    Linux: not officially supported by Claude Desktop."""
-    if sys.platform == "win32":
-        appdata = os.environ.get("APPDATA")
-        if appdata:
-            return Path(appdata) / "Claude" / "claude_desktop_config.json"
-    elif sys.platform == "darwin":
-        return (
-            Path.home()
-            / "Library"
-            / "Application Support"
-            / "Claude"
-            / "claude_desktop_config.json"
-        )
-    # Fallback for development on other platforms — best effort.
-    return Path.home() / ".config" / "Claude" / "claude_desktop_config.json"
+    """Claude Desktop's classic (non-Store) settings file: %APPDATA%\\Claude\\
+    on Windows, ~/Library/Application Support/Claude/ on macOS."""
+    return _roaming() / "Claude" / "claude_desktop_config.json"
+
+
+def _claude_desktop_store_dir() -> Path | None:
+    """The Microsoft Store (MSIX) build's settings folder, when it exists.
+
+    ⛔ The Store build keeps its settings in its package folder,
+    %LOCALAPPDATA%\\Packages\\Claude_<publisher>\\LocalCache\\Roaming\\Claude.
+    Windows shows that folder as %APPDATA%\\Claude ONLY to processes inside
+    the Claude package. Excel, a terminal, and this installer run from either
+    see no %APPDATA%\\Claude at all, and a file written there is one the Store
+    app never reads. Measured 2026-09-29: an install run from Excel reached
+    Claude Code and reported Claude Desktop as not installed.
+    """
+    if sys.platform != "win32":
+        return None
+    local = os.environ.get("LOCALAPPDATA")
+    packages = Path(local) / "Packages" if local else None
+    if packages is None or not packages.is_dir():
+        return None
+    for package in sorted(packages.glob("Claude_*")):
+        folder = package / "LocalCache" / "Roaming" / "Claude"
+        if folder.is_dir():
+            return folder
+    return None
+
+
+def _same_folder(a: Path, b: Path) -> bool:
+    """Inside the Claude package the two Claude Desktop folders are ONE
+    folder seen twice; this keeps them from becoming two targets."""
+    try:
+        return os.path.samefile(a, b)
+    except OSError:
+        return False
 
 
 def _claude_code_config_path() -> Path:
@@ -82,7 +124,7 @@ def _claude_code_config_path() -> Path:
     silently ignored for MCP registration. Writing there produced a
     green 'added' line and a dead server (field bug report,
     2026-07-20)."""
-    return Path.home() / ".claude.json"
+    return _home() / ".claude.json"
 
 
 def _claude_cli() -> str | None:
@@ -90,23 +132,48 @@ def _claude_cli() -> str | None:
     return shutil.which("claude")
 
 
-def discover_clients() -> list[ClientTarget]:
-    """Return only the clients that actually appear to be installed.
+def known_clients() -> list[ClientTarget]:
+    """Every client this installer can register with, installed or not, in
+    the order `status` lists them. `discover_clients` keeps the installed."""
+    home = _home()
+    clients: list[ClientTarget] = []
+    classic = _claude_desktop_config_path()
+    store = _claude_desktop_store_dir()
+    if store is not None:
+        clients.append(ClientTarget(
+            "Claude Desktop", store / "claude_desktop_config.json", id="claude-desktop"))
+        if classic.parent.is_dir() and not _same_folder(classic.parent, store):
+            clients.append(ClientTarget(
+                "Claude Desktop (classic install)", classic, id="claude-desktop-classic"))
+    else:
+        clients.append(ClientTarget("Claude Desktop", classic, id="claude-desktop"))
+    clients.append(ClientTarget(
+        "Claude Code", _claude_code_config_path(), strategy="claude-cli", id="claude-code"))
+    clients.append(ClientTarget("Cursor", home / ".cursor" / "mcp.json", id="cursor"))
+    clients.append(ClientTarget(
+        "VS Code", _roaming() / "Code" / "User" / "mcp.json", servers_key="servers",
+        id="vscode", entry_extra=(("type", "stdio"),)))
+    clients.append(ClientTarget(
+        "Windsurf", home / ".codeium" / "windsurf" / "mcp_config.json", id="windsurf"))
+    clients.append(ClientTarget("Gemini CLI", home / ".gemini" / "settings.json", id="gemini-cli"))
+    clients.append(ClientTarget("LM Studio", home / ".lmstudio" / "mcp.json", id="lm-studio"))
+    return clients
 
-    Claude Desktop: its config directory exists.
-    Claude Code: `~/.claude.json` exists OR the `claude` CLI is on PATH
-    (the old check — `~/.claude/` existing — mis-detected Claude Code
-    via a directory other tools also create)."""
-    targets: list[ClientTarget] = []
-    desktop = ClientTarget("Claude Desktop", _claude_desktop_config_path())
-    if desktop.config_path.parent.is_dir():
-        targets.append(desktop)
-    code_cfg = _claude_code_config_path()
-    if code_cfg.is_file() or _claude_cli():
-        targets.append(
-            ClientTarget("Claude Code", code_cfg, strategy="claude-cli")
-        )
-    return targets
+
+def is_installed(target: ClientTarget) -> bool:
+    """A client counts as installed when the folder holding its settings
+    exists: every one of them creates it on first run. Claude Code:
+    `~/.claude.json` exists OR the `claude` CLI is on PATH (the old check —
+    `~/.claude/` existing — mis-detected Claude Code via a directory other
+    tools also create)."""
+    if target.strategy == "claude-cli":
+        return target.config_path.is_file() or _claude_cli() is not None
+    return target.config_path.parent.is_dir()
+
+
+def discover_clients() -> list[ClientTarget]:
+    """Return only the clients that actually appear to be installed."""
+    return [t for t in known_clients() if is_installed(t)]
 
 
 # ---------------------------------------------------------------------------
@@ -221,14 +288,14 @@ def install(
     if not targets:
         raise InstallError(
             "No supported MCP clients detected on this machine. Supported: "
-            "Claude Desktop (%APPDATA%/Claude/), Claude Code (~/.claude/)."
+            + ", ".join(dict.fromkeys(t.name for t in known_clients())) + "."
         )
     entry = server_entry if server_entry is not None else resolve_server_entry()
     results: list[InstallResult] = []
     for target in targets:
         try:
             results.append(
-                _install_one(target, server_name, entry, force=force)
+                _install_one(target, server_name, {**dict(target.entry_extra), **entry}, force=force)
             )
         except InstallError as exc:
             results.append(
@@ -240,6 +307,67 @@ def install(
                 )
             )
     return results
+
+
+def select_clients(ids: list[str]) -> list[ClientTarget]:
+    """The installed clients named by id (`--client`), in the order given.
+    An id that is unknown, or names a client that is not installed, is an
+    error rather than a silent skip."""
+    installed = {t.id: t for t in discover_clients()}
+    known = {t.id for t in known_clients()}
+    chosen: list[ClientTarget] = []
+    for cid in ids:
+        if cid not in known:
+            raise InstallError(
+                f"Unknown client {cid!r}. Known: {', '.join(sorted(known))}.")
+        if cid not in installed:
+            raise InstallError(f"{cid!r} is not installed on this machine.")
+        chosen.append(installed[cid])
+    return chosen
+
+
+def _entry_state(target: ClientTarget, server_name: str) -> tuple[str, str | None]:
+    """Where one installed client stands: ("not_added" | "added" | "broken"
+    | "unreadable", the command its entry starts)."""
+    if not target.config_path.is_file():
+        return "not_added", None
+    try:
+        data = _read_config(target.config_path)
+    except InstallError:
+        return "unreadable", None
+    servers = data.get(target.servers_key)
+    if not isinstance(servers, dict) or server_name not in servers:
+        return "not_added", None
+    entry = servers[server_name]
+    command = entry.get("command") if isinstance(entry, dict) else None
+    if not isinstance(command, str) or not command.strip():
+        return "broken", None
+    # Only an absolute path can be checked: a bare command ("uvx") is found
+    # on PATH by the client, not by us.
+    if Path(command).is_absolute() and not Path(command).exists():
+        return "broken", command
+    return "added", command
+
+
+def status(server_name: str = _DEFAULT_SERVER_NAME) -> list[dict[str, Any]]:
+    """Where every known client stands, for `modelrisk-mcp status --json`.
+
+    The ModelRisk ribbon's Connect to AI window reads this rather than
+    re-deriving each client's file layout: one place knows where the files
+    are, the same one that writes them."""
+    rows: list[dict[str, Any]] = []
+    for target in known_clients():
+        installed = is_installed(target)
+        state, command = _entry_state(target, server_name) if installed else ("not_installed", None)
+        rows.append({
+            "id": target.id,
+            "name": target.name,
+            "installed": installed,
+            "config_path": str(target.config_path),
+            "state": state,
+            "command": command,
+        })
+    return rows
 
 
 def uninstall(
@@ -434,6 +562,10 @@ __all__ = [
     "InstallResult",
     "discover_clients",
     "install",
+    "is_installed",
+    "known_clients",
     "resolve_server_entry",
+    "select_clients",
+    "status",
     "uninstall",
 ]

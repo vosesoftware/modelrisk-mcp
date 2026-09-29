@@ -4,6 +4,16 @@ All notable changes to ModelRisk MCP. Follows [Keep a Changelog](https://keepach
 
 ## [Unreleased]
 
+### Fixed
+
+- **`install` now finds the Microsoft Store build of Claude Desktop.** The Store (MSIX) build keeps its settings in its package folder, `%LOCALAPPDATA%\Packages\Claude_<publisher>\LocalCache\Roaming\Claude`. Windows shows that folder as `%APPDATA%\Claude` only to programs running inside the Claude package, so `install` run from a normal terminal, or from Excel, reported Claude Desktop as not installed and never wired it, while a run from inside Claude appeared to work. `install` now looks in the package folder first and writes the file the Store app reads. If a classic install also exists, it is a second target, "Claude Desktop (classic install)".
+
+### Added
+
+- **More MCP clients:** `install` and `uninstall` also wire **Cursor** (`~/.cursor/mcp.json`), **VS Code** (`mcp.json` in the user profile folder, under `servers`, with `"type": "stdio"`), **Windsurf** (`~/.codeium/windsurf/mcp_config.json`), **Gemini CLI** (`~/.gemini/settings.json`) and **LM Studio** (`~/.lmstudio/mcp.json`), each when its settings folder exists.
+- **`--client ID`** (repeatable) on `install` and `uninstall` limits them to the named clients; an unknown id, or one that is not installed, is an error rather than a silent skip.
+- **`modelrisk-mcp status [--json]`** lists every known client: whether it is installed, where its settings are, and whether the server is `added`, `not_added`, `broken` (its program is gone) or `unreadable` (invalid JSON). `--json` is a versioned contract (`"version": 1`); the ModelRisk ribbon's Connect to AI window reads it instead of re-deriving each client's file layout.
+
 ## [0.4.1] — 2026-09-28
 
 ### Fixed

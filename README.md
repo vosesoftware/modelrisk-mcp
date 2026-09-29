@@ -93,10 +93,10 @@ Every formula written to Excel is validated against the ModelRisk function catal
 
 ```powershell
 pip install modelrisk-mcp
-modelrisk-mcp install      # adds the server to Claude Desktop / Claude Code config
+modelrisk-mcp install      # adds the server to every MCP app it finds
 ```
 
-Then **restart Claude Desktop**. `modelrisk-mcp install` edits `claude_desktop_config.json` for you (backing it up first) and works on every current Claude version. (Excel + a licensed ModelRisk add-in are still required — that's the product itself.)
+Then **restart the apps it lists**. `modelrisk-mcp install` finds Claude Desktop (including the Microsoft Store build), Claude Code, Cursor, VS Code, Windsurf, Gemini CLI and LM Studio, backs up each settings file and adds the server beside anything already there. `modelrisk-mcp status` shows where each app stands; `--client cursor` (repeatable) limits install or uninstall to the apps you name. (Excel + a licensed ModelRisk add-in are still required — that's the product itself.)
 
 ### One-click `.mcpb` (Claude Desktop Extension)
 

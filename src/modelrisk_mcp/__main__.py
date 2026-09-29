@@ -165,6 +165,8 @@ def main(argv: list[str] | None = None) -> None:
         return _run_install(
             cast(Literal["install", "uninstall"], argv[0]), argv[1:]
         )
+    if argv and argv[0] == "status":
+        return _run_status(argv[1:])
     if argv and argv[0] == "serve":
         argv = argv[1:]  # `modelrisk-mcp serve --transport=stdio` works too
 
@@ -200,12 +202,24 @@ def _run_install(mode: Literal["install", "uninstall"], argv: list[str]) -> None
         prog=f"modelrisk-mcp {mode}",
         description=(
             "Add the modelrisk MCP server entry to every detected MCP "
-            "client's config (Claude Desktop, Claude Code). Backs up "
-            "existing configs before writing."
+            "client's config (Claude Desktop, Claude Code, Cursor, VS Code, "
+            "Windsurf, Gemini CLI, LM Studio), or to the ones named with "
+            "--client. Backs up existing configs before writing."
             if mode == "install"
             else
             "Remove the modelrisk MCP server entry from every detected "
-            "MCP client's config. Idempotent."
+            "MCP client's config, or from the ones named with --client. "
+            "Idempotent."
+        ),
+    )
+    parser.add_argument(
+        "--client",
+        action="append",
+        metavar="ID",
+        help=(
+            "Only this client (repeatable): claude-desktop, claude-code, "
+            "cursor, vscode, windsurf, gemini-cli, lm-studio. "
+            "`modelrisk-mcp status` lists them."
         ),
     )
     parser.add_argument(
@@ -230,12 +244,13 @@ def _run_install(mode: Literal["install", "uninstall"], argv: list[str]) -> None
     args = parser.parse_args(argv)
 
     try:
+        clients = install_mod.select_clients(args.client) if args.client else None
         if mode == "install":
             results = install_mod.install(
-                server_name=args.name, force=args.force,
+                server_name=args.name, clients=clients, force=args.force,
             )
         else:
-            results = install_mod.uninstall(server_name=args.name)
+            results = install_mod.uninstall(server_name=args.name, clients=clients)
     except install_mod.InstallError as exc:
         print(f"error: {exc}", file=sys.stderr)
         raise SystemExit(1) from exc
@@ -258,8 +273,41 @@ def _run_install(mode: Literal["install", "uninstall"], argv: list[str]) -> None
             exit_code = 1
     if mode == "install":
         print()
-        print("Restart Claude Desktop / Claude Code to pick up the new server.")
+        print("Restart the apps above to pick up the new server.")
     raise SystemExit(exit_code)
+
+
+def _run_status(argv: list[str]) -> None:
+    """`modelrisk-mcp status [--json]`: every known MCP client, whether it is
+    installed, and whether the server is registered in it. `--json` is the
+    contract the ModelRisk ribbon reads; its "version" moves only when a
+    field changes meaning."""
+    import json
+
+    from modelrisk_mcp import install as install_mod
+
+    parser = argparse.ArgumentParser(
+        prog="modelrisk-mcp status",
+        description="Where each MCP client on this machine stands with this server.",
+    )
+    parser.add_argument("--name", default="modelrisk", help="Server name to look for. Default: 'modelrisk'.")
+    parser.add_argument("--json", action="store_true", help="Machine-readable output.")
+    args = parser.parse_args(argv)
+
+    rows = install_mod.status(server_name=args.name)
+    if args.json:
+        print(json.dumps({
+            "version": 1,
+            "server": args.name,
+            "entry": install_mod.resolve_server_entry(),
+            "clients": rows,
+        }))
+        raise SystemExit(0)
+    for r in rows:
+        print(f"  {r['id']:<24} {r['state']:<14} {r['name']}")
+        if r["installed"]:
+            print(f"      {r['config_path']}")
+    raise SystemExit(0)
 
 
 if __name__ == "__main__":
