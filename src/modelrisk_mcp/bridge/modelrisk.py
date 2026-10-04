@@ -746,10 +746,11 @@ class ModelRiskBridge:
         #
         # What we believed broke originally (alpha.17 era) was almost
         # certainly bug #29 (XLL commands not registered), which
-        # we fixed properly in alpha.27 via `Application.RegisterXLL`.
-        # With #29 fixed, the XLL's auto-scan behaviour works
-        # correctly. Dropping the alpha.18 pre-populate makes
-        # expression-named outputs register too.
+        # `ensure_modelrisk_functional()` above now covers: it
+        # registers the add-in only when a Vose function does not
+        # resolve, never on a live one. With #29 fixed, the XLL's
+        # auto-scan behaviour works correctly. Dropping the alpha.18
+        # pre-populate makes expression-named outputs register too.
         result = self._simulation.run_simulation(
             workbook_name=workbook,
             samples=samples,

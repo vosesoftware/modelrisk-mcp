@@ -99,6 +99,52 @@ class TestRunSimulationToolPassthrough:
         with pytest.raises(SimulationFailedError, match="nope"):
             simulation.run_simulation()
 
+    def test_rebuild_note_is_returned(self, mock_bridge: MagicMock) -> None:
+        mock_bridge.run_simulation.return_value = SimulationRunResult(
+            workbook_name="b.xlsx",
+            vmrs_path=r"C:\models\b.vmrs",
+            iterations=1000,
+            note="ModelRisk's save returned the results of 'a.xlsx'",
+        )
+        result = simulation.run_simulation(workbook_name="b.xlsx")
+        assert result.note == "ModelRisk's save returned the results of 'a.xlsx'"
+
+
+class TestErrorsReachTheClient:
+    """The mcp 2.x SDK shows the client only `Error executing tool <name>`
+    for an exception that is not a ToolError. Every run_simulation failure
+    on 2026-10-03 arrived that way, with its explanation dropped."""
+
+    async def test_simulation_failure_message_reaches_the_client(
+        self, mock_bridge: MagicMock
+    ) -> None:
+        from mcp.server.mcpserver.exceptions import ToolError, UnexpectedToolError
+
+        from modelrisk_mcp.errors import SimulationFailedError
+        from modelrisk_mcp.server import mcp
+
+        mock_bridge.run_simulation.side_effect = SimulationFailedError(
+            "ModelRisk's save returned the results of 'a.xlsx'"
+        )
+        with pytest.raises(ToolError) as exc:
+            await mcp.call_tool("run_simulation", {"workbook_name": "b.xlsx"})
+
+        assert not isinstance(exc.value, UnexpectedToolError)
+        assert "the results of 'a.xlsx'" in str(exc.value)
+
+    async def test_conflicting_samples_message_reaches_the_client(
+        self, mock_bridge: MagicMock
+    ) -> None:
+        from mcp.server.mcpserver.exceptions import ToolError, UnexpectedToolError
+
+        from modelrisk_mcp.server import mcp
+
+        with pytest.raises(ToolError) as exc:
+            await mcp.call_tool("run_simulation", {"samples": 10, "iterations": 20})
+
+        assert not isinstance(exc.value, UnexpectedToolError)
+        assert "samples=10" in str(exc.value)
+
 
 class TestSamplesValidation:
     """Pydantic validates `samples` to ge=1, le=1_000_000. The tool
