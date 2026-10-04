@@ -36,6 +36,14 @@ when its `IModelRiskSimulation::StartSimulation` and
    viewer handed back another run, rebuild the `.vmrs` from the
    workbook's own ModelRisk run file (`bridge/vmrs_file.py`).
 
+`engine="turbo"` replaces step 1 with ModelRisk's Turbo command,
+**VoseStartFastSimulation**, after the same VoseSetSimulOptions12 call:
+Turbo reads its samples and seed from those options. Turbo cannot
+evaluate every function, so the engine's own check runs first on a saved
+copy of the workbook, and the classic engine runs instead when Turbo
+cannot run it. The command's message boxes are answered while it runs
+(`bridge/turbo.py`). Its run file is `f<hWndExcel>vsmre_<stem>.dmr`.
+
 References:
 - VoseStartSimulCustom12 export: ModelRiskCloude/XllAddIn.cpp:210
 - VoseGetDataSZ12 export:        ModelRiskCloude/XllAddIn.cpp:207
@@ -43,17 +51,22 @@ References:
 - Save handler:                  ModelRiskCloude/SimulationObj_VBA.cpp:805
 - Viewer's save handler:         ModelRiskResultsViewer/simul_funcs_custom.cpp:788
 - Options packing format:        ModelRiskAtl/SimulationObj.cpp:94
+- Turbo command and run:         ModelRiskCloude/simul_funcs.cpp:605, MREngine.cpp:1024
 """
 
 from __future__ import annotations
 
 import os
 import re
+import shutil
+import tempfile
+import time
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
+from modelrisk_mcp.bridge import turbo
 from modelrisk_mcp.bridge.vmrs_file import (
     ResultsHeader,
     read_dmr_header,
@@ -131,8 +144,11 @@ class SimulationRunResult:
     iterations: int
     options: SimulationOptions = field(default_factory=SimulationOptions)
     # Set when ModelRisk's save handed back another run and the .vmrs was
-    # rebuilt from this run's own file (SimulationController._save_results).
+    # rebuilt from this run's own file (SimulationController._save_results),
+    # or when Turbo was asked for and the classic engine ran instead.
     note: str | None = None
+    # The engine whose run was saved: "classic" or "turbo".
+    engine: str = "classic"
 
 
 # ---------------------------------------------------------------------------
@@ -152,15 +168,28 @@ _CMD_GET_DATA_SZ = "VoseGetDataSZ12"
 # [SeedFixed]/[seed0] are parsed but ignored by the twister -> Random mode ->
 # non-reproducible streams (AB#2742; verified end-to-end against the engine oracle).
 _CMD_SET_SIM_OPTS = "VoseSetSimulOptions12"
+# The Turbo engine's run of the active workbook (simul_funcs.cpp:605). It
+# takes no options and returns 1 whatever happens; a failure shows a
+# message box. Samples and seeds come from VoseSetSimulOptions12.
+_CMD_START_TURBO = "VoseStartFastSimulation"
+ENGINES = ("classic", "turbo")
 
 # Operation prefix the SimulationObj_VBA dispatcher matches on for the
 # save path. PackSessionName format: "h<hwnd>_<Operation>_<book_name>"
 # (ModelRiskAtl/ModelRiskSimulationResults.cpp:54).
 _OP_SAVE_RESULTS = "SaveResultsToFile"
 
-# ModelRisk stamps a run's start to the second; allow that much when
-# comparing it with the moment this process started the run.
-_CLOCK_SLACK = timedelta(seconds=1)
+# Excel's xlCalculationManual.
+_XL_CALC_MANUAL = -4135
+
+# A workbook activated through COM can be switched back within half a
+# second when another process's window is in front: the Results Viewer,
+# which a Turbo run brings forward, hands the focus back to the Excel
+# window it is attached to (seen live on 2026-10-04). So an activation is
+# checked again after this long, and repeated; the second one holds,
+# because Excel is then in front.
+_ACTIVATE_SETTLE = 0.5
+_ACTIVATE_ATTEMPTS = 3
 
 
 class SimulationController:
@@ -192,6 +221,7 @@ class SimulationController:
         hide_dialogs: bool = True,
         save_to: str | None = None,
         output_names: tuple[str, ...] = (),
+        engine: str = "classic",
     ) -> SimulationRunResult:
         """Run a simulation on `workbook_name` (defaults to the active
         workbook) and save the resulting `.vmrs` to `save_to` (defaults
@@ -199,6 +229,11 @@ class SimulationController:
 
         The call blocks until the simulation completes — that's how
         `VoseStartSimulCustom12` is implemented (synchronous Application.Run).
+
+        `engine="turbo"` runs ModelRisk's Turbo engine. When Turbo cannot
+        run the workbook (`_turbo_obstacle`), the classic engine runs and
+        `note` says why; `engine` on the result names the engine whose run
+        was saved.
 
         Bug #31 (alpha.30): defensive sanity check on `samples`.
         When a non-MCP caller (a direct script, an integration test,
@@ -225,6 +260,11 @@ class SimulationController:
         Raises SimulationFailedError unless the file at that path holds
         this run (see `_save_results`).
         """
+        if engine not in ENGINES:
+            raise SimulationFailedError(
+                f"engine must be one of {', '.join(map(repr, ENGINES))}; "
+                f"got {engine!r}."
+            )
         if samples < 1:
             raise SimulationFailedError(
                 f"samples must be >= 1; got {samples}. ModelRisk's "
@@ -253,18 +293,44 @@ class SimulationController:
         )
         target = self._resolve_save_path(wb_info, save_to)
 
+        notes: list[str] = []
+        if engine == "turbo":
+            obstacle = self._turbo_obstacle(wb_info.name)
+            if obstacle is not None:
+                notes.append(f"{obstacle}, so the classic engine ran instead.")
+                engine = "classic"
         self._make_active(wb_info.name)
-        started = datetime.now().replace(microsecond=0)
-        self._invoke_start_simulation(opts)
-        note = self._save_results(
-            wb_info.name, target, started=started, samples=samples
-        )
+        started = _fresh_second()
+        messages: list[str] = []
+        if engine == "turbo":
+            messages = self._invoke_turbo_simulation(opts)
+        else:
+            self._invoke_start_simulation(opts)
+        try:
+            saved = self._save_results(
+                wb_info.name, target, started=started, samples=samples,
+                engine=engine,
+            )
+        except SimulationFailedError as exc:
+            if messages:
+                raise SimulationFailedError(
+                    f"ModelRisk's Turbo run of {wb_info.name!r} stopped with "
+                    f"this message: {_quoted(messages)} No results were "
+                    "saved. engine='classic' runs the workbook with "
+                    "ModelRisk's own engine."
+                ) from exc
+            raise
+        if messages:
+            notes.append(f"ModelRisk said: {_quoted(messages)}")
+        if saved:
+            notes.append(saved)
         return SimulationRunResult(
             workbook_name=wb_info.name,
             vmrs_path=target,
             iterations=samples,
             options=opts,
-            note=note,
+            note=" ".join(notes) or None,
+            engine=engine,
         )
 
     # ----- internal ------------------------------------------------------
@@ -316,23 +382,31 @@ class SimulationController:
         outputs of every open workbook but belongs to the ACTIVE one: its
         results and run file are filed under that workbook's name (seen
         live on 2026-10-04: asked for A while B was active, the run was
-        B's, and the save for A was labelled B)."""
-        if self._active_name() == book_name.casefold():
+        B's, and the save for A was labelled B). An activation must still
+        hold after `_ACTIVATE_SETTLE`; one that is switched back is
+        repeated."""
+        wanted = book_name.casefold()
+        if self._active_name() == wanted:
             return
-        try:
-            self._excel.activate_workbook(book_name)
-        except Exception as exc:
-            raise SimulationFailedError(
-                f"Could not make {book_name!r} the active workbook: {exc}. "
-                "ModelRisk simulates the active workbook, so the run was "
-                "not started."
-            ) from exc
-        if self._active_name() != book_name.casefold():
-            raise SimulationFailedError(
-                f"{book_name!r} did not become the active workbook, so the "
-                "run was not started: ModelRisk simulates the active "
-                "workbook. Close any dialog open in Excel and retry."
-            )
+        for _ in range(_ACTIVATE_ATTEMPTS):
+            try:
+                self._excel.activate_workbook(book_name)
+            except Exception as exc:
+                raise SimulationFailedError(
+                    f"Could not make {book_name!r} the active workbook: {exc}. "
+                    "ModelRisk simulates the active workbook, so the run was "
+                    "not started."
+                ) from exc
+            if self._active_name() != wanted:
+                continue
+            time.sleep(_ACTIVATE_SETTLE)
+            if self._active_name() == wanted:
+                return
+        raise SimulationFailedError(
+            f"{book_name!r} did not stay the active workbook, so the run was "
+            "not started: ModelRisk simulates the active workbook. Close any "
+            "dialog open in Excel and retry."
+        )
 
     def _active_name(self) -> str | None:
         try:
@@ -352,7 +426,7 @@ class SimulationController:
             # Persist options (esp. SeedFixed/seed0) to the workbook FIRST so the
             # per-cell-twister Manual-Seed engine actually honors the seed. See
             # _CMD_SET_SIM_OPTS above for the full rationale (AB#2742).
-            app.api.Run(_CMD_SET_SIM_OPTS, options_2d)
+            self._persist_options(app, options_2d)
             app.api.Run(_CMD_START_SIM, options_2d)
         except Exception as exc:
             raise SimulationFailedError(
@@ -361,8 +435,111 @@ class SimulationController:
                 "contain at least one VoseOutput cell."
             ) from exc
 
+    @staticmethod
+    def _persist_options(app: Any, options_2d: list[list[str]]) -> None:
+        """Application.Run("VoseSetSimulOptions12", options_array), under
+        manual calculation. The command writes each option as a workbook
+        name (29 of them), and under automatic calculation every write
+        recalculates the workbook: 52.7 s, against 1.9 s for the single
+        recalculation that restoring the mode makes, on CF-01 with a
+        10,000-iteration run attached (191 VoseSim cells, 2026-10-04).
+        ModelRisk holds manual calculation for its own option writes the
+        same way (MREngine.cpp:1066)."""
+        try:
+            mode = app.api.Calculation
+        except Exception:
+            mode = _XL_CALC_MANUAL  # unreadable: leave it alone
+        if mode != _XL_CALC_MANUAL:
+            app.api.Calculation = _XL_CALC_MANUAL
+        try:
+            app.api.Run(_CMD_SET_SIM_OPTS, options_2d)
+        finally:
+            if mode != _XL_CALC_MANUAL:
+                app.api.Calculation = mode
+
+    def _turbo_obstacle(self, book_name: str) -> str | None:
+        """Why Turbo cannot run `book_name`, or None when it can. Turbo
+        reads .xlsx and .xlsm files only (MREngine.cpp:210), and an output
+        that depends on a function it cannot evaluate comes back NaN with
+        no warning. The engine's own check of those functions runs on a
+        saved copy of the workbook, as it is in Excel now."""
+        suffix = Path(book_name).suffix.lower()
+        if suffix and suffix not in turbo.TURBO_FORMATS:
+            return "Turbo runs only .xlsx and .xlsm workbooks"
+        if self._excel_pid() is None:
+            return (
+                "Excel's process could not be identified, and Turbo's "
+                "message boxes could not be answered without it"
+            )
+        folder = Path(tempfile.mkdtemp(prefix="modelrisk-mcp-turbo-"))
+        try:
+            copy = folder / f"turbo-check{suffix or '.xlsx'}"
+            try:
+                self._excel.save_workbook_as(book_name, str(copy), overwrite=True)
+            except Exception as exc:
+                return (
+                    "a copy of the workbook for Turbo's compatibility check "
+                    f"could not be saved ({exc})"
+                )
+            check = turbo.check_workbook(str(copy))
+        finally:
+            shutil.rmtree(folder, ignore_errors=True)
+        if check.problem is not None:
+            return f"Turbo's compatibility check could not run ({check.problem})"
+        if check.unsupported:
+            return (
+                f"Turbo cannot evaluate {', '.join(check.unsupported)}, "
+                f"which {book_name!r} uses"
+            )
+        return None
+
+    def _invoke_turbo_simulation(self, opts: SimulationOptions) -> list[str]:
+        """Application.Run("VoseStartFastSimulation") on the active
+        workbook, after VoseSetSimulOptions12 has set the samples and seed
+        Turbo reads (MREngine.cpp:1130, MREngine_GenerateSeeds). Its
+        message boxes are answered while it runs: No to the offer to check
+        Turbo against the classic engine (which would run the classic
+        engine too, and wait for a click on its result), OK to a message.
+        Returns the text of each message, which is how Turbo reports a
+        failed run."""
+        app = self._app()
+        pid = self._excel_pid()
+        if pid is None:
+            raise SimulationFailedError(
+                "Excel's process could not be identified; the Turbo run was "
+                "not started."
+            )
+        watch = turbo.DialogWatch(pid)
+        try:
+            self._persist_options(app, [opts.to_string_list()])
+            with watch:
+                app.api.Run(_CMD_START_TURBO)
+        except Exception as exc:
+            raise SimulationFailedError(
+                f"Application.Run({_CMD_START_TURBO!r}) failed: {exc}. The "
+                "ModelRisk add-in must be loaded, in a version with the Turbo "
+                "engine."
+            ) from exc
+        return [
+            " ".join(box.text.split())
+            for box in watch.answered
+            if not box.is_question
+        ]
+
+    def _excel_pid(self) -> int | None:
+        try:
+            return int(self._app().pid)
+        except Exception:
+            return None
+
     def _save_results(
-        self, book_name: str, target: str, *, started: datetime, samples: int
+        self,
+        book_name: str,
+        target: str,
+        *,
+        started: datetime,
+        samples: int,
+        engine: str = "classic",
     ) -> str | None:
         """Save the run just made of `book_name` to `target`, and prove it.
 
@@ -382,7 +559,11 @@ class SimulationController:
         `.vmrs` is rebuilt from the workbook's own ModelRisk run file,
         which is the file a correct save compresses. Returns a note when
         that was needed; raises when neither gives this run, after
-        removing a wrong file the save wrote."""
+        removing a wrong file the save wrote.
+
+        A Turbo run ends by loading itself into the viewer, so the save
+        normally holds it; its run file is named after the engine's copy
+        of the workbook, `vsmre_<stem>`, and names the workbook inside."""
         hwnd = self._hwnd()
         problem: str | None
         try:
@@ -394,7 +575,10 @@ class SimulationController:
         if problem is None:
             return None
 
-        run_file, misses = _find_run_file(book_name, started, samples)
+        stems: tuple[str, ...] = (book_name,)
+        if engine == "turbo":
+            stems = (f"vsmre_{Path(book_name).stem}", book_name)
+        run_file, misses = _find_run_file(book_name, started, samples, stems)
         if run_file is not None:
             try:
                 write_vmrs_from_dmr(run_file, target)
@@ -411,6 +595,14 @@ class SimulationController:
                 misses.append(f"the file rebuilt from {run_file} held {rebuilt}")
 
         _discard_if_written_since(target, started)
+        turbo_hint = (
+            " A Turbo run also ends without results when its engine stops, "
+            "or when it is stopped or sent to the background in its progress "
+            "window; engine='classic' runs the workbook with ModelRisk's own "
+            "engine."
+            if engine == "turbo"
+            else ""
+        )
         raise SimulationFailedError(
             f"No results of this run of {book_name!r} could be saved to "
             f"{target!r}: ModelRisk's save returned {problem}, and "
@@ -419,7 +611,7 @@ class SimulationController:
             f"Results Viewer, or show {book_name!r}'s results in it, and run "
             "again. Nothing or an earlier run comes back when the simulation "
             "did not run: check that the workbook has VoseOutput cells and "
-            "that the run was not cancelled."
+            f"that the run was not cancelled.{turbo_hint}"
         )
 
     def _hwnd(self) -> int:
@@ -487,7 +679,7 @@ def _run_problem(
     )
     if header.spreadsheet_name.casefold() != book_name.casefold():
         return f"the results of {header.spreadsheet_name!r}{when}"
-    if header.start_date is None or header.start_date < started - _CLOCK_SLACK:
+    if header.start_date is None or header.start_date < started:
         return (
             f"an earlier run of {book_name!r}{when}, not the run started "
             f"{started:%Y-%m-%d %H:%M:%S}"
@@ -495,6 +687,20 @@ def _run_problem(
     if header.iterations != samples:
         return f"a run of {header.iterations} iterations, not {samples}"
     return None
+
+
+def _fresh_second() -> datetime:
+    """The start of the next whole second, returned once it has come.
+    ModelRisk stamps a run's start to the second, so a run started earlier
+    in the current second would carry the same stamp as this one; from the
+    next second on, only runs started after this call can. Seen live on
+    2026-10-04: a Turbo run stamped 18:49:14 and repeated at once with the
+    classic engine was taken for the classic run, started 18:49:15, under
+    the one-second allowance this replaces."""
+    target = datetime.now().replace(microsecond=0) + timedelta(seconds=1)
+    while (wait := (target - datetime.now()).total_seconds()) > 0:
+        time.sleep(wait)
+    return target
 
 
 def _file_problem(
@@ -511,10 +717,15 @@ def _file_problem(
 
 
 def _find_run_file(
-    book_name: str, started: datetime, samples: int
+    book_name: str,
+    started: datetime,
+    samples: int,
+    stems: tuple[str, ...] | None = None,
 ) -> tuple[Path | None, list[str]]:
     """ModelRisk's own file for this run of `book_name`: `f<hWndExcel as
-    %X><book>.dmr` in its simulation folder (SimulationObj.cpp:6163).
+    %X><stem>.dmr` in its simulation folder, where the stem is the
+    workbook's name (SimulationObj.cpp:6163) or, for a Turbo run, the name
+    of the engine's copy of it, `vsmre_<stem>` (SimulationObj.cpp:14690).
 
     The prefix is matched as any hex number: the engine fixes hWndExcel at
     start-up, and in Excel's one-window-per-workbook UI that is the first
@@ -522,7 +733,8 @@ def _find_run_file(
     live: run files `f50108…` while Hwnd read 0xB0822). The header check
     picks this run among the candidates, newest first. Returns that file,
     and what was found instead in every place looked at."""
-    pattern = re.compile(r"f[0-9A-F]+" + re.escape(book_name) + r"\.dmr", re.I)
+    names = "|".join(re.escape(stem) for stem in (stems or (book_name,)))
+    pattern = re.compile(r"f[0-9A-F]+(?:" + names + r")\.dmr", re.I)
     misses: list[str] = []
     for folder in _simulation_folders():
         try:
@@ -542,8 +754,13 @@ def _find_run_file(
             misses.append(f"its run file {path} holds {problem}")
     if not misses:
         looked = ", ".join(str(f) for f in _simulation_folders())
-        misses.append(f"no run file f…{book_name}.dmr was found in {looked}")
+        wanted = " or ".join(f"f…{stem}.dmr" for stem in (stems or (book_name,)))
+        misses.append(f"no run file {wanted} was found in {looked}")
     return None, misses
+
+
+def _quoted(messages: list[str]) -> str:
+    return " | ".join(f'"{m}"' for m in messages)
 
 
 def _mtime(path: Path) -> float:
@@ -578,6 +795,7 @@ def _discard_if_written_since(path: str, started: datetime) -> None:
 
 
 __all__ = [
+    "ENGINES",
     "SimulationController",
     "SimulationOptions",
     "SimulationRunResult",

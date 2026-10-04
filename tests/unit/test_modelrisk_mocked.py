@@ -214,10 +214,16 @@ class _PostCondFakeExcel(FakeExcelBridge):
 
 class _FakeVmrsHandle:
     """Stand-in for `VmrsHandle`. `lookup_var_id` returns the configured
-    map; opening / closing are no-ops."""
+    map, `get_samples` the configured samples (three finite values by
+    default); opening / closing are no-ops."""
 
-    def __init__(self, var_ids: dict[str, int | None]) -> None:
+    def __init__(
+        self,
+        var_ids: dict[str, int | None],
+        samples: dict[int, tuple[float, ...]] | None = None,
+    ) -> None:
         self._var_ids = var_ids
+        self._samples = samples or {}
 
     def __enter__(self) -> _FakeVmrsHandle:
         return self
@@ -228,24 +234,39 @@ class _FakeVmrsHandle:
     def lookup_var_id(self, name: str) -> int | None:
         return self._var_ids.get(name)
 
+    def get_samples(self, var_id: int) -> tuple[float, ...]:
+        return self._samples.get(var_id, (1.0, 2.0, 3.0))
+
 
 class _FakeMrService:
-    def __init__(self, var_ids: dict[str, int | None]) -> None:
+    def __init__(
+        self,
+        var_ids: dict[str, int | None],
+        samples: dict[int, tuple[float, ...]] | None = None,
+        *,
+        error: Exception | None = None,
+    ) -> None:
         self._var_ids = var_ids
+        self._samples = samples
+        self._error = error
         self.open_calls: list[str] = []
 
     def open_vmrs(self, path: str) -> _FakeVmrsHandle:
         self.open_calls.append(path)
-        return _FakeVmrsHandle(self._var_ids)
+        if self._error is not None:
+            raise self._error
+        return _FakeVmrsHandle(self._var_ids, self._samples)
 
 
 class _FakeSimulationController:
     """Minimal SimulationController stand-in. `run_simulation` returns
     a canned `SimulationRunResult` so the bridge wiring is exercised
-    without touching Excel / the XLL surface."""
+    without touching Excel / the XLL surface. Each call is recorded, and
+    the engine asked for is the engine that ran."""
 
     def __init__(self, vmrs_path: str = r"C:\tmp\book.vmrs") -> None:
         self._vmrs_path = vmrs_path
+        self.calls: list[dict[str, Any]] = []
 
     def run_simulation(
         self,
@@ -255,14 +276,19 @@ class _FakeSimulationController:
         seed: int,
         save_to: str | None,
         output_names: tuple[str, ...] = (),
+        engine: str = "classic",
     ) -> Any:
         from modelrisk_mcp.bridge.simulation import SimulationRunResult
         # Stash for tests that want to assert the bridge populated this.
         self.last_output_names = output_names
+        self.calls.append(
+            {"workbook_name": workbook_name, "save_to": save_to, "engine": engine}
+        )
         return SimulationRunResult(
             workbook_name=workbook_name or "book.xlsx",
-            vmrs_path=self._vmrs_path,
+            vmrs_path=save_to or self._vmrs_path,
             iterations=samples,
+            engine=engine,
         )
 
 
@@ -315,6 +341,83 @@ def test_run_simulation_skips_verification_when_no_outputs_declared() -> None:
     bridge._mrservice = _FakeMrService({})  # type: ignore[assignment]
     result = bridge.run_simulation(workbook="book.xlsx", samples=1000)
     assert result.vmrs_path == r"C:\tmp\book.vmrs"
+
+
+class TestTurboOutputsChecked:
+    """Turbo returns NaN, with no warning, for some functions its own
+    compatibility check passes (Turbo audit of ModelRisk's example models,
+    2026-10-03). A Turbo run whose outputs hold NaN is repeated with the
+    classic engine."""
+
+    def _bridge(
+        self, samples: tuple[float, ...], *, error: Exception | None = None,
+    ) -> tuple[ModelRiskBridge, _FakeSimulationController]:
+        excel = _PostCondFakeExcel(_voseoutput_cells())
+        bridge = ModelRiskBridge(excel)  # type: ignore[arg-type]
+        sim = _FakeSimulationController()
+        bridge._simulation = sim  # type: ignore[assignment]
+        bridge._mrservice = _FakeMrService(  # type: ignore[assignment]
+            {"Profit": 7}, {7: samples}, error=error,
+        )
+        return bridge, sim
+
+    def test_nan_output_is_run_again_with_the_classic_engine(self) -> None:
+        bridge, sim = self._bridge((1.0, float("nan"), 3.0))
+
+        result = bridge.run_simulation(
+            workbook="book.xlsx", samples=1000, engine="turbo",
+        )
+
+        assert [c["engine"] for c in sim.calls] == ["turbo", "classic"]
+        assert sim.calls[1]["workbook_name"] == "book.xlsx"
+        assert sim.calls[1]["save_to"] == r"C:\tmp\book.vmrs"
+        assert result.engine == "classic"
+        assert result.note is not None
+        assert "Turbo returned NaN values for 'Profit'" in result.note
+
+    def test_output_with_no_values_is_run_again(self) -> None:
+        bridge, sim = self._bridge(())
+
+        result = bridge.run_simulation(
+            workbook="book.xlsx", samples=1000, engine="turbo",
+        )
+
+        assert [c["engine"] for c in sim.calls] == ["turbo", "classic"]
+        assert result.engine == "classic"
+
+    def test_finite_outputs_keep_the_turbo_run(self) -> None:
+        bridge, sim = self._bridge((1.0, 2.0, 3.0))
+
+        result = bridge.run_simulation(
+            workbook="book.xlsx", samples=1000, engine="turbo",
+        )
+
+        assert [c["engine"] for c in sim.calls] == ["turbo"]
+        assert result.engine == "turbo"
+        assert result.note is None
+
+    def test_unreadable_results_are_said_to_be_unchecked(self) -> None:
+        from modelrisk_mcp.errors import ModelRiskNotLoadedError
+
+        bridge, sim = self._bridge(
+            (1.0,), error=ModelRiskNotLoadedError("MRService.dll not found"),
+        )
+
+        result = bridge.run_simulation(
+            workbook="book.xlsx", samples=1000, engine="turbo",
+        )
+
+        assert [c["engine"] for c in sim.calls] == ["turbo"]
+        assert result.engine == "turbo"
+        assert result.note is not None and "could not be checked" in result.note
+
+    def test_a_classic_run_is_not_repeated(self) -> None:
+        bridge, sim = self._bridge((float("nan"),))
+
+        result = bridge.run_simulation(workbook="book.xlsx", samples=1000)
+
+        assert [c["engine"] for c in sim.calls] == ["classic"]
+        assert result.note is None
 
 
 def test_restore_deterministic_state_calls_recalc() -> None:

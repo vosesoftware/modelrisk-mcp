@@ -14,10 +14,11 @@ calls live in the dedicated bridge modules.
 from __future__ import annotations
 
 import json
+import math
 import re
 from collections.abc import Iterator
 from contextlib import contextmanager
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import datetime
 from pathlib import Path
 from typing import Any
@@ -686,6 +687,7 @@ class ModelRiskBridge:
         samples: int = 1000,
         seed: int = 1,
         save_to: str | None = None,
+        engine: str = "classic",
     ) -> SimulationRunResult:
         # Read-only mode blocks simulations too: a run mutates workbook
         # state (recalculation, frozen samples on failure) and writes a
@@ -751,23 +753,12 @@ class ModelRiskBridge:
         # resolve, never on a live one. With #29 fixed, the XLL's
         # auto-scan behaviour works correctly. Dropping the alpha.18
         # pre-populate makes expression-named outputs register too.
-        result = self._simulation.run_simulation(
-            workbook_name=workbook,
-            samples=samples,
-            seed=seed,
-            save_to=save_to,
-        )
-        # Pin the produced file so the existing reader tools find it.
-        self._results.set_active_vmrs(result.vmrs_path)
-        # Remember the run size — the in-session fallback uses it as a
-        # (probe-verified) hint for how many iterations to extract.
-        self._last_sim_iterations = result.iterations
-
-        # Post-condition verification. Only check names we can
-        # statically resolve — ExpressionName outputs (alpha.31)
-        # have a runtime-computed name we can't predict, so we
-        # filter them out of the check. With the alpha.32 XLL-scan
-        # change above, expression outputs DO register in the
+        #
+        # Post-condition verification (below, and Turbo's output check)
+        # only checks names we can statically resolve — ExpressionName
+        # outputs (alpha.31) have a runtime-computed name we can't
+        # predict, so we filter them out of the check. With the alpha.32
+        # XLL-scan change above, expression outputs DO register in the
         # .vmrs — but we still can't look them up by name from the
         # workbook side, so we trust the bridge-side absence of
         # post-condition error to mean "expression outputs are
@@ -778,6 +769,21 @@ class ModelRiskBridge:
             if n and not n.endswith("…")  # "…" marker for dynamic
             and n != "<dynamic name>"
         ]
+        result = self._simulation.run_simulation(
+            workbook_name=workbook,
+            samples=samples,
+            seed=seed,
+            save_to=save_to,
+            engine=engine,
+        )
+        if result.engine == "turbo":
+            result = self._check_turbo_outputs(result, verifiable_names, seed=seed)
+        # Pin the produced file so the existing reader tools find it.
+        self._results.set_active_vmrs(result.vmrs_path)
+        # Remember the run size — the in-session fallback uses it as a
+        # (probe-verified) hint for how many iterations to extract.
+        self._last_sim_iterations = result.iterations
+
         if verifiable_names:
             try:
                 self._verify_simulation_post_conditions(
@@ -790,6 +796,64 @@ class ModelRiskBridge:
                     pass
                 raise
         return result
+
+    def _check_turbo_outputs(
+        self, result: SimulationRunResult, names: list[str], *, seed: int,
+    ) -> SimulationRunResult:
+        """Turbo gives NaN, with no warning, for some uses of functions its
+        own check passes: VoseLognormalAlt with four arguments, FitP with
+        uncertainty, VoseSixSigma* among them (Turbo audit of ModelRisk's
+        example models, 2026-10-03). A Turbo run whose outputs hold NaN is
+        repeated with the classic engine, into the same file."""
+        lost = self._outputs_without_values(result.vmrs_path, names)
+        if lost is None:
+            return replace(result, note=_joined(
+                result.note,
+                "Turbo's outputs could not be checked for the NaN values it "
+                "gives, without warning, for some functions; compare with "
+                "engine='classic' before relying on them.",
+            ))
+        if not lost:
+            return result
+        shown = ", ".join(repr(name) for name in lost[:5])
+        if len(lost) > 5:
+            shown += f" and {len(lost) - 5} more"
+        classic = self._simulation.run_simulation(
+            workbook_name=result.workbook_name,
+            samples=result.iterations,
+            seed=seed,
+            save_to=result.vmrs_path,
+        )
+        return replace(classic, note=_joined(
+            f"Turbo returned NaN values for {shown}, so the run was "
+            "repeated with the classic engine.",
+            classic.note,
+        ))
+
+    def _outputs_without_values(
+        self, vmrs_path: str, names: list[str],
+    ) -> list[str] | None:
+        """The outputs among `names` that hold a NaN, or no value at all, in
+        the `.vmrs`. None when that cannot be told: no names to look up, or
+        the file cannot be read."""
+        if not names:
+            return None
+        lost: list[str] = []
+        try:
+            with self._mrservice.open_vmrs(vmrs_path) as handle:
+                for name in names:
+                    try:
+                        var_id = handle.lookup_var_id(name)
+                    except SimulationFailedError:
+                        continue  # a pathological name; not a verdict
+                    if var_id is None:
+                        continue  # missing outputs are the check below
+                    samples = handle.get_samples(var_id)
+                    if not samples or not all(map(math.isfinite, samples)):
+                        lost.append(name)
+        except (ModelRiskNotLoadedError, SimulationFailedError, OSError):
+            return None
+        return lost
 
     def _verify_simulation_post_conditions(
         self, vmrs_path: str, expected_output_names: list[str],
@@ -1738,6 +1802,10 @@ class ModelRiskBridge:
         if buf:
             args.append("".join(buf).strip())
         return args
+
+
+def _joined(*notes: str | None) -> str | None:
+    return " ".join(n for n in notes if n) or None
 
 
 def _is_live_formula(formula: str | None) -> bool:

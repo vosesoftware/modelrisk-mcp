@@ -39,13 +39,15 @@ def mock_bridge() -> Iterator[MagicMock]:
 
 class TestRunSimulationToolPassthrough:
     def test_defaults_match_spec(self, mock_bridge: MagicMock) -> None:
-        """No args → samples=1000, seed=1, save_to=None, workbook=None.
-        These defaults are part of the documented MCP surface."""
+        """No args → samples=1000, seed=1, save_to=None, workbook=None,
+        the classic engine. These defaults are part of the documented MCP
+        surface."""
         result = simulation.run_simulation()
         assert isinstance(result, simulation.RunSimulationResult)
         mock_bridge.run_simulation.assert_called_once_with(
-            workbook=None, samples=1000, seed=1, save_to=None
+            workbook=None, samples=1000, seed=1, save_to=None, engine="classic"
         )
+        assert result.engine == "classic"
 
     def test_workbook_name_forwarded_as_keyword(
         self, mock_bridge: MagicMock
@@ -58,10 +60,12 @@ class TestRunSimulationToolPassthrough:
 
     def test_all_args_forwarded(self, mock_bridge: MagicMock) -> None:
         simulation.run_simulation(
-            workbook_name="x.xlsx", samples=5000, seed=42, save_to=r"D:\x.vmrs"
+            workbook_name="x.xlsx", samples=5000, seed=42, save_to=r"D:\x.vmrs",
+            engine="turbo",
         )
         mock_bridge.run_simulation.assert_called_once_with(
-            workbook="x.xlsx", samples=5000, seed=42, save_to=r"D:\x.vmrs"
+            workbook="x.xlsx", samples=5000, seed=42, save_to=r"D:\x.vmrs",
+            engine="turbo",
         )
 
     def test_response_contains_resolved_vmrs_path(
@@ -108,6 +112,32 @@ class TestRunSimulationToolPassthrough:
         )
         result = simulation.run_simulation(workbook_name="b.xlsx")
         assert result.note == "ModelRisk's save returned the results of 'a.xlsx'"
+
+    def test_engine_that_ran_is_returned(self, mock_bridge: MagicMock) -> None:
+        mock_bridge.run_simulation.return_value = SimulationRunResult(
+            workbook_name="model.xlsx",
+            vmrs_path=r"C:\models\model.vmrs",
+            iterations=1000,
+            engine="turbo",
+        )
+        assert simulation.run_simulation(engine="turbo").engine == "turbo"
+
+    def test_classic_fallback_is_returned_with_its_reason(
+        self, mock_bridge: MagicMock
+    ) -> None:
+        reason = (
+            "Turbo cannot evaluate VOSETIMEGBMVR, which 'og.xlsx' uses, so "
+            "the classic engine ran instead."
+        )
+        mock_bridge.run_simulation.return_value = SimulationRunResult(
+            workbook_name="og.xlsx",
+            vmrs_path=r"C:\models\og.vmrs",
+            iterations=1000,
+            note=reason,
+        )
+        result = simulation.run_simulation(engine="turbo")
+        assert result.engine == "classic"
+        assert result.note == reason
 
 
 class TestErrorsReachTheClient:
@@ -156,6 +186,17 @@ class TestErrorsReachTheClient:
             await mcp.call_tool("run_simulation", {"samples": 10, "iterations": 20})
 
         assert "samples=10" in str(exc.value)
+
+    async def test_unknown_engine_is_refused(self, mock_bridge: MagicMock) -> None:
+        from mcp.server.mcpserver.exceptions import ToolError
+
+        from modelrisk_mcp.server import mcp
+
+        with pytest.raises(ToolError) as exc:
+            await mcp.call_tool("run_simulation", {"engine": "fast"})
+
+        assert "engine" in str(exc.value)
+        mock_bridge.run_simulation.assert_not_called()
 
 
 class TestSamplesValidation:
