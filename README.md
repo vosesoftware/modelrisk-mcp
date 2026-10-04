@@ -43,7 +43,7 @@ The goal is simple: make defensible, quantitative risk analysis something you re
 This server turns Claude (or any MCP client) into a methodology-aware co-pilot for ModelRisk. It can:
 
 - **Build** new Monte Carlo models from a description — insert distributions, fit families to data, build aggregates, copulas, time-series, risk events.
-- **Run** simulations from the conversation. `run_simulation` triggers the same XLL command the ribbon "Simulate" button uses, blocks until the run finishes, saves a `.vmrs` next to the workbook, and auto-pins it as the results source.
+- **Run** simulations from the conversation. `run_simulation` triggers the same XLL command the ribbon "Simulate" button uses, blocks until the run finishes, saves a `.vmrs` next to the workbook, and auto-pins it as the results source. `engine="turbo"` runs ModelRisk's Turbo engine instead, after the engine's own check of the workbook, and falls back to the classic engine when Turbo cannot run it.
 - **Read** model structure and per-iteration results — inputs, outputs, percentiles, correlation matrices, tornado rankings — directly from `.vmrs` files via ModelRisk's official SDK (MRService.dll). No COM dispatch fragility.
 - **Audit** a workbook against Vose's methodology rules and propose fixes.
 - **Interpret** results into structured executive summaries with contingency analysis.

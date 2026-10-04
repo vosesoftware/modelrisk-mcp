@@ -4,6 +4,21 @@ All notable changes to ModelRisk MCP. Follows [Keep a Changelog](https://keepach
 
 ## [Unreleased]
 
+### Added
+
+- **Turbo engine: `run_simulation(engine="turbo")`.** Runs ModelRisk's Turbo engine (its Fast Simulation, `VoseStartFastSimulation`) instead of the classic engine. On CF-01, 10,000 iterations took 1.5 s against 38 s classic.
+  - Turbo cannot evaluate every function, and an output that depends on one comes back NaN in every iteration, with no message. So the engine's own check (`mrengine_native.dll`) runs first, in a child process, on a saved copy of the workbook. The classic engine runs instead when the check names a function (OG-05: `VoseTimeGBMVR`), when the workbook is not `.xlsx` or `.xlsm`, or when the check cannot run.
+  - Some functions pass the check and still give NaN. A Turbo run whose saved outputs hold NaN is repeated with the classic engine.
+  - The result's new `engine` field names the engine whose run was saved; `note` says why when it is not the one asked for.
+  - The Turbo command's message boxes are answered, so the call cannot hang on them. Its offer to check Turbo against the classic engine (asked before every run, because the options call resets the flag that silences it) gets No. An error box gets OK, and its text becomes the tool's error.
+  - Turbo can still give results that differ from the classic engine's for some functions, so confirm figures that matter with the classic engine. A Turbo run shows ModelRisk's progress window and brings the Results Viewer to the front.
+
+### Fixed
+
+- **Each `run_simulation` recalculated the workbook once per simulation option.** ModelRisk's options call writes 29 workbook names, and under automatic calculation every write recalculates the workbook. On CF-01, once a classic run was attached to it, that took 52.7 s before a 1.5 s Turbo run; it takes 1.9 s now. The options are written under manual calculation, and the user's mode is back, after one recalculation, before the run starts.
+- **A workbook activation could be undone.** With the Results Viewer in front (a Turbo run brings it forward), a workbook activated for a run was active at once and the viewer's Excel window again half a second later. `run_simulation` then reported that the workbook "did not become the active workbook", or could have simulated the other one. An activation is now checked again after half a second and repeated when it was switched back.
+- **A run that started in the second before the new run could pass for it.** The saved run was accepted up to one second before the new run's start. A Turbo run repeated at once with the classic engine was saved as the classic run while holding Turbo's NaN outputs. A run now starts at the next whole second, and only a run stamped at or after it is taken for it.
+
 ## [0.4.3] — 2026-10-04
 
 ### Fixed

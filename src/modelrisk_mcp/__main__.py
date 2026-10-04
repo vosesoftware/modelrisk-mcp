@@ -167,6 +167,12 @@ def main(argv: list[str] | None = None) -> None:
         )
     if argv and argv[0] == "status":
         return _run_status(argv[1:])
+    if argv and argv[0] == "turbo-check":
+        # Hidden: run_simulation's engine="turbo" asks this child process
+        # whether Turbo can run a workbook (bridge/turbo.py).
+        from modelrisk_mcp.bridge.turbo import run_check_command
+
+        raise SystemExit(run_check_command(argv[1:]))
     if argv and argv[0] == "serve":
         argv = argv[1:]  # `modelrisk-mcp serve --transport=stdio` works too
 

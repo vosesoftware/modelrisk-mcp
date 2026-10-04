@@ -15,6 +15,10 @@ The controller's job is to:
    iterations), rebuilding it from ModelRisk's run file when the save
    handed back another run, and raise SimulationFailedError otherwise.
 
+With engine="turbo", step 3 is `Application.Run("VoseStartFastSimulation")`,
+after the engine's compatibility check of a saved copy, with the command's
+message boxes answered while it runs.
+
 Tests use a fake ExcelBridge + a fake Application that plays ModelRisk:
 it records every Run call (for exact-string conformance with the C++
 side), writes a run file per run, and saves like the real XLL does.
@@ -30,14 +34,16 @@ from typing import Any
 
 import pytest
 
-from modelrisk_mcp.bridge import simulation
+from modelrisk_mcp.bridge import simulation, turbo
 from modelrisk_mcp.bridge.simulation import (
     SimulationController,
     SimulationOptions,
 )
+from modelrisk_mcp.bridge.turbo import IDCANCEL, IDNO, IDYES, TurboCheck
 from modelrisk_mcp.bridge.vmrs_file import read_vmrs_header
 from modelrisk_mcp.errors import SimulationFailedError, WorkbookNotFoundError
 from modelrisk_mcp.schemas.workbook import WorkbookInfo
+from tests.unit._message_boxes import FakeWindows
 from tests.unit._results_files import vmrs_bytes, write_dmr, write_vmrs
 
 
@@ -51,6 +57,58 @@ def run_files(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     return folder
 
 
+_REAL_FRESH_SECOND = simulation._fresh_second
+
+
+@pytest.fixture(autouse=True)
+def no_waits(monkeypatch: pytest.MonkeyPatch) -> None:
+    """No settling after an activation, and a run starts in the current
+    second; `TestRunStart` keeps the real wait."""
+    monkeypatch.setattr(simulation, "_ACTIVATE_SETTLE", 0)
+    monkeypatch.setattr(
+        simulation, "_fresh_second", lambda: datetime.now().replace(microsecond=0)
+    )
+
+
+class _EngineCheck:
+    """Turbo's compatibility check as a test sets it (`result`). Records
+    the copy of the workbook it was given, which must exist then."""
+
+    def __init__(self) -> None:
+        self.result = TurboCheck()
+        self.copies: list[Path] = []
+
+    def __call__(self, path: str, **_: Any) -> TurboCheck:
+        copy = Path(path)
+        assert copy.is_file(), "the check needs a saved copy of the workbook"
+        self.copies.append(copy)
+        return self.result
+
+
+@pytest.fixture(autouse=True)
+def engine_check(monkeypatch: pytest.MonkeyPatch) -> _EngineCheck:
+    check = _EngineCheck()
+    monkeypatch.setattr(turbo, "check_workbook", check)
+    return check
+
+
+@pytest.fixture(autouse=True)
+def windows(monkeypatch: pytest.MonkeyPatch) -> FakeWindows:
+    """Excel's message boxes, answered by the real dialog watch."""
+    fake = FakeWindows()
+    watch = turbo.DialogWatch
+    monkeypatch.setattr(
+        turbo, "DialogWatch", lambda pid: watch(pid, windows=fake, interval=0.01)
+    )
+    return fake
+
+
+_PARITY_OFFER = (
+    "Check that the Turbo engine matches the classic ModelRisk engine for "
+    "this workbook before running it?"
+)
+
+
 class _RunRecorder:
     """Fake Application.api: records every Run() invocation and plays
     ModelRisk.
@@ -59,7 +117,13 @@ class _RunRecorder:
     `f<hwnd hex><book>.dmr`, into `run_dir` (none when `run_dir` is None).
     VoseGetDataSZ12 saves as the real XLL does: the run file the Results
     Viewer holds (`viewer_holds`) if set, else the named workbook's own.
-    `on_save` replaces that save entirely."""
+    `on_save` replaces that save entirely.
+
+    VoseStartFastSimulation plays Turbo (MREngine.cpp:1024): it offers the
+    check against the classic engine in a message box on `windows`, then
+    shows `turbo_fails` as a message, or writes its run file
+    `f<hwnd hex>vsmre_<stem>.dmr` and loads it into the Results Viewer
+    (unless `turbo_shows_results` is False)."""
 
     def __init__(
         self,
@@ -69,6 +133,9 @@ class _RunRecorder:
         run_dir: Path | None = None,
         viewer_holds: Path | None = None,
         engine_hwnd: int | None = None,
+        windows: FakeWindows | None = None,
+        turbo_fails: str | None = None,
+        turbo_shows_results: bool = True,
     ) -> None:
         self.Hwnd = hwnd
         # The window handle the engine fixed at start-up and names run files
@@ -83,9 +150,32 @@ class _RunRecorder:
         # re-register it would find something to register.
         self.AddIns = _FakeAddIns()
         self.bridge: _FakeBridge | None = None
+        self.windows = windows
+        self.turbo_fails = turbo_fails
+        self.turbo_shows_results = turbo_shows_results
+        self.options: list[str] = []
+        self.parity_checked: bool | None = None
+        # Excel's calculation mode (xlCalculationAutomatic), and every Run
+        # and mode change in order.
+        self._calculation = -4105
+        self.timeline: list[tuple[str, Any]] = []
+
+    @property
+    def Calculation(self) -> int:  # noqa: N802 (COM API name)
+        return self._calculation
+
+    @Calculation.setter
+    def Calculation(self, mode: int) -> None:  # noqa: N802 (COM API name)
+        self._calculation = mode
+        self.timeline.append(("Calculation", mode))
 
     def Run(self, name: str, *args: Any) -> Any:  # noqa: N802 (COM API name)
         self.calls.append((name, args))
+        self.timeline.append(("Run", name))
+        if name == "VoseSetSimulOptions12":
+            self.options = list(args[0][0])
+        if name == "VoseStartFastSimulation":
+            self._run_turbo()
         if name == "VoseStartSimulCustom12" and self.run_dir is not None:
             assert self.bridge is not None
             book = self.bridge.get_active_workbook().name
@@ -112,6 +202,29 @@ class _RunRecorder:
         assert self.run_dir is not None
         return self.run_dir / f"f{self.engine_hwnd:X}{book}.dmr"
 
+    def turbo_run_file(self, book: str) -> Path:
+        assert self.run_dir is not None
+        return self.run_dir / f"f{self.engine_hwnd:X}vsmre_{Path(book).stem}.dmr"
+
+    def _run_turbo(self) -> None:
+        assert self.windows is not None and self.bridge is not None
+        self.parity_checked = self.windows.show(_PARITY_OFFER, {IDYES, IDNO}) == IDYES
+        if self.turbo_fails is not None:
+            # An MB_OK box: its OK button has the id IDCANCEL.
+            self.windows.show(self.turbo_fails, {IDCANCEL})
+            return
+        if self.run_dir is None:
+            return
+        book = self.bridge.get_active_workbook().name
+        samples = next(
+            int(s.split(":", 1)[1]) for s in self.options if s.startswith("[Samples]:")
+        )
+        run_file = write_dmr(
+            self.turbo_run_file(book), book, start=datetime.now(), iterations=samples
+        )
+        if self.turbo_shows_results:
+            self.viewer_holds = run_file
+
     def RegisterXLL(self, path: str) -> bool:  # noqa: N802 (COM API name)
         self.registered.append(path)
         return True
@@ -129,6 +242,8 @@ class _FakeAddIns:
 
 
 class _FakeApp:
+    pid = 4242
+
     def __init__(self, recorder: _RunRecorder) -> None:
         self.api = recorder
 
@@ -142,6 +257,8 @@ class _FakeBridge:
         active: WorkbookInfo,
         workbooks: list[WorkbookInfo] | None = None,
         recorder: _RunRecorder | None = None,
+        *,
+        switched_back: int = 0,
     ) -> None:
         self._active = active
         self._books = workbooks or [active]
@@ -149,16 +266,35 @@ class _FakeBridge:
         self._recorder.bridge = self
         self._app = _FakeApp(self._recorder)
         self.activated: list[str] = []
+        self.copies: list[tuple[str, str]] = []
+        # The first `switched_back` activations are undone right after the
+        # first read, as the Results Viewer does when it is in front.
+        self._switched_back = switched_back
+        self._switch_back_to: WorkbookInfo | None = None
 
     def list_workbooks(self) -> list[WorkbookInfo]:
         return list(self._books)
 
     def get_active_workbook(self) -> WorkbookInfo:
-        return self._active
+        active = self._active
+        if self._switch_back_to is not None:
+            self._active, self._switch_back_to = self._switch_back_to, None
+        return active
 
     def activate_workbook(self, workbook: str) -> None:
         self.activated.append(workbook)
+        previous = self._active
         self._active = next(b for b in self._books if b.name == workbook)
+        if self._switched_back > 0:
+            self._switched_back -= 1
+            self._switch_back_to = previous
+
+    def save_workbook_as(
+        self, workbook: str, path: str, *, overwrite: bool = False
+    ) -> str:
+        self.copies.append((workbook, path))
+        Path(path).write_bytes(b"PK")
+        return path
 
     def is_connected(self) -> bool:
         return True
@@ -583,6 +719,91 @@ class TestSavedRunIsThisRun:
             )
         assert recorder.calls == []
 
+    def test_an_activation_switched_back_is_repeated(
+        self, tmp_path: Path, run_files: Path
+    ) -> None:
+        """Live, 2026-10-04: with the Results Viewer in front (a Turbo run
+        brings it forward), a workbook activated through COM was the active
+        one when read at once, and the other one again half a second
+        later."""
+        a, b = _make_wb("a.xlsx", tmp_path), _make_wb("b.xlsx", tmp_path)
+        recorder = _RunRecorder(run_dir=run_files)
+        bridge = _FakeBridge(
+            active=a, workbooks=[a, b], recorder=recorder, switched_back=1
+        )
+
+        result = SimulationController(bridge).run_simulation(  # type: ignore[arg-type]
+            workbook_name="b.xlsx"
+        )
+
+        assert bridge.activated == ["b.xlsx", "b.xlsx"]
+        assert recorder.run_file("b.xlsx").is_file()
+        assert read_vmrs_header(result.vmrs_path).spreadsheet_name == "b.xlsx"
+
+    def test_no_run_when_the_activation_never_holds(self, tmp_path: Path) -> None:
+        a, b = _make_wb("a.xlsx", tmp_path), _make_wb("b.xlsx", tmp_path)
+        recorder = _RunRecorder()
+        bridge = _FakeBridge(
+            active=a, workbooks=[a, b], recorder=recorder, switched_back=99
+        )
+
+        with pytest.raises(SimulationFailedError, match="did not stay the active"):
+            SimulationController(bridge).run_simulation(  # type: ignore[arg-type]
+                workbook_name="b.xlsx"
+            )
+        assert len(bridge.activated) == 3
+        assert recorder.calls == []
+
+    def test_options_are_written_under_manual_calculation(
+        self, tmp_path: Path, run_files: Path
+    ) -> None:
+        """VoseSetSimulOptions12 writes 29 workbook names; under automatic
+        calculation each recalculates the workbook (52.7 s on CF-01 with a
+        run attached, against 1.9 s for one recalculation). The user's mode
+        is back before the run starts."""
+        recorder = _RunRecorder(run_dir=run_files)
+        bridge = _FakeBridge(active=_make_wb("m.xlsx", tmp_path), recorder=recorder)
+
+        SimulationController(bridge).run_simulation()  # type: ignore[arg-type]
+
+        assert recorder.timeline == [
+            ("Calculation", -4135),
+            ("Run", "VoseSetSimulOptions12"),
+            ("Calculation", -4105),
+            ("Run", "VoseStartSimulCustom12"),
+            ("Run", "VoseGetDataSZ12"),
+        ]
+
+    def test_manual_calculation_is_left_as_it_is(
+        self, tmp_path: Path, run_files: Path
+    ) -> None:
+        recorder = _RunRecorder(run_dir=run_files)
+        recorder._calculation = -4135
+        bridge = _FakeBridge(active=_make_wb("m.xlsx", tmp_path), recorder=recorder)
+
+        SimulationController(bridge).run_simulation()  # type: ignore[arg-type]
+
+        assert ("Calculation", -4135) not in recorder.timeline
+        assert recorder.Calculation == -4135
+
+    def test_calculation_mode_is_restored_when_the_options_fail(
+        self, tmp_path: Path
+    ) -> None:
+        recorder = _RunRecorder()
+        real_run = recorder.Run
+
+        def failing_run(name: str, *args: Any) -> Any:
+            if name == "VoseSetSimulOptions12":
+                raise RuntimeError("XLL not loaded")
+            return real_run(name, *args)
+
+        recorder.Run = failing_run  # type: ignore[method-assign]
+        bridge = _FakeBridge(active=_make_wb("m.xlsx", tmp_path), recorder=recorder)
+
+        with pytest.raises(SimulationFailedError):
+            SimulationController(bridge).run_simulation()  # type: ignore[arg-type]
+        assert recorder.Calculation == -4105
+
     def test_never_re_registers_the_add_in(
         self, tmp_path: Path, run_files: Path
     ) -> None:
@@ -596,11 +817,254 @@ class TestSavedRunIsThisRun:
         assert recorder.registered == []
 
 
+class TestTurbo:
+    """engine="turbo": ModelRisk's Turbo command after the same options
+    call, its message boxes answered, its run saved and checked like a
+    classic one; the classic engine, with a note, when Turbo cannot run the
+    workbook."""
+
+    def test_turbo_run_is_saved(
+        self,
+        tmp_path: Path,
+        run_files: Path,
+        engine_check: _EngineCheck,
+        windows: FakeWindows,
+    ) -> None:
+        recorder = _RunRecorder(run_dir=run_files, windows=windows)
+        bridge = _FakeBridge(active=_make_wb("m.xlsx", tmp_path), recorder=recorder)
+
+        result = SimulationController(bridge).run_simulation(  # type: ignore[arg-type]
+            engine="turbo", samples=5000, seed=7
+        )
+
+        assert recorder.timeline == [
+            ("Calculation", -4135),
+            ("Run", "VoseSetSimulOptions12"),
+            ("Calculation", -4105),
+            ("Run", "VoseStartFastSimulation"),
+            ("Run", "VoseGetDataSZ12"),
+        ]
+        # Turbo reads its samples and seed from the options call.
+        assert "[Samples]:5000" in recorder.options
+        assert "[seed0]:7" in recorder.options
+        # The offer to check Turbo against the classic engine was declined.
+        assert recorder.parity_checked is False
+        assert windows.pids == {4242}
+        assert result.engine == "turbo"
+        assert result.note is None
+        header = read_vmrs_header(result.vmrs_path)
+        assert header.spreadsheet_name == "m.xlsx"
+        assert header.iterations == 5000
+        # The engine's check ran on a saved copy, which is gone again.
+        assert [Path(p).suffix for _, p in bridge.copies] == [".xlsx"]
+        assert engine_check.copies == [Path(bridge.copies[0][1])]
+        assert not engine_check.copies[0].exists()
+
+    def test_macro_workbook_is_checked_as_one(
+        self, tmp_path: Path, run_files: Path, engine_check: _EngineCheck,
+        windows: FakeWindows,
+    ) -> None:
+        recorder = _RunRecorder(run_dir=run_files, windows=windows)
+        bridge = _FakeBridge(active=_make_wb("m.xlsm", tmp_path), recorder=recorder)
+
+        result = SimulationController(bridge).run_simulation(engine="turbo")  # type: ignore[arg-type]
+
+        assert result.engine == "turbo"
+        assert engine_check.copies[0].suffix == ".xlsm"
+        assert recorder.turbo_run_file("m.xlsm").is_file()
+
+    def test_unsupported_function_runs_the_classic_engine(
+        self, tmp_path: Path, run_files: Path, engine_check: _EngineCheck,
+        windows: FakeWindows,
+    ) -> None:
+        engine_check.result = TurboCheck(unsupported=("VOSETIMEGBMVR",))
+        recorder = _RunRecorder(run_dir=run_files, windows=windows)
+        bridge = _FakeBridge(active=_make_wb("og.xlsx", tmp_path), recorder=recorder)
+
+        result = SimulationController(bridge).run_simulation(engine="turbo")  # type: ignore[arg-type]
+
+        assert [c[0] for c in recorder.calls] == [
+            "VoseSetSimulOptions12",
+            "VoseStartSimulCustom12",
+            "VoseGetDataSZ12",
+        ]
+        assert result.engine == "classic"
+        assert result.note == (
+            "Turbo cannot evaluate VOSETIMEGBMVR, which 'og.xlsx' uses, so "
+            "the classic engine ran instead."
+        )
+        assert read_vmrs_header(result.vmrs_path).spreadsheet_name == "og.xlsx"
+
+    def test_a_check_that_cannot_run_falls_back_to_classic(
+        self, tmp_path: Path, run_files: Path, engine_check: _EngineCheck,
+        windows: FakeWindows,
+    ) -> None:
+        engine_check.result = TurboCheck(
+            problem="ModelRisk's Turbo engine (mrengine_native.dll) is not installed"
+        )
+        recorder = _RunRecorder(run_dir=run_files, windows=windows)
+        bridge = _FakeBridge(active=_make_wb("m.xlsx", tmp_path), recorder=recorder)
+
+        result = SimulationController(bridge).run_simulation(engine="turbo")  # type: ignore[arg-type]
+
+        assert result.engine == "classic"
+        assert result.note == (
+            "Turbo's compatibility check could not run (ModelRisk's Turbo "
+            "engine (mrengine_native.dll) is not installed), so the classic "
+            "engine ran instead."
+        )
+
+    def test_a_copy_that_cannot_be_saved_falls_back_to_classic(
+        self, tmp_path: Path, run_files: Path, engine_check: _EngineCheck,
+        windows: FakeWindows,
+    ) -> None:
+        recorder = _RunRecorder(run_dir=run_files, windows=windows)
+        bridge = _FakeBridge(active=_make_wb("m.xlsx", tmp_path), recorder=recorder)
+
+        def refuse(workbook: str, path: str, *, overwrite: bool = False) -> str:
+            raise RuntimeError("the disk is full")
+
+        bridge.save_workbook_as = refuse  # type: ignore[method-assign]
+
+        result = SimulationController(bridge).run_simulation(engine="turbo")  # type: ignore[arg-type]
+
+        assert result.engine == "classic"
+        assert result.note is not None and "the disk is full" in result.note
+        assert engine_check.copies == []
+
+    def test_an_xls_workbook_runs_classic_unchecked(
+        self, tmp_path: Path, run_files: Path, engine_check: _EngineCheck,
+        windows: FakeWindows,
+    ) -> None:
+        recorder = _RunRecorder(run_dir=run_files, windows=windows)
+        bridge = _FakeBridge(active=_make_wb("old.xls", tmp_path), recorder=recorder)
+
+        result = SimulationController(bridge).run_simulation(engine="turbo")  # type: ignore[arg-type]
+
+        assert result.engine == "classic"
+        assert result.note == (
+            "Turbo runs only .xlsx and .xlsm workbooks, so the classic engine "
+            "ran instead."
+        )
+        assert bridge.copies == [] and engine_check.copies == []
+
+    def test_turbos_message_is_the_error(
+        self, tmp_path: Path, run_files: Path, windows: FakeWindows,
+    ) -> None:
+        recorder = _RunRecorder(
+            run_dir=run_files,
+            windows=windows,
+            turbo_fails=(
+                "There are no results to simulate in this workbook.\n\n"
+                "Mark at least one cell as a ModelRisk output or statistic and "
+                "start the simulation again."
+            ),
+        )
+        bridge = _FakeBridge(active=_make_wb("m.xlsx", tmp_path), recorder=recorder)
+
+        with pytest.raises(SimulationFailedError) as exc:
+            SimulationController(bridge).run_simulation(engine="turbo")  # type: ignore[arg-type]
+
+        msg = str(exc.value)
+        assert "ModelRisk's Turbo run of 'm.xlsx' stopped with this message" in msg
+        assert (
+            '"There are no results to simulate in this workbook. Mark at least '
+            "one cell"
+        ) in msg
+        assert "engine='classic'" in msg
+        assert not (tmp_path / "m.vmrs").exists()
+
+    def test_turbo_run_is_rebuilt_from_its_own_run_file(
+        self, tmp_path: Path, run_files: Path, windows: FakeWindows,
+    ) -> None:
+        """If the Results Viewer did not take the Turbo run, the save hands
+        back the run it holds; the .vmrs is rebuilt from Turbo's run file,
+        which is named after the engine's copy of the workbook."""
+        a, b = _make_wb("a.xlsx", tmp_path), _make_wb("b.xlsx", tmp_path)
+        recorder = _RunRecorder(
+            run_dir=run_files,
+            windows=windows,
+            viewer_holds=_earlier_run(run_files, "a.xlsx"),
+            turbo_shows_results=False,
+        )
+        bridge = _FakeBridge(active=a, workbooks=[a, b], recorder=recorder)
+
+        result = SimulationController(bridge).run_simulation(  # type: ignore[arg-type]
+            workbook_name="b.xlsx", engine="turbo"
+        )
+
+        assert result.engine == "turbo"
+        assert result.note is not None and "the results of 'a.xlsx'" in result.note
+        assert read_vmrs_header(result.vmrs_path).spreadsheet_name == "b.xlsx"
+        assert recorder.turbo_run_file("b.xlsx").is_file()
+
+    def test_a_turbo_run_without_results_names_turbos_reasons(
+        self, tmp_path: Path, windows: FakeWindows,
+    ) -> None:
+        # No run_dir: the engine stopped and wrote nothing.
+        recorder = _RunRecorder(windows=windows)
+        bridge = _FakeBridge(active=_make_wb("m.xlsx", tmp_path), recorder=recorder)
+
+        with pytest.raises(SimulationFailedError) as exc:
+            SimulationController(bridge).run_simulation(engine="turbo")  # type: ignore[arg-type]
+
+        msg = str(exc.value)
+        assert "f…vsmre_m.dmr or f…m.xlsx.dmr" in msg
+        assert "progress window" in msg
+        assert "engine='classic'" in msg
+
+    def test_an_unknown_engine_is_refused(self, tmp_path: Path) -> None:
+        recorder = _RunRecorder()
+        bridge = _FakeBridge(active=_make_wb("m.xlsx", tmp_path), recorder=recorder)
+
+        with pytest.raises(SimulationFailedError, match="engine must be one of"):
+            SimulationController(bridge).run_simulation(engine="fast")  # type: ignore[arg-type]
+        assert recorder.calls == []
+
+
+class TestRunStart:
+    """ModelRisk stamps a run's start to the second. A run that started in
+    the same second as this call is not this run (live, 2026-10-04: a Turbo
+    run stamped 18:49:14, repeated at once with the classic engine, was
+    taken for the classic run under a one-second allowance)."""
+
+    def test_a_run_starts_in_a_second_of_its_own(self) -> None:
+        before = datetime.now()
+
+        started = _REAL_FRESH_SECOND()
+
+        assert started.microsecond == 0
+        assert started > before
+        assert datetime.now() >= started
+
+    def test_a_run_stamped_the_second_before_is_not_this_run(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        started = datetime.now().replace(microsecond=0)  # it has come
+        monkeypatch.setattr(simulation, "_fresh_second", lambda: started)
+        # The Turbo run just made, which the Results Viewer holds.
+        turbo_run = write_dmr(
+            tmp_path / "rv" / "f3039vsmre_m.dmr",
+            "m.xlsx",
+            start=started - timedelta(seconds=1),
+        )
+        recorder = _RunRecorder(viewer_holds=turbo_run)
+        bridge = _FakeBridge(active=_make_wb("m.xlsx", tmp_path), recorder=recorder)
+
+        with pytest.raises(SimulationFailedError) as exc:
+            SimulationController(bridge).run_simulation()  # type: ignore[arg-type]
+
+        assert "an earlier run of 'm.xlsx'" in str(exc.value)
+        assert not (tmp_path / "m.vmrs").exists()
+
+
 __all__ = [
     "TestBridgeIntegration",
     "TestOptionsPacking",
     "TestRunSimulation",
+    "TestRunStart",
     "TestSavedRunIsThisRun",
     "TestSessionNameFormat",
     "TestStartCallShape",
+    "TestTurbo",
 ]

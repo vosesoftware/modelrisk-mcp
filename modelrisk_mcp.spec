@@ -54,13 +54,18 @@ _BRIDGE_AND_AUDIT_MODULES = [
     "modelrisk_mcp.bridge.progids",
     "modelrisk_mcp.bridge.results",
     "modelrisk_mcp.bridge.simulation",
+    "modelrisk_mcp.bridge.turbo",
+    "modelrisk_mcp.bridge.vmrs_file",
 ]
 _COM_MODULES = [
     "win32com",
     "win32com.client",
     "pywintypes",
     "win32api",
+    "win32con",
     "win32event",
+    "win32gui",
+    "win32process",
     "xlwings",
 ]
 

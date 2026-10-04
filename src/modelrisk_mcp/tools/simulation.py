@@ -15,7 +15,7 @@ get_simulation_results call finds it.
 
 from __future__ import annotations
 
-from typing import Annotated
+from typing import Annotated, Literal
 
 from pydantic import BaseModel, Field
 
@@ -49,8 +49,16 @@ class RunSimulationResult(BaseModel):
         description=(
             "Set when ModelRisk's own save returned a different run (its "
             "Results Viewer had another run loaded) and the .vmrs was "
-            "rebuilt from this run's ModelRisk run file. The results are "
-            "this run's either way."
+            "rebuilt from this run's ModelRisk run file, or when Turbo was "
+            "asked for and the classic engine ran instead, and why. The "
+            "results are this run's either way."
+        ),
+    )
+    engine: Literal["classic", "turbo"] = Field(
+        default="classic",
+        description=(
+            "The engine whose run was saved. 'classic' after a request for "
+            "'turbo' means Turbo could not run the workbook; `note` says why."
         ),
     )
 
@@ -70,7 +78,16 @@ class RunSimulationResult(BaseModel):
         "iterations) before success is reported. Blocks until the "
         "simulation completes. After this returns, call "
         "get_simulation_results — the produced .vmrs is automatically "
-        "pinned as the active results source."
+        "pinned as the active results source. engine='turbo' runs "
+        "ModelRisk's Turbo engine (its 'Fast Simulation'), often much "
+        "faster. Turbo cannot evaluate every function: "
+        "the engine's own check runs first, and the classic engine runs "
+        "instead (see `note` and `engine` in the result) when Turbo cannot "
+        "run the workbook or returns NaN outputs. Turbo can still give "
+        "results that differ from the classic engine's for some functions, "
+        "so confirm figures that matter with the classic engine. A Turbo "
+        "run shows ModelRisk's progress window and opens its results in "
+        "the Results Viewer."
     )
 )
 def run_simulation(
@@ -121,6 +138,17 @@ def run_simulation(
             )
         ),
     ] = None,
+    engine: Annotated[
+        Literal["classic", "turbo"],
+        Field(
+            description=(
+                "'classic' (default): ModelRisk's own engine, in Excel. "
+                "'turbo': ModelRisk's Turbo engine; .xlsx and .xlsm "
+                "workbooks only, and falls back to classic when it cannot "
+                "run the workbook."
+            )
+        ),
+    ] = "classic",
 ) -> RunSimulationResult:
     # Resolve samples / iterations alias. Loud failure if the caller
     # somehow passed both with different values — silent drops are
@@ -140,6 +168,7 @@ def run_simulation(
         samples=effective_samples,
         seed=seed,
         save_to=save_to,
+        engine=engine,
     )
     return RunSimulationResult(
         workbook_name=result.workbook_name,
@@ -151,6 +180,7 @@ def run_simulation(
             "The produced .vmrs is already pinned as the active source."
         ),
         note=result.note,
+        engine="turbo" if result.engine == "turbo" else "classic",
     )
 
 
