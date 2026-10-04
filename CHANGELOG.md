@@ -4,6 +4,8 @@ All notable changes to ModelRisk MCP. Follows [Keep a Changelog](https://keepach
 
 ## [Unreleased]
 
+## [0.4.3] — 2026-10-04
+
 ### Fixed
 
 - **`run_simulation` saved another workbook's results.** ModelRisk's save command hands the save to its Results Viewer, and the viewer saves the run it has loaded, whatever workbook was named. So once the Results Viewer had shown one workbook's results (a run from the ribbon, the Results button), every later `run_simulation` wrote that workbook's run under the new workbook's name, while the workbook itself showed the right results. Seen on 3 October 2026: 22 saves held OG-05's run. The tool now checks the saved file's header (workbook, start time, iterations) against the run it just made. When ModelRisk hands back another run, it rebuilds the `.vmrs` from the workbook's own ModelRisk run file, which is what a correct save writes, and says so in a new `note` field. If neither gives this run, it reports why and leaves no wrong file behind.
