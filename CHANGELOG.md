@@ -4,6 +4,16 @@ All notable changes to ModelRisk MCP. Follows [Keep a Changelog](https://keepach
 
 ## [Unreleased]
 
+### Fixed
+
+- **`run_simulation` saved another workbook's results.** ModelRisk's save command hands the save to its Results Viewer, and the viewer saves the run it has loaded, whatever workbook was named. So once the Results Viewer had shown one workbook's results (a run from the ribbon, the Results button), every later `run_simulation` wrote that workbook's run under the new workbook's name, while the workbook itself showed the right results. Seen on 3 October 2026: 22 saves held OG-05's run. The tool now checks the saved file's header (workbook, start time, iterations) against the run it just made. When ModelRisk hands back another run, it rebuilds the `.vmrs` from the workbook's own ModelRisk run file, which is what a correct save writes, and says so in a new `note` field. If neither gives this run, it reports why and leaves no wrong file behind.
+- **`run_simulation` simulated the active workbook, not the one named.** ModelRisk simulates the active workbook, so `workbook_name` only chose the file name. The named workbook is now made active first.
+- **Errors reach the client again.** Current mcp 2.x releases (2.1.1 and 2.3.0 checked; a fresh install picks up the latest) treat any exception that is not the SDK's `ToolError` as a crash, so the client saw only `Error executing tool <name>`. The server's own errors now derive from `ToolError`, so their explanation is shown, as it was under 0.3.x.
+
+### Changed
+
+- **`run_simulation` no longer re-registers the ModelRisk add-in.** It called `Application.RegisterXLL` on every installed ModelRisk add-in before the first run, re-running its start-up on a live add-in (the same operation that once wiped a ModelChoice licence activation). The add-in is already proven live before each run, and is registered only when a Vose function does not resolve.
+
 ## [0.4.2] — 2026-09-29
 
 ### Fixed

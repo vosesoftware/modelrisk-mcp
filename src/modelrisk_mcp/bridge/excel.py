@@ -224,6 +224,11 @@ class ExcelBridge:
             raise WorkbookNotFoundError("No active workbook.")
         return self._workbook_info(book)
 
+    def activate_workbook(self, workbook: str) -> None:
+        """Make `workbook` Excel's active workbook. ModelRisk's simulation
+        commands act on the active workbook."""
+        self._get_book(workbook).activate()  # WorkbookNotFoundError if not open
+
     def open_workbook(self, path: str) -> WorkbookInfo:
         """Open a workbook from disk in the running Excel and return its info.
         Excel keys workbooks by file name and won't open two with the same

@@ -14,35 +14,52 @@ when its `IModelRiskSimulation::StartSimulation` and
    via `Application.Run`. It takes a 1xN VARIANT array of `[Key]:Value`
    string options packed by `CSimulationOptions::PackToStringList`
    (ModelRiskCloude/SimulationObj.cpp:94). The call is synchronous —
-   `Application.Run` returns when the simulation has finished.
+   `Application.Run` returns when the simulation has finished. The run
+   belongs to the ACTIVE workbook, so a named workbook is activated first.
 
 2. Save the resulting `.vmrs` by calling the XLL command
    **VoseGetDataSZ12** with the session name
    `h<hWndExcel>_SaveResultsToFile_<book.xlsx>` and the target path as
    `xlParam1`. The handler in
    ModelRiskCloude/SimulationObj_VBA.cpp:805 dispatches on the
-   operation prefix and routes to
-   `CSimulationsManager::SaveWorkbookResults(sc, path)` directly when
-   the path argument is non-empty. The handler internally writes a
+   operation prefix and hands the save to the Results Viewer process
+   first. The viewer saves the run IT has loaded, whatever workbook was
+   named; only when it has none does the XLL save the named workbook's
+   run with `CSimulationsManager::SaveWorkbookResults(sc, path)`. The
+   handler internally writes a
    success/failure code to a memory-mapped file for the ATL's benefit,
    but `IPC_helpers.cpp:Send_sz_to_ATL` self-initialises that MMF — we
-   don't need to set up anything on the Python side. We confirm
-   success by checking that the file actually appeared on disk.
+   don't need to set up anything on the Python side.
+
+3. Prove the saved file is this run: its header must name the workbook,
+   and its start time and iteration count must match the run. If the
+   viewer handed back another run, rebuild the `.vmrs` from the
+   workbook's own ModelRisk run file (`bridge/vmrs_file.py`).
 
 References:
 - VoseStartSimulCustom12 export: ModelRiskCloude/XllAddIn.cpp:210
 - VoseGetDataSZ12 export:        ModelRiskCloude/XllAddIn.cpp:207
 - Session-name format:           ModelRiskAtl/ModelRiskSimulationResults.cpp:54
 - Save handler:                  ModelRiskCloude/SimulationObj_VBA.cpp:805
+- Viewer's save handler:         ModelRiskResultsViewer/simul_funcs_custom.cpp:788
 - Options packing format:        ModelRiskAtl/SimulationObj.cpp:94
 """
 
 from __future__ import annotations
 
+import os
+import re
 from dataclasses import dataclass, field
+from datetime import datetime, timedelta
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
+from modelrisk_mcp.bridge.vmrs_file import (
+    ResultsHeader,
+    read_dmr_header,
+    read_vmrs_header,
+    write_vmrs_from_dmr,
+)
 from modelrisk_mcp.errors import (
     ExcelNotRunningError,
     SimulationFailedError,
@@ -113,6 +130,9 @@ class SimulationRunResult:
     vmrs_path: str
     iterations: int
     options: SimulationOptions = field(default_factory=SimulationOptions)
+    # Set when ModelRisk's save handed back another run and the .vmrs was
+    # rebuilt from this run's own file (SimulationController._save_results).
+    note: str | None = None
 
 
 # ---------------------------------------------------------------------------
@@ -138,6 +158,10 @@ _CMD_SET_SIM_OPTS = "VoseSetSimulOptions12"
 # (ModelRiskAtl/ModelRiskSimulationResults.cpp:54).
 _OP_SAVE_RESULTS = "SaveResultsToFile"
 
+# ModelRisk stamps a run's start to the second; allow that much when
+# comparing it with the moment this process started the run.
+_CLOCK_SLACK = timedelta(seconds=1)
+
 
 class SimulationController:
     """Drives ModelRisk simulations through the XLL command surface
@@ -145,13 +169,16 @@ class SimulationController:
 
     All methods raise typed `modelrisk_mcp.errors` exceptions; raw COM
     HRESULTs and xlwings stack traces never leak.
+
+    It never calls `Application.RegisterXLL`: re-registering a live
+    add-in re-runs its `xlAutoOpen`, which once destroyed a licence
+    activation (ModelChoice, 2026-09-21). `ModelRiskBridge.run_simulation`
+    proves the add-in live before any run (`ensure_modelrisk_functional`)
+    and registers it only when a Vose function does not resolve.
     """
 
     def __init__(self, excel: ExcelBridge) -> None:
         self._excel = excel
-        # Cache: once the XLL is registered in this app instance,
-        # don't re-register on every subsequent sim call.
-        self._xll_registered = False
 
     # ----- public API ----------------------------------------------------
 
@@ -195,8 +222,8 @@ class SimulationController:
         populates it from `list_outputs(workbook)`.
 
         Returns a SimulationRunResult with the resolved vmrs path.
-        Raises SimulationFailedError if the file doesn't appear after
-        the save call returns.
+        Raises SimulationFailedError unless the file at that path holds
+        this run (see `_save_results`).
         """
         if samples < 1:
             raise SimulationFailedError(
@@ -226,21 +253,18 @@ class SimulationController:
         )
         target = self._resolve_save_path(wb_info, save_to)
 
+        self._make_active(wb_info.name)
+        started = datetime.now().replace(microsecond=0)
         self._invoke_start_simulation(opts)
-        self._invoke_save_results(wb_info.name, target)
-
-        if not Path(target).is_file():
-            raise SimulationFailedError(
-                f"Simulation ran but no .vmrs was produced at {target!r}. "
-                "Common causes: the workbook has no VoseOutput cells, "
-                "ModelRisk failed to acquire a writer lock on the target "
-                "path, or the simulation was cancelled by the user."
-            )
+        note = self._save_results(
+            wb_info.name, target, started=started, samples=samples
+        )
         return SimulationRunResult(
             workbook_name=wb_info.name,
             vmrs_path=target,
             iterations=samples,
             options=opts,
+            note=note,
         )
 
     # ----- internal ------------------------------------------------------
@@ -287,71 +311,42 @@ class SimulationController:
         stem = Path(wb.name).stem
         return str(wb.folder / f"{stem}.vmrs")
 
-    def _ensure_xll_registered(self) -> None:
-        """Force-register ModelRisk.xll so its commands are callable
-        via `Application.Run`.
-
-        Bug #29 (alpha.27): when Excel is launched programmatically
-        (e.g. via xlwings' `xw.App()` from an automation or service
-        context) rather than through the normal user-driven flow, the
-        ModelRisk XLL shows up as `Installed=True` in the AddIns
-        collection but its commands aren't reachable —
-        `Application.Run('VoseStartSimulCustom12', ...)` fails with
-        "Cannot run the macro 'VoseStartSimulCustom12'". The
-        underlying cause: Excel's normal startup flow runs the XLL's
-        `xlAutoOpen` which registers each command via
-        `xlfRegister`; the programmatic-launch path skips that step.
-
-        Fix: call `Application.RegisterXLL(path)` for every loaded
-        ModelRisk*.xll. RegisterXLL is idempotent — safe to call even
-        when the XLL is already fully registered (it just re-runs
-        `xlAutoOpen`). We do this once per `SimulationController`
-        invocation instead of once per process so the controller is
-        robust against the user disabling and re-enabling the addin
-        between sim runs."""
-        if self._xll_registered:
+    def _make_active(self, book_name: str) -> None:
+        """Make the workbook to simulate the active one. A run records the
+        outputs of every open workbook but belongs to the ACTIVE one: its
+        results and run file are filed under that workbook's name (seen
+        live on 2026-10-04: asked for A while B was active, the run was
+        B's, and the save for A was labelled B)."""
+        if self._active_name() == book_name.casefold():
             return
-        app = self._app()
         try:
-            addins = app.api.AddIns
-            for i in range(1, int(addins.Count) + 1):
-                try:
-                    addin = addins(i)
-                    name = str(addin.Name or "")
-                    if not name.lower().endswith(".xll"):
-                        continue
-                    if "modelrisk" not in name.lower():
-                        continue
-                    if not bool(addin.Installed):
-                        continue
-                    path = str(addin.FullName)
-                    try:
-                        app.api.RegisterXLL(path)
-                    except Exception:
-                        # Per-XLL failure isn't fatal; the next one
-                        # might be the one that provides the command
-                        # we need.
-                        continue
-                except Exception:
-                    continue
+            self._excel.activate_workbook(book_name)
+        except Exception as exc:
+            raise SimulationFailedError(
+                f"Could not make {book_name!r} the active workbook: {exc}. "
+                "ModelRisk simulates the active workbook, so the run was "
+                "not started."
+            ) from exc
+        if self._active_name() != book_name.casefold():
+            raise SimulationFailedError(
+                f"{book_name!r} did not become the active workbook, so the "
+                "run was not started: ModelRisk simulates the active "
+                "workbook. Close any dialog open in Excel and retry."
+            )
+
+    def _active_name(self) -> str | None:
+        try:
+            return self._excel.get_active_workbook().name.casefold()
         except Exception:
-            # AddIns collection unreachable — skip silently. The
-            # subsequent Application.Run will surface a clearer error
-            # if registration was actually needed.
-            pass
-        self._xll_registered = True
+            return None
 
     def _invoke_start_simulation(self, opts: SimulationOptions) -> None:
         """Application.Run("VoseStartSimulCustom12", options_array).
 
         `options_array` must be a 1-row 2D SAFEARRAY of BSTRs. pywin32
         converts a list-of-lists into a SAFEARRAY automatically when the
-        target argument is a VARIANT.
-
-        Before the call, ensure the ModelRisk XLL is registered (see
-        `_ensure_xll_registered` for the backstory)."""
+        target argument is a VARIANT."""
         app = self._app()
-        self._ensure_xll_registered()
         try:
             options_2d = [opts.to_string_list()]  # 1 row x N cols
             # Persist options (esp. SeedFixed/seed0) to the workbook FIRST so the
@@ -366,29 +361,92 @@ class SimulationController:
                 "contain at least one VoseOutput cell."
             ) from exc
 
-    def _invoke_save_results(self, book_name: str, target_path: str) -> None:
+    def _save_results(
+        self, book_name: str, target: str, *, started: datetime, samples: int
+    ) -> str | None:
+        """Save the run just made of `book_name` to `target`, and prove it.
+
+        ModelRisk's save hands the job to its Results Viewer process, and
+        the viewer saves the run IT has loaded, whatever workbook was named
+        (ModelRiskResultsViewer/simul_funcs_custom.cpp:788). Only when the
+        viewer holds no run does the XLL save the named workbook's own run
+        (SimulationObj_VBA.cpp:832). Our runs never load the viewer
+        (ShowResultsAtEnd=0), so once it has shown one workbook's results
+        (a run from the ribbon, the Results button), every later save
+        writes that workbook's run file under the new name. Seen in the
+        field on 2026-10-03: 22 saves held OG-05's run while each workbook
+        showed its own, correct, results.
+
+        So the saved file's header must name `book_name`, start no earlier
+        than this run and hold `samples` iterations. If it does not, the
+        `.vmrs` is rebuilt from the workbook's own ModelRisk run file,
+        which is the file a correct save compresses. Returns a note when
+        that was needed; raises when neither gives this run, after
+        removing a wrong file the save wrote."""
+        hwnd = self._hwnd()
+        problem: str | None
+        try:
+            self._invoke_save_results(book_name, target, hwnd)
+        except SimulationFailedError as exc:
+            problem = f"an error ({exc})"
+        else:
+            problem = _file_problem(target, book_name, started, samples)
+        if problem is None:
+            return None
+
+        run_file, misses = _find_run_file(book_name, started, samples)
+        if run_file is not None:
+            try:
+                write_vmrs_from_dmr(run_file, target)
+            except OSError as exc:
+                misses.append(f"rebuilding it from {run_file} failed ({exc})")
+            else:
+                rebuilt = _file_problem(target, book_name, started, samples)
+                if rebuilt is None:
+                    return (
+                        f"ModelRisk's save returned {problem}; the .vmrs was "
+                        "rebuilt from ModelRisk's own run file for "
+                        f"{book_name!r}."
+                    )
+                misses.append(f"the file rebuilt from {run_file} held {rebuilt}")
+
+        _discard_if_written_since(target, started)
+        raise SimulationFailedError(
+            f"No results of this run of {book_name!r} could be saved to "
+            f"{target!r}: ModelRisk's save returned {problem}, and "
+            f"{'; '.join(misses)}. Another workbook's run comes back when "
+            "ModelRisk's Results Viewer has that run loaded: close the "
+            f"Results Viewer, or show {book_name!r}'s results in it, and run "
+            "again. Nothing or an earlier run comes back when the simulation "
+            "did not run: check that the workbook has VoseOutput cells and "
+            "that the run was not cancelled."
+        )
+
+    def _hwnd(self) -> int:
+        try:
+            return int(self._app().api.Hwnd)
+        except Exception as exc:
+            raise SimulationFailedError(
+                "Could not read Application.Hwnd to compose the save "
+                "session name. Excel may have closed."
+            ) from exc
+
+    def _invoke_save_results(
+        self, book_name: str, target_path: str, hwnd: int
+    ) -> None:
         """Application.Run("VoseGetDataSZ12", session_name, target_path).
 
         Mirrors the ATL's IModelRiskSimulationResults::SaveResultsToFile
         path (ModelRiskAtl/ModelRiskSimulationResults.cpp:1196). The
         XLL handler in SimulationObj_VBA.cpp:805 reads xlParam1 as the
         target file and skips the file dialog when non-empty."""
-        app = self._app()
-        try:
-            hwnd = int(app.api.Hwnd)
-        except Exception as exc:
-            raise SimulationFailedError(
-                "Could not read Application.Hwnd to compose the save "
-                "session name. Excel may have closed."
-            ) from exc
         session_name = f"h{hwnd}_{_OP_SAVE_RESULTS}_{book_name}"
         try:
-            app.api.Run(_CMD_GET_DATA_SZ, session_name, target_path)
+            self._app().api.Run(_CMD_GET_DATA_SZ, session_name, target_path)
         except Exception as exc:
             raise SimulationFailedError(
                 f"Application.Run({_CMD_GET_DATA_SZ!r}, ...) failed during "
-                f"SaveResultsToFile: {exc}. The simulation may have run "
-                "but the .vmrs was not persisted."
+                f"SaveResultsToFile: {exc}"
             ) from exc
 
     def _app(self) -> Any:
@@ -411,6 +469,112 @@ class SimulationController:
 class _WorkbookCoords:
     name: str
     folder: Path
+
+
+# ---------------------------------------------------------------------------
+# Checking a saved run
+# ---------------------------------------------------------------------------
+
+
+def _run_problem(
+    header: ResultsHeader, book_name: str, started: datetime, samples: int
+) -> str | None:
+    """What `header` holds instead of this run, or None if it is this run."""
+    when = (
+        f", started {header.start_date:%Y-%m-%d %H:%M:%S}"
+        if header.start_date
+        else ""
+    )
+    if header.spreadsheet_name.casefold() != book_name.casefold():
+        return f"the results of {header.spreadsheet_name!r}{when}"
+    if header.start_date is None or header.start_date < started - _CLOCK_SLACK:
+        return (
+            f"an earlier run of {book_name!r}{when}, not the run started "
+            f"{started:%Y-%m-%d %H:%M:%S}"
+        )
+    if header.iterations != samples:
+        return f"a run of {header.iterations} iterations, not {samples}"
+    return None
+
+
+def _file_problem(
+    path: str, book_name: str, started: datetime, samples: int
+) -> str | None:
+    """What the `.vmrs` at `path` holds instead of this run, or None."""
+    if not Path(path).is_file():
+        return "nothing (no .vmrs was produced)"
+    try:
+        header = read_vmrs_header(path)
+    except (OSError, ValueError) as exc:
+        return f"a file that is not a ModelRisk results file ({exc})"
+    return _run_problem(header, book_name, started, samples)
+
+
+def _find_run_file(
+    book_name: str, started: datetime, samples: int
+) -> tuple[Path | None, list[str]]:
+    """ModelRisk's own file for this run of `book_name`: `f<hWndExcel as
+    %X><book>.dmr` in its simulation folder (SimulationObj.cpp:6163).
+
+    The prefix is matched as any hex number: the engine fixes hWndExcel at
+    start-up, and in Excel's one-window-per-workbook UI that is the first
+    workbook's window, while Application.Hwnd follows the active one (seen
+    live: run files `f50108…` while Hwnd read 0xB0822). The header check
+    picks this run among the candidates, newest first. Returns that file,
+    and what was found instead in every place looked at."""
+    pattern = re.compile(r"f[0-9A-F]+" + re.escape(book_name) + r"\.dmr", re.I)
+    misses: list[str] = []
+    for folder in _simulation_folders():
+        try:
+            candidates = [p for p in folder.iterdir() if pattern.fullmatch(p.name)]
+        except OSError:
+            continue
+        candidates.sort(key=_mtime, reverse=True)
+        for path in candidates:
+            try:
+                problem = _run_problem(
+                    read_dmr_header(path), book_name, started, samples
+                )
+            except (OSError, ValueError) as exc:
+                problem = f"nothing readable ({exc})"
+            if problem is None:
+                return path, misses
+            misses.append(f"its run file {path} holds {problem}")
+    if not misses:
+        looked = ", ".join(str(f) for f in _simulation_folders())
+        misses.append(f"no run file f…{book_name}.dmr was found in {looked}")
+    return None, misses
+
+
+def _mtime(path: Path) -> float:
+    try:
+        return path.stat().st_mtime
+    except OSError:
+        return 0.0
+
+
+def _simulation_folders() -> list[Path]:
+    """Where ModelRisk keeps run files, in the order its GetAppDataFolder
+    picks them (ModelRiskCloude/GetAppData.cpp:390). A custom folder set
+    in ModelRisk's folders file is not read; the header check rejects any
+    file that is not this run, so a wrong guess cannot cause harm."""
+    folders = [Path("C:/Vose Software/ModelRisk/SimulationStorage")]
+    temp = os.environ.get("TEMP")
+    if temp:
+        folders.append(Path(temp) / "SimulationStorage")
+    folders.append(Path.home() / "Documents" / "SimulationStorage")
+    return folders
+
+
+def _discard_if_written_since(path: str, started: datetime) -> None:
+    """Remove a file written during this run, so a wrong `.vmrs` is not
+    left for a later reader. An older file at `path` is left alone."""
+    try:
+        target = Path(path)
+        if target.stat().st_mtime >= started.timestamp():
+            target.unlink()
+    except OSError:
+        pass
 
 
 __all__ = [

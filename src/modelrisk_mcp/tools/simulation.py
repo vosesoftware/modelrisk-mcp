@@ -19,6 +19,7 @@ from typing import Annotated
 
 from pydantic import BaseModel, Field
 
+from modelrisk_mcp.errors import ParameterMismatchError
 from modelrisk_mcp.schemas.results import ScenarioSweepResult
 from modelrisk_mcp.server import mcp
 from modelrisk_mcp.tools.reading import get_bridge
@@ -43,6 +44,15 @@ class RunSimulationResult(BaseModel):
             "`get_simulation_results` to pull the per-output statistics."
         )
     )
+    note: str | None = Field(
+        default=None,
+        description=(
+            "Set when ModelRisk's own save returned a different run (its "
+            "Results Viewer had another run loaded) and the .vmrs was "
+            "rebuilt from this run's ModelRisk run file. The results are "
+            "this run's either way."
+        ),
+    )
 
 
 @mcp.tool(
@@ -54,10 +64,13 @@ class RunSimulationResult(BaseModel):
         "simulation is run via the same XLL commands ModelRisk's own "
         "ribbon uses (VoseStartSimulCustom12 + VoseGetDataSZ12 with the "
         "SaveResultsToFile session), so behaviour matches what you'd "
-        "see clicking 'Simulate' manually. Blocks until the simulation "
-        "completes. After this returns, call get_simulation_results — "
-        "the produced .vmrs is automatically pinned as the active "
-        "results source."
+        "see clicking 'Simulate' manually. ModelRisk simulates the active "
+        "workbook, so a named workbook is made active first. The saved "
+        ".vmrs is checked to hold this run (workbook, start time, "
+        "iterations) before success is reported. Blocks until the "
+        "simulation completes. After this returns, call "
+        "get_simulation_results — the produced .vmrs is automatically "
+        "pinned as the active results source."
     )
 )
 def run_simulation(
@@ -113,7 +126,7 @@ def run_simulation(
     # somehow passed both with different values — silent drops are
     # exactly the bug we're fixing here.
     if samples is not None and iterations is not None and samples != iterations:
-        raise ValueError(
+        raise ParameterMismatchError(
             f"run_simulation received both samples={samples} and "
             f"iterations={iterations}. Pass one or the other, not both "
             "with conflicting values."
@@ -137,6 +150,7 @@ def run_simulation(
             "Call get_simulation_results to read per-output statistics. "
             "The produced .vmrs is already pinned as the active source."
         ),
+        note=result.note,
     )
 
 
