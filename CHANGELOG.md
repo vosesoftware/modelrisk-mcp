@@ -4,6 +4,8 @@ All notable changes to ModelRisk MCP. Follows [Keep a Changelog](https://keepach
 
 ## [Unreleased]
 
+## [0.4.4] — 2026-10-04
+
 ### Added
 
 - **Turbo engine: `run_simulation(engine="turbo")`.** Runs ModelRisk's Turbo engine (its Fast Simulation, `VoseStartFastSimulation`) instead of the classic engine. On CF-01, 10,000 iterations took 1.5 s against 38 s classic.
