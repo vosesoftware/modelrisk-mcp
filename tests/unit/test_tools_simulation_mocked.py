@@ -111,14 +111,28 @@ class TestRunSimulationToolPassthrough:
 
 
 class TestErrorsReachTheClient:
-    """The mcp 2.x SDK shows the client only `Error executing tool <name>`
-    for an exception that is not a ToolError. Every run_simulation failure
-    on 2026-10-03 arrived that way, with its explanation dropped."""
+    """Current mcp 2.x releases (2.1.1 and 2.3.0 checked) show the client
+    only `Error executing tool <name>` for an exception that is not a
+    ToolError. Every run_simulation failure on 2026-10-03 arrived that way,
+    with its explanation dropped. The assertions are on the text the client
+    gets, so they hold on every 2.x the dependency range allows."""
+
+    def test_every_server_error_is_a_tool_error(self) -> None:
+        from mcp.server.mcpserver.exceptions import ToolError
+
+        from modelrisk_mcp import errors
+
+        classes = [
+            obj for obj in vars(errors).values()
+            if isinstance(obj, type) and issubclass(obj, errors.ModelRiskMCPError)
+        ]
+        assert errors.SimulationFailedError in classes
+        assert all(issubclass(cls, ToolError) for cls in classes)
 
     async def test_simulation_failure_message_reaches_the_client(
         self, mock_bridge: MagicMock
     ) -> None:
-        from mcp.server.mcpserver.exceptions import ToolError, UnexpectedToolError
+        from mcp.server.mcpserver.exceptions import ToolError
 
         from modelrisk_mcp.errors import SimulationFailedError
         from modelrisk_mcp.server import mcp
@@ -129,20 +143,18 @@ class TestErrorsReachTheClient:
         with pytest.raises(ToolError) as exc:
             await mcp.call_tool("run_simulation", {"workbook_name": "b.xlsx"})
 
-        assert not isinstance(exc.value, UnexpectedToolError)
         assert "the results of 'a.xlsx'" in str(exc.value)
 
     async def test_conflicting_samples_message_reaches_the_client(
         self, mock_bridge: MagicMock
     ) -> None:
-        from mcp.server.mcpserver.exceptions import ToolError, UnexpectedToolError
+        from mcp.server.mcpserver.exceptions import ToolError
 
         from modelrisk_mcp.server import mcp
 
         with pytest.raises(ToolError) as exc:
             await mcp.call_tool("run_simulation", {"samples": 10, "iterations": 20})
 
-        assert not isinstance(exc.value, UnexpectedToolError)
         assert "samples=10" in str(exc.value)
 
 

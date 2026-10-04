@@ -4,9 +4,10 @@ from mcp.server.mcpserver.exceptions import ToolError
 class ModelRiskMCPError(ToolError):
     """Base class for all ModelRisk MCP server errors.
 
-    A `ToolError` because the mcp 2.x SDK treats any other exception a tool
-    raises as a crash: the client then sees only `Error executing tool
-    <name>`, and the message written for the user is lost."""
+    A `ToolError` because current mcp 2.x releases (2.1.1 and 2.3.0 checked)
+    treat any other exception a tool raises as a crash: the client then sees
+    only `Error executing tool <name>`, and the message written for the user
+    is lost."""
 
 
 class ExcelNotRunningError(ModelRiskMCPError):
