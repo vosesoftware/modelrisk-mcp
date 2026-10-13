@@ -26,6 +26,7 @@ import os
 import sys
 from typing import Literal, cast
 
+from modelrisk_mcp import selfpipe_guard
 from modelrisk_mcp.server import mcp
 
 Transport = Literal["stdio", "streamable-http", "sse"]
@@ -177,6 +178,9 @@ def main(argv: list[str] | None = None) -> None:
         argv = argv[1:]  # `modelrisk-mcp serve --transport=stdio` works too
 
     args = _build_parser().parse_args(argv)
+    # Before any event loop exists. Windows can kill the loop's self-pipe on
+    # sleep and wake, after which an idle server spins a CPU core for good.
+    selfpipe_guard.install()
     if args.read_only:
         # The enforcement layer (ExcelBridge._ensure_writable) checks
         # this env var at call time, so setting it here covers every
