@@ -4,6 +4,11 @@ All notable changes to ModelRisk MCP. Follows [Keep a Changelog](https://keepach
 
 ## [Unreleased]
 
+### Fixed
+
+- **An idle server could use a full CPU core after the PC slept, until it was killed.** On Windows, asyncio's event loop wakes itself through a pair of connected loopback sockets, and on some PCs Windows tears idle loopback connections down across sleep and wake. When the loop's read on that pair ended at end of file, asyncio started the read again on the dead socket; it ended at once, and so on forever ([CPython gh-156333](https://github.com/python/cpython/issues/156333), open). Reported on 13 October 2026 for every modelrisk-mcp and modelchoice-mcp process on one PC, after every sleep: 12 idle servers kept 12 of its 16 cores busy. The server now replaces the socket pair and reads from the new one, at most once a second, and logs a warning when it does.
+- **The same read could leave a server deaf.** When it ended in an error instead (a reset or aborted read), asyncio stopped reading, so the loop no longer woke for incoming messages: the server ignored requests and did not exit when its client closed stdin. It now replaces the pair in this case too.
+
 ## [0.4.4] — 2026-10-04
 
 ### Added
